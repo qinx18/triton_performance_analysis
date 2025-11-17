@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s114_baseline import s114_pytorch
-    from llm_triton.s114_triton_correct import s114_triton
+    from llm_triton.s114_triton_llm import s114_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,7 +22,7 @@ def test_correctness():
     all_passed = True
 
     print("="*70)
-    print(f"Correctness Testing: s114 (CORRECTED VERSION)")
+    print(f"Correctness Testing: s114")
     print("="*70)
 
     for N in test_sizes:
