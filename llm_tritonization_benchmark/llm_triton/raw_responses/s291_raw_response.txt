@@ -1,0 +1,123 @@
+# LLM-Generated Triton Implementation for s291
+# Generated: 2025-11-17 17:33:59
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 498
+# Output Tokens: 556
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s291_pytorch(a, b):
+    """
+    PyTorch implementation of TSVC s291.
+    
+    Original C code:
+    for (int nl = 0; nl < 2*iterations; nl++) {
+        im1 = LEN_1D-1;
+        for (int i = 0; i < LEN_1D; i++) {
+            a[i] = (b[i] + b[im1]) * (real_t).5;
+            im1 = i;
+        }
+    }
+    
+    Arrays: a (rw), b (r)
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    
+    n = len(b)
+    im1 = n - 1
+    
+    for i in range(n):
+        a[i] = (b[i] + b[im1]) * 0.5
+        im1 = i
+    
+    return a
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s291_kernel`
+2. Includes a Python wrapper function named `s291_triton` (NOT `s291_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s291_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s291_kernel(
+    a_ptr,
+    b_ptr,
+    n,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Triton kernel for s291 operation.
+    Each element a[i] = (b[i] + b[im1]) * 0.5 where im1 is the previous index (wrapping to n-1 for i=0).
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n
+    
+    # Load current b values
+    b_curr = tl.load(b_ptr + offsets, mask=mask)
+    
+    # Calculate previous indices (im1)
+    # For i=0, im1 should be n-1; for i>0, im1 = i-1
+    prev_offsets = tl.where(offsets == 0, n - 1, offsets - 1)
+    
+    # Load previous b values
+    b_prev = tl.load(b_ptr + prev_offsets, mask=mask)
+    
+    # Compute result: (b[i] + b[im1]) * 0.5
+    result = (b_curr + b_prev) * 0.5
+    
+    # Store result
+    tl.store(a_ptr + offsets, result, mask=mask)
+
+def s291_triton(a, b):
+    """
+    Triton implementation of TSVC s291.
+    Optimized using parallel processing with proper handling of previous index dependencies.
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    
+    n = b.numel()
+    
+    # Choose block size for optimal memory coalescing
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n, BLOCK_SIZE),)
+    
+    # Launch kernel
+    s291_kernel[grid](
+        a, b, n,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return a
+```

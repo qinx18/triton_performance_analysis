@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Results and cache
+results/
+*.cache
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large generated files (optional - comment out if you want to include them)
+# llm_triton/raw_responses/
+
+# Profiling reports (too large for GitHub)
+**/profiling/
+*.ncu-rep
+*.nsys-rep

@@ -1,0 +1,121 @@
+# LLM-Generated Triton Implementation for s2712
+# Generated: 2025-11-17 17:30:33
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 473
+# Output Tokens: 579
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s2712_pytorch(a, b, c):
+    """
+    PyTorch implementation of TSVC s2712 function.
+    
+    Original C code:
+    for (int nl = 0; nl < 4*iterations; nl++) {
+        for (int i = 0; i < LEN_1D; i++) {
+            if (a[i] > b[i]) {
+                a[i] += b[i] * c[i];
+            }
+        }
+    }
+    
+    Arrays used: a (rw), b (r), c (r)
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    
+    mask = a > b
+    a = torch.where(mask, a + b * c, a)
+    
+    return a
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s2712_kernel`
+2. Includes a Python wrapper function named `s2712_triton` (NOT `s2712_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s2712_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s2712_kernel(
+    a_ptr, b_ptr, c_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Triton kernel for s2712: conditional multiply-add operation.
+    Optimized with coalesced memory access and efficient masking.
+    """
+    # Get program ID and calculate offsets
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Create mask for valid elements to handle edge cases
+    mask = offsets < n_elements
+    
+    # Load data with masking for bounds checking
+    a = tl.load(a_ptr + offsets, mask=mask)
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
+    
+    # Conditional computation: if a[i] > b[i], then a[i] += b[i] * c[i]
+    condition = a > b
+    result = tl.where(condition, a + b * c, a)
+    
+    # Store result back to memory
+    tl.store(a_ptr + offsets, result, mask=mask)
+
+def s2712_triton(a, b, c):
+    """
+    Triton implementation of TSVC s2712 function.
+    Uses optimized GPU kernel with efficient memory coalescing.
+    """
+    # Ensure tensors are contiguous for optimal memory access
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    
+    n_elements = a.numel()
+    
+    # Choose block size for optimal occupancy
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    # Launch kernel with flattened tensors for efficient processing
+    s2712_kernel[grid](
+        a.view(-1), b.view(-1), c.view(-1),
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return a
+```

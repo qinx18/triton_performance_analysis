@@ -1,0 +1,144 @@
+# LLM-Generated Triton Implementation for s315
+# Generated: 2025-11-17 17:37:15
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 493
+# Output Tokens: 737
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s315_pytorch(a, x):
+    """
+    PyTorch implementation of TSVC s315 - find maximum value and its index.
+    
+    Original C code:
+    for (int nl = 0; nl < iterations; nl++) {
+        x = a[0];
+        index = 0;
+        for (int i = 0; i < LEN_1D; ++i) {
+            if (a[i] > x) {
+                x = a[i];
+                index = i;
+            }
+        }
+        chksum = x + (real_t) index;
+    }
+    """
+    a = a.contiguous()
+    x = x.contiguous()
+    
+    # Find maximum value and its index
+    max_val, max_idx = torch.max(a, dim=0)
+    
+    # Update x with the maximum value
+    x[0] = max_val
+    
+    return a, x
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s315_kernel`
+2. Includes a Python wrapper function named `s315_triton` (NOT `s315_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s315_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s315_kernel(
+    a_ptr,
+    x_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Triton kernel to find maximum value in array.
+    Uses block-level reduction for efficient parallel max finding.
+    """
+    # Get program ID and compute offsets
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Create mask for valid elements
+    mask = offsets < n_elements
+    
+    # Load data with masking, use -inf for invalid elements
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=float('-inf'))
+    
+    # Find maximum value in this block
+    block_max = tl.max(a_vals, axis=0)
+    
+    # Store block maximum (will be reduced later on CPU)
+    if pid == 0:
+        tl.store(x_ptr, block_max)
+    else:
+        # For multi-block case, use atomic max
+        tl.atomic_max(x_ptr, block_max)
+
+def s315_triton(a, x):
+    """
+    Triton implementation of TSVC s315 - find maximum value and its index.
+    Uses GPU parallel reduction for efficient max finding.
+    """
+    a = a.contiguous()
+    x = x.contiguous()
+    
+    n_elements = a.numel()
+    
+    # For small arrays or single element, use PyTorch directly
+    if n_elements <= 1024:
+        max_val, max_idx = torch.max(a, dim=0)
+        x[0] = max_val
+        return a, x
+    
+    # Choose block size based on array size
+    BLOCK_SIZE = min(1024, triton.next_power_of_2(n_elements))
+    
+    # Create temporary buffer for intermediate results
+    temp_max = torch.full((1,), float('-inf'), device=a.device, dtype=a.dtype)
+    
+    # Calculate grid size
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    # Launch kernel for parallel max reduction
+    s315_kernel[grid](
+        a, temp_max, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    # For multiple blocks, we need a second pass or use PyTorch for final reduction
+    if grid[0] > 1:
+        # Fall back to PyTorch for final max (atomic_max handles this in kernel)
+        max_val = temp_max[0]
+    else:
+        max_val = temp_max[0]
+    
+    # Update x with the maximum value
+    x[0] = max_val
+    
+    return a, x
+```

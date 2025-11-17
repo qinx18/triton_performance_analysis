@@ -1,0 +1,121 @@
+# LLM-Generated Triton Implementation for s1351
+# Generated: 2025-11-17 17:12:05
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 487
+# Output Tokens: 508
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s1351_pytorch(a, b, c):
+    """
+    PyTorch implementation of TSVC s1351 - basic linear combination.
+    
+    Original C code:
+    for (int nl = 0; nl < 8*iterations; nl++) {
+        real_t* __restrict__ A = a;
+        real_t* __restrict__ B = b;
+        real_t* __restrict__ C = c;
+        for (int i = 0; i < LEN_1D; i++) {
+            *A = *B+*C;
+            A++;
+            B++;
+            C++;
+        }
+    }
+    
+    Arrays: a (w), b (r), c (r)
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    
+    a[:] = b + c
+    
+    return a
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s1351_kernel`
+2. Includes a Python wrapper function named `s1351_triton` (NOT `s1351_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s1351_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s1351_kernel(
+    a_ptr, b_ptr, c_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Triton kernel for s1351 - vectorized linear combination with coalesced memory access
+    """
+    # Calculate block start position
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Mask for handling array bounds
+    mask = offsets < n_elements
+    
+    # Load input vectors with masking
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
+    
+    # Compute linear combination
+    result = b + c
+    
+    # Store result with masking
+    tl.store(a_ptr + offsets, result, mask=mask)
+
+def s1351_triton(a, b, c):
+    """
+    Triton implementation of TSVC s1351 - basic linear combination.
+    Optimized with vectorized operations and coalesced memory access.
+    """
+    # Ensure tensors are contiguous for optimal memory access
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    
+    n_elements = a.numel()
+    
+    # Use block size of 1024 for good occupancy on most GPUs
+    BLOCK_SIZE = 1024
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    # Launch kernel with flattened tensor views
+    s1351_kernel[grid](
+        a.view(-1), b.view(-1), c.view(-1),
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return a
+```

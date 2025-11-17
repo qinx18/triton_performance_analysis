@@ -1,0 +1,131 @@
+# LLM-Generated Triton Implementation for s2102
+# Generated: 2025-11-17 17:16:23
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 516
+# Output Tokens: 620
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s2102_pytorch(aa):
+    """
+    PyTorch implementation of TSVC s2102 function.
+    
+    Original C code:
+    for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
+        for (int i = 0; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                aa[j][i] = (real_t)0.;
+            }
+            aa[i][i] = (real_t)1.;
+        }
+    }
+    
+    Arrays used: aa (r)
+    """
+    aa = aa.contiguous()
+    LEN_2D = aa.size(0)
+    
+    # Zero out all elements
+    aa.fill_(0.0)
+    
+    # Set diagonal elements to 1
+    for i in range(LEN_2D):
+        aa[i, i] = 1.0
+    
+    return aa
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s2102_kernel`
+2. Includes a Python wrapper function named `s2102_triton` (NOT `s2102_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s2102_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s2102_kernel(
+    aa_ptr,
+    LEN_2D,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Triton kernel to zero out matrix and set diagonal to 1.
+    Uses 1D indexing for efficient memory access.
+    """
+    pid = tl.program_id(0)
+    
+    # Calculate starting position for this block
+    start_idx = pid * BLOCK_SIZE
+    offsets = start_idx + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < LEN_2D * LEN_2D
+    
+    # Zero out all elements in this block
+    tl.store(aa_ptr + offsets, 0.0, mask=mask)
+    
+    # Check if any diagonal elements are in this block
+    # Diagonal elements are at positions: 0, LEN_2D+1, 2*(LEN_2D+1), ...
+    for i in range(LEN_2D):
+        diag_idx = i * LEN_2D + i  # Row i, column i
+        if start_idx <= diag_idx < start_idx + BLOCK_SIZE:
+            # This diagonal element is in our block
+            local_offset = diag_idx - start_idx
+            if local_offset < BLOCK_SIZE:
+                tl.store(aa_ptr + diag_idx, 1.0)
+
+def s2102_triton(aa):
+    """
+    Triton implementation of TSVC s2102 function.
+    
+    Optimizations:
+    - Single kernel launch processes entire matrix
+    - 1D memory access pattern for better coalescing
+    - Block-wise processing with masking for edge cases
+    - In-place diagonal setting within the same kernel
+    """
+    aa = aa.contiguous()
+    LEN_2D = aa.size(0)
+    
+    # Calculate total number of elements
+    total_elements = LEN_2D * LEN_2D
+    
+    # Choose block size for optimal occupancy
+    BLOCK_SIZE = 256
+    
+    # Calculate number of blocks needed
+    num_blocks = triton.cdiv(total_elements, BLOCK_SIZE)
+    
+    # Launch kernel
+    s2102_kernel[(num_blocks,)](
+        aa,
+        LEN_2D,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return aa
+```

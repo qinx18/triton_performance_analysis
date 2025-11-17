@@ -1,0 +1,130 @@
+# LLM-Generated Triton Implementation for s2244
+# Generated: 2025-11-17 17:19:11
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 524
+# Output Tokens: 672
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s2244_pytorch(a, b, c, e):
+    """
+    PyTorch implementation of TSVC s2244
+    
+    Original C code:
+    for (int nl = 0; nl < iterations; nl++) {
+        for (int i = 0; i < LEN_1D-1; i++) {
+            a[i+1] = b[i] + e[i];
+            a[i] = b[i] + c[i];
+        }
+    }
+    
+    Arrays: a (rw), b (r), c (r), e (r)
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    e = e.contiguous()
+    
+    len_1d = a.size(0)
+    
+    for i in range(len_1d - 1):
+        a[i + 1] = b[i] + e[i]
+        a[i] = b[i] + c[i]
+    
+    return a
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s2244_kernel`
+2. Includes a Python wrapper function named `s2244_triton` (NOT `s2244_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s2244_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s2244_kernel(
+    a_ptr, b_ptr, c_ptr, e_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Triton kernel for s2244 operation.
+    Key optimization: Process elements in parallel while handling dependencies.
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Mask for valid elements (n_elements - 1 since loop goes to len_1d - 1)
+    mask = offsets < (n_elements - 1)
+    
+    # Load input data
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    e_vals = tl.load(e_ptr + offsets, mask=mask)
+    
+    # Compute a[i+1] = b[i] + e[i] (store at offset+1)
+    a_next_vals = b_vals + e_vals
+    tl.store(a_ptr + offsets + 1, a_next_vals, mask=mask)
+    
+    # Compute a[i] = b[i] + c[i] (store at offset)
+    a_curr_vals = b_vals + c_vals
+    tl.store(a_ptr + offsets, a_curr_vals, mask=mask)
+
+def s2244_triton(a, b, c, e):
+    """
+    Triton implementation of TSVC s2244
+    
+    Optimizations:
+    - Parallel processing of independent computations
+    - Efficient memory coalescing with contiguous access patterns
+    - Single kernel launch to minimize overhead
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    e = e.contiguous()
+    
+    len_1d = a.size(0)
+    
+    # Process n_elements - 1 elements (matching the original loop bound)
+    n_elements = len_1d
+    
+    # Use block size that balances occupancy and memory efficiency
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements - 1, BLOCK_SIZE),)
+    
+    s2244_kernel[grid](
+        a, b, c, e,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return a
+```

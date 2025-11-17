@@ -1,0 +1,143 @@
+# LLM-Generated Triton Implementation for s441
+# Generated: 2025-11-17 17:44:33
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 633
+# Output Tokens: 689
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s441_pytorch(a, b, c, d):
+    """
+    PyTorch implementation of TSVC s441 - conditional linear recurrence
+    
+    Original C code:
+    for (int nl = 0; nl < iterations; nl++) {
+        for (int i = 0; i < LEN_1D; i++) {
+            if (d[i] < (real_t)0.) {
+                a[i] += b[i] * c[i];
+            } else if (d[i] == (real_t)0.) {
+                a[i] += b[i] * b[i];
+            } else {
+                a[i] += c[i] * c[i];
+            }
+        }
+    }
+    
+    Arrays: a (rw), b (r), c (r), d (rw)
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    d = d.contiguous()
+    
+    # Create masks for the three conditions
+    mask_negative = d < 0.0
+    mask_zero = d == 0.0
+    mask_positive = ~(mask_negative | mask_zero)
+    
+    # Apply conditional updates
+    a = torch.where(mask_negative, a + b * c, a)
+    a = torch.where(mask_zero, a + b * b, a)
+    a = torch.where(mask_positive, a + c * c, a)
+    
+    return a
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s441_kernel`
+2. Includes a Python wrapper function named `s441_triton` (NOT `s441_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s441_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s441_kernel(
+    a_ptr, b_ptr, c_ptr, d_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Triton kernel for conditional linear recurrence with three branches
+    Optimizes memory coalescing and reduces conditional overhead
+    """
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load all arrays with masking for edge cases
+    a = tl.load(a_ptr + offsets, mask=mask)
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
+    d = tl.load(d_ptr + offsets, mask=mask)
+    
+    # Create condition masks for the three branches
+    mask_negative = d < 0.0
+    mask_zero = d == 0.0
+    mask_positive = ~(mask_negative | mask_zero)
+    
+    # Compute all three possible updates
+    update_negative = b * c
+    update_zero = b * b
+    update_positive = c * c
+    
+    # Apply conditional updates using select operations for better performance
+    result = tl.where(mask_negative, a + update_negative, a)
+    result = tl.where(mask_zero, result + update_zero, result)
+    result = tl.where(mask_positive, result + update_positive, result)
+    
+    # Store result back to memory
+    tl.store(a_ptr + offsets, result, mask=mask)
+
+def s441_triton(a, b, c, d):
+    """
+    Triton implementation of TSVC s441 - conditional linear recurrence
+    Uses vectorized conditional operations for GPU acceleration
+    """
+    # Ensure tensors are contiguous and on the same device
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    d = d.contiguous()
+    
+    n_elements = a.numel()
+    
+    # Choose block size for optimal memory coalescing
+    BLOCK_SIZE = 1024
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    # Launch kernel with flattened tensor views
+    s441_kernel[grid](
+        a.view(-1), b.view(-1), c.view(-1), d.view(-1),
+        n_elements,
+        BLOCK_SIZE,
+    )
+    
+    return a
+```

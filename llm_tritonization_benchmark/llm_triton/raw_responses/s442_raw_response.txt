@@ -1,0 +1,172 @@
+# LLM-Generated Triton Implementation for s442
+# Generated: 2025-11-17 17:44:48
+# Model: claude-sonnet-4-20250514
+# Stop Reason: end_turn
+# Input Tokens: 743
+# Output Tokens: 831
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+Baseline Implementation:
+```python
+import torch
+
+def s442_pytorch(a, b, c, d, e, indx):
+    """
+    PyTorch implementation of TSVC s442 - switch statement with goto labels.
+    
+    Original C code:
+    for (int nl = 0; nl < iterations/2; nl++) {
+        for (int i = 0; i < LEN_1D; i++) {
+            switch (indx[i]) {
+                case 1:  goto L15;
+                case 2:  goto L20;
+                case 3:  goto L30;
+                case 4:  goto L40;
+            }
+    L15:
+            a[i] += b[i] * b[i];
+            goto L50;
+    L20:
+            a[i] += c[i] * c[i];
+            goto L50;
+    L30:
+            a[i] += d[i] * d[i];
+            goto L50;
+    L40:
+            a[i] += e[i] * e[i];
+    L50:
+            ;
+        }
+    }
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    d = d.contiguous()
+    e = e.contiguous()
+    indx = indx.contiguous()
+    
+    # Create masks for each case
+    mask1 = (indx == 1)
+    mask2 = (indx == 2)
+    mask3 = (indx == 3)
+    mask4 = (indx == 4)
+    
+    # Apply updates based on switch cases
+    a = torch.where(mask1, a + b * b, a)
+    a = torch.where(mask2, a + c * c, a)
+    a = torch.where(mask3, a + d * d, a)
+    a = torch.where(mask4, a + e * e, a)
+    
+    return a
+```
+
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s442_kernel`
+2. Includes a Python wrapper function named `s442_triton` (NOT `s442_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. Includes brief comments explaining key optimizations
+
+IMPORTANT:
+- Wrapper function name: `s442_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s442_kernel(
+    a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, indx_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    # Get program ID and compute offsets
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Mask for valid elements
+    mask = offsets < n_elements
+    
+    # Load data with masking
+    a = tl.load(a_ptr + offsets, mask=mask)
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
+    d = tl.load(d_ptr + offsets, mask=mask)
+    e = tl.load(e_ptr + offsets, mask=mask)
+    indx = tl.load(indx_ptr + offsets, mask=mask)
+    
+    # Create masks for each switch case
+    mask1 = indx == 1
+    mask2 = indx == 2
+    mask3 = indx == 3
+    mask4 = indx == 4
+    
+    # Compute squared values
+    b_sq = b * b
+    c_sq = c * c
+    d_sq = d * d
+    e_sq = e * e
+    
+    # Apply conditional updates (vectorized switch statement)
+    # Use tl.where to implement the branching logic
+    result = a
+    result = tl.where(mask1, result + b_sq, result)
+    result = tl.where(mask2, result + c_sq, result)
+    result = tl.where(mask3, result + d_sq, result)
+    result = tl.where(mask4, result + e_sq, result)
+    
+    # Store result back to memory
+    tl.store(a_ptr + offsets, result, mask=mask)
+
+def s442_triton(a, b, c, d, e, indx):
+    """
+    Triton implementation of TSVC s442 - optimized switch statement with conditional updates.
+    
+    Key optimizations:
+    - Vectorized conditional operations using tl.where
+    - Coalesced memory access patterns
+    - Single kernel launch with appropriate block sizing
+    - In-place updates to minimize memory traffic
+    """
+    # Ensure tensors are contiguous and on GPU
+    a = a.contiguous()
+    b = b.contiguous()
+    c = c.contiguous()
+    d = d.contiguous()
+    e = e.contiguous()
+    indx = indx.contiguous()
+    
+    n_elements = a.numel()
+    
+    # Choose block size for good occupancy
+    BLOCK_SIZE = 256
+    
+    # Calculate grid size
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    # Launch kernel
+    s442_kernel[grid](
+        a, b, c, d, e, indx,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return a
+```
