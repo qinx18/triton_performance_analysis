@@ -33,13 +33,15 @@ def test_correctness():
             aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            k = 5  # Scalar parameter for offset
+            # From C code: m=0, j=m, k=m+1
+            j = 0
+            k = 1
 
             # Run PyTorch baseline
-            pytorch_result = s132_pytorch(aa.clone(), b.clone(), c.clone(), k)
+            pytorch_result = s132_pytorch(aa.clone(), b.clone(), c.clone(), j, k)
 
             # Run Triton LLM
-            triton_result = s132_triton(aa.clone(), b.clone(), c.clone(), k)
+            triton_result = s132_triton(aa.clone(), b.clone(), c.clone(), j, k)
 
             # Compare results
             if isinstance(pytorch_result, tuple):

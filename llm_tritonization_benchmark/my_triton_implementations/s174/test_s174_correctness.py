@@ -30,8 +30,12 @@ def test_correctness():
 
         try:
             # Initialize arrays
+            # M is determined by b.size(0), and a needs to have size >= 2*M
+            # In TSVC, a is LEN_1D and M is a parameter (could be LEN_1D/2)
+            # For testing, we use M = N/2, so a needs size N
+            M = N // 2
             a = torch.randn(N, device='cuda', dtype=torch.float32)
-            b = torch.randn(N, device='cuda', dtype=torch.float32)
+            b = torch.randn(M, device='cuda', dtype=torch.float32)
 
             # Run PyTorch baseline
             pytorch_result = s174_pytorch(a.clone(), b.clone())

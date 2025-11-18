@@ -32,12 +32,13 @@ def test_correctness():
             # Initialize arrays
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
+            m = 1  # From C code: int m = 1;
 
             # Run PyTorch baseline
-            pytorch_result = s131_pytorch(a.clone(), b.clone())
+            pytorch_result = s131_pytorch(a.clone(), b.clone(), m)
 
             # Run Triton LLM
-            triton_result = s131_triton(a.clone(), b.clone())
+            triton_result = s131_triton(a.clone(), b.clone(), m)
 
             # Compare results
             if isinstance(pytorch_result, tuple):

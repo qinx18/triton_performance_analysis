@@ -10,8 +10,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from baselines.s212_baseline import s212_pytorch
-    from llm_triton.s212_triton_llm import s212_triton
+    from baselines.s212_baseline_correct import s212_pytorch
+    from llm_triton.s212_triton_correct import s212_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,7 +22,7 @@ def test_correctness():
     all_passed = True
 
     print("="*70)
-    print(f"Correctness Testing: s212")
+    print(f"Correctness Testing: s212 (CORRECTED VERSIONS)")
     print("="*70)
 
     for N in test_sizes:
@@ -30,10 +30,10 @@ def test_correctness():
 
         try:
             # Initialize arrays
-            a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            d = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            a = torch.randn(N, device='cuda', dtype=torch.float32)
+            b = torch.randn(N, device='cuda', dtype=torch.float32)
+            c = torch.randn(N, device='cuda', dtype=torch.float32)
+            d = torch.randn(N, device='cuda', dtype=torch.float32)
 
             # Run PyTorch baseline
             pytorch_result = s212_pytorch(a.clone(), b.clone(), c.clone(), d.clone())
