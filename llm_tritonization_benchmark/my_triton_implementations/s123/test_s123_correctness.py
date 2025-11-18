@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s123_baseline import s123_pytorch
-    from llm_triton.s123_triton_llm import s123_triton
+    from llm_triton.s123_triton_correct import s123_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -30,17 +30,18 @@ def test_correctness():
 
         try:
             # Initialize arrays
-            a = torch.randn(N, device='cuda', dtype=torch.float32)
+            # N is half_len, a needs to be at least 2*N for output
+            a = torch.zeros(N * 2, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             c = torch.randn(N, device='cuda', dtype=torch.float32)
             d = torch.randn(N, device='cuda', dtype=torch.float32)
             e = torch.randn(N, device='cuda', dtype=torch.float32)
 
             # Run PyTorch baseline
-            pytorch_result = s123_pytorch(a.clone(), b.clone(), c.clone(), d.clone(), e.clone())
+            pytorch_result = s123_pytorch(a.clone(), b, c, d, e)
 
-            # Run Triton LLM
-            triton_result = s123_triton(a.clone(), b.clone(), c.clone(), d.clone(), e.clone())
+            # Run Triton corrected
+            triton_result = s123_triton(a.clone(), b, c, d, e)
 
             # Compare results
             if isinstance(pytorch_result, tuple):

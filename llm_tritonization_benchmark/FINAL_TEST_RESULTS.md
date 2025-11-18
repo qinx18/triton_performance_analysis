@@ -283,11 +283,14 @@ The LLM successfully generated correct Triton implementations for **over half** 
 
 ### Function Categories
 
-**s000-s113:** Single dimension, no dependence. Make sure all use original values. s112 now passes with SIMT implicit synchronization (works but fragile). s1112 passes after fixing test bug (missing iterations parameter).
+**s000-s113, s1113, s116, s121, s122:** Single dimension, no dependence. Make sure all use original values. s112 now passes with SIMT implicit synchronization (works but fragile). s1112 passes after fixing test bug (missing iterations parameter). s1113 and s116 all failed due to their unique pattern.
 
-**s114-s115:** Double dimensions, triangular operations. Both now pass:
+**s114-s115, s118, s119, s1119:** Double dimensions, triangular operations. Both now pass:
 - **s114**: Jump in data access, no dependency. Was failing due to wrong import path in test.
-- **s115**: Real dependency (back substitution). Was failing due to using absolute tolerance instead of relative tolerance. Now uses `torch.allclose(rtol=1e-4)` for exponential value growth.
+- **s115, s118, s119, s1119**: Real dependency, s119 need to launch kernels sequentially because of the diagnal dependency. All the rest could just launch one kernel. s115 Was failing due to using absolute tolerance instead of relative tolerance. Now uses `torch.allclose(rtol=1e-4)` for exponential value growth.
+
+**s121, s122:** induction variable without an if.
+**s123-s124:** induction variable under an if, need/don't need compacting.
 
 ### Recommendations for Future Work
 
