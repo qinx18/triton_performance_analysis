@@ -18,7 +18,8 @@ except ImportError as e:
 
 def test_correctness():
     """Test correctness across multiple sizes"""
-    test_sizes = [100, 1000, 10000]
+    # Reduced sizes for faster testing (baseline uses slow Python loops for 2D arrays)
+    test_sizes = [100, 200, 500]
     all_passed = True
 
     print("="*70)

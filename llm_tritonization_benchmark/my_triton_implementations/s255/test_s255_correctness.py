@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s255_baseline import s255_pytorch
-    from llm_triton.s255_triton_llm import s255_triton
+    from llm_triton.s255_triton_correct import s255_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,7 +22,7 @@ def test_correctness():
     all_passed = True
 
     print("="*70)
-    print(f"Correctness Testing: s255")
+    print(f"Correctness Testing: s255 (VECTORIZED)")
     print("="*70)
 
     for N in test_sizes:
@@ -30,15 +30,14 @@ def test_correctness():
 
         try:
             # Initialize arrays
-            a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            x = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            a = torch.randn(N, device='cuda', dtype=torch.float32)
+            b = torch.randn(N, device='cuda', dtype=torch.float32)
 
             # Run PyTorch baseline
-            pytorch_result = s255_pytorch(a.clone(), b.clone(), x.clone())
+            pytorch_result = s255_pytorch(a.clone(), b.clone())
 
             # Run Triton LLM
-            triton_result = s255_triton(a.clone(), b.clone(), x.clone())
+            triton_result = s255_triton(a.clone(), b.clone())
 
             # Compare results
             if isinstance(pytorch_result, tuple):

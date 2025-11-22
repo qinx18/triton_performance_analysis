@@ -11,18 +11,19 @@ import torch
 
 try:
     from baselines.s233_baseline import s233_pytorch
-    from llm_triton.s233_triton_llm import s233_triton
+    from llm_triton.s233_triton_correct import s233_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
 def test_correctness():
     """Test correctness across multiple sizes"""
-    test_sizes = [100, 1000, 10000]
+    # Reduced sizes to match s231 (baseline uses slow Python loops for 2D arrays)
+    test_sizes = [100, 200, 500]
     all_passed = True
 
     print("="*70)
-    print(f"Correctness Testing: s233")
+    print(f"Correctness Testing: s233 (CORRECTED VERSION)")
     print("="*70)
 
     for N in test_sizes:

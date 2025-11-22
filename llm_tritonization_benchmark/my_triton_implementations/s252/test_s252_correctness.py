@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s252_baseline import s252_pytorch
-    from llm_triton.s252_triton_llm import s252_triton
+    from llm_triton.s252_triton_correct import s252_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,7 +22,7 @@ def test_correctness():
     all_passed = True
 
     print("="*70)
-    print(f"Correctness Testing: s252")
+    print(f"Correctness Testing: s252 (VECTORIZED)")
     print("="*70)
 
     for N in test_sizes:

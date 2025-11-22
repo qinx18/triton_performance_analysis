@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s3251_baseline import s3251_pytorch
-    from llm_triton.s3251_triton_llm import s3251_triton
+    from llm_triton.s3251_triton_correct import s3251_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,7 +22,7 @@ def test_correctness():
     all_passed = True
 
     print("="*70)
-    print(f"Correctness Testing: s3251")
+    print(f"Correctness Testing: s3251 (ARRAY EXPANSION)")
     print("="*70)
 
     for N in test_sizes:

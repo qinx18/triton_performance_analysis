@@ -333,10 +333,24 @@ The LLM successfully generated correct Triton implementations for **nearly two-t
 
 **s211-s1213:** Statement reordering
 - **s211, s1213**: forward and backward dependency, need to put backward dependency lines later.
-- **s212**: Both baseline and LLM forgot a_orig (fixed), only forward dependency, so only need to save orig.
+- **s212**: Both baseline and LLM forgot a_orig (fixed), only backward dependency, so only need to save orig.
 
-**s221-s222:** loop distribution
-- **s221**: 
+**s221-s222:** loop distribution: split into parrellel and recurrence part(fall back to element-wise processsing)
+
+**s231-s235:** loop interchange, with real dependency across one dimension or none, use s1119 solution with dependency.
+
+**s241-s2244:** node spliting, dealing with overwritten cases.
+
+**s251-s261:** scalar and array expansion
+
+**s271-s2712:** control flow
+
+
 ---
 
 **This investigation demonstrates that systematic bug analysis can significantly improve measured LLM performance, revealing true capabilities obscured by test infrastructure issues and baseline bugs.**
+
+double dimension in-kernel/sequential loop launching
+backward dependency only need to save orig to avoid race condition/
+forward dependency only(recurrence, usually after loop-split), fall back to element-wise processsing/
+backward + forward: statement reordering.

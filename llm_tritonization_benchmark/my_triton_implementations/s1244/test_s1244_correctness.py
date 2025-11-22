@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s1244_baseline import s1244_pytorch
-    from llm_triton.s1244_triton_correct import s1244_triton
+    from llm_triton.s1244_triton_llm import s1244_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,7 +22,7 @@ def test_correctness():
     all_passed = True
 
     print("="*70)
-    print(f"Correctness Testing: s1244 (CORRECTED VERSION)")
+    print(f"Correctness Testing: s1244")
     print("="*70)
 
     for N in test_sizes:
