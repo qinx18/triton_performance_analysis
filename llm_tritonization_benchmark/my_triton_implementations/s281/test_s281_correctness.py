@@ -10,8 +10,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from baselines.s281_baseline import s281_pytorch
-    from llm_triton.s281_triton_llm import s281_triton
+    from baselines.s281_baseline_correct import s281_pytorch
+    from llm_triton.s281_triton_correct import s281_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -33,13 +33,12 @@ def test_correctness():
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            x = torch.randn(N + 10, device='cuda', dtype=torch.float32)
 
             # Run PyTorch baseline
-            pytorch_result = s281_pytorch(a.clone(), b.clone(), c.clone(), x.clone())
+            pytorch_result = s281_pytorch(a.clone(), b.clone(), c.clone())
 
             # Run Triton LLM
-            triton_result = s281_triton(a.clone(), b.clone(), c.clone(), x.clone())
+            triton_result = s281_triton(a.clone(), b.clone(), c.clone())
 
             # Compare results
             if isinstance(pytorch_result, tuple):

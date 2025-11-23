@@ -35,13 +35,16 @@ def test_correctness():
             c = torch.randn(N, device='cuda', dtype=torch.float32)
             d = torch.randn(N, device='cuda', dtype=torch.float32)
             e = torch.randn(N, device='cuda', dtype=torch.float32)
-            x = torch.randn(N, device='cuda', dtype=torch.float32)
+
+            # x is a scalar value (as in original C code)
+            x = 1.0  # Arbitrary positive value for testing
+            LEN_1D = N
 
             # Run PyTorch baseline
-            pytorch_result = s2710_pytorch(a.clone(), b.clone(), c.clone(), d.clone(), e.clone(), x.clone())
+            pytorch_result = s2710_pytorch(a.clone(), b.clone(), c.clone(), d.clone(), e.clone(), x, LEN_1D)
 
             # Run Triton LLM
-            triton_result = s2710_triton(a.clone(), b.clone(), c.clone(), d.clone(), e.clone(), x.clone())
+            triton_result = s2710_triton(a.clone(), b.clone(), c.clone(), d.clone(), e.clone(), x, LEN_1D)
 
             # Compare results
             if isinstance(pytorch_result, tuple):

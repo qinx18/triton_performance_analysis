@@ -345,7 +345,13 @@ The LLM successfully generated correct Triton implementations for **nearly two-t
 
 **s271-s2712:** control flow
 
+**s281-s1281** crossing threshold
 
+**s291-s293** loop peeling
+
+**s2101-s2111** diagonals
+
+**s311-s3113** reductions
 ---
 
 **This investigation demonstrates that systematic bug analysis can significantly improve measured LLM performance, revealing true capabilities obscured by test infrastructure issues and baseline bugs.**

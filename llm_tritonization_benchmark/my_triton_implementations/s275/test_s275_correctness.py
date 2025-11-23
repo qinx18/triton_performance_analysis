@@ -11,14 +11,14 @@ import torch
 
 try:
     from baselines.s275_baseline import s275_pytorch
-    from llm_triton.s275_triton_llm import s275_triton
+    from llm_triton.s275_triton_correct import s275_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
 def test_correctness():
     """Test correctness across multiple sizes"""
-    test_sizes = [100, 1000, 10000]
+    test_sizes = [100, 200, 500]  # Reduced for 2D x 2D arrays
     all_passed = True
 
     print("="*70)
