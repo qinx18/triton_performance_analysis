@@ -351,12 +351,31 @@ The LLM successfully generated correct Triton implementations for **nearly two-t
 
 **s2101-s2111** diagonals
 
-**s311-s3113** reductions
+**s311-s3113** reductions, functions like s312 are unable to parrelise.
+
+**s321-s323** recurrence, doesn't benefit from Triton.
+
+**s331, s332** search loops, s332 doesn't fall back to pytorch
+
+**s341-s343** packing, using cumsum for output positions
+
+**s351-s353** loop rerolling
+
+**s421-s424** storage classes and equivalencing
+
+**s451-s453** intrinsic functions
+
+**s471** call statements
+
+**s491** vector semantics, only parreliszable when each ip element is unique
+
+**s4112-s4117** indirect addressing
+
 ---
 
 **This investigation demonstrates that systematic bug analysis can significantly improve measured LLM performance, revealing true capabilities obscured by test infrastructure issues and baseline bugs.**
 
-double dimension in-kernel/sequential loop launching
+double dimension in-kernel loop > sequential loop launching
 backward dependency only need to save orig to avoid race condition/
 forward dependency only(recurrence, usually after loop-split), fall back to element-wise processsing/
 backward + forward: statement reordering.

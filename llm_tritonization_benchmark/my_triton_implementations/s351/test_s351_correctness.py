@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s351_baseline import s351_pytorch
-    from llm_triton.s351_triton_llm import s351_triton
+    from llm_triton.s351_triton_correct import s351_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -32,12 +32,13 @@ def test_correctness():
             # Initialize arrays
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            alpha = 2.5  # Scalar value for SAXPY
 
             # Run PyTorch baseline
-            pytorch_result = s351_pytorch(a.clone(), b.clone())
+            pytorch_result = s351_pytorch(a.clone(), b.clone(), alpha)
 
             # Run Triton LLM
-            triton_result = s351_triton(a.clone(), b.clone())
+            triton_result = s351_triton(a.clone(), b.clone(), alpha)
 
             # Compare results
             if isinstance(pytorch_result, tuple):

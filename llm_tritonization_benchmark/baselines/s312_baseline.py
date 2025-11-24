@@ -16,4 +16,4 @@ def s312_pytorch(a):
     """
     a = a.contiguous()
     prod = torch.prod(a)
-    return a
+    return prod

@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s322_baseline import s322_pytorch
-    from llm_triton.s322_triton_llm import s322_triton
+    from llm_triton.s322_triton_correct import s322_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -30,9 +30,9 @@ def test_correctness():
 
         try:
             # Initialize arrays
-            a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            a = torch.randn(N, device='cuda', dtype=torch.float32)
+            b = torch.randn(N, device='cuda', dtype=torch.float32)
+            c = torch.randn(N, device='cuda', dtype=torch.float32)
 
             # Run PyTorch baseline
             pytorch_result = s322_pytorch(a.clone(), b.clone(), c.clone())

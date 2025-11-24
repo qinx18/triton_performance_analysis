@@ -10,8 +10,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from baselines.s424_baseline import s424_pytorch
-    from llm_triton.s424_triton_llm import s424_triton
+    from baselines.s424_baseline_correct import s424_pytorch
+    from llm_triton.s424_triton_correct import s424_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -30,15 +30,15 @@ def test_correctness():
 
         try:
             # Initialize arrays
+            # a has size N+10, flat_2d_array needs at least 63 + (N+10-1) + 1 = 64 + N + 9 elements
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             flat_2d_array = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)
-            xx = torch.randn(N + 10, device='cuda', dtype=torch.float32)
 
             # Run PyTorch baseline
-            pytorch_result = s424_pytorch(a.clone(), flat_2d_array.clone(), xx.clone())
+            pytorch_result = s424_pytorch(a.clone(), flat_2d_array.clone())
 
-            # Run Triton LLM
-            triton_result = s424_triton(a.clone(), flat_2d_array.clone(), xx.clone())
+            # Run Triton corrected
+            triton_result = s424_triton(a.clone(), flat_2d_array.clone())
 
             # Compare results
             if isinstance(pytorch_result, tuple):
