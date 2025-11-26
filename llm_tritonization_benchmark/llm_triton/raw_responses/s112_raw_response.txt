@@ -1,16 +1,17 @@
 # LLM-Generated Triton Implementation for s112
-# Generated: 2025-11-17 17:01:49
+# Generated: 2025-11-26 15:47:41
 # Model: claude-sonnet-4-20250514
+# WAR Dependencies: ['a']
 # Stop Reason: end_turn
-# Input Tokens: 473
-# Output Tokens: 652
+# Input Tokens: 1016
+# Output Tokens: 450
 
 ================================================================================
 PROMPT:
 ================================================================================
 I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
 
-Baseline Implementation:
+## Baseline Implementation:
 ```python
 import torch
 
@@ -37,6 +38,57 @@ def s112_pytorch(a, b, iterations):
     return a
 ```
 
+## CRITICAL: WAR Race Condition Handling Required
+
+This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
+**Arrays requiring read-only copy**: ['a']
+
+### Problem
+In parallel execution across GPU blocks, if block B writes to a location before block A reads from it,
+block A reads the wrong (modified) value instead of the original value.
+
+For example, in `a[i+1] = a[i] + b[i]`:
+- Thread processing i=100 reads a[100], writes a[101]
+- Thread processing i=101 reads a[101], writes a[102]
+- If the write to a[101] happens before the read from a[101], incorrect results occur.
+
+### Required Solution: Read-Only Copy Pattern
+Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
+and store results to the original array.
+
+### Implementation Template
+```python
+# In wrapper function - create read-only copy BEFORE launching kernel:
+def s112_triton(...):
+    a_copy = a.clone()  # Read-only copy
+
+    # Pass BOTH original (for writes) AND copy (for reads) to kernel
+    s112_kernel[grid](
+        a,        # Write destination (original)
+        a_copy,   # Read source (immutable copy)
+        ...other_args...
+    )
+
+# In kernel - LOAD from copy, STORE to original:
+@triton.jit
+def {kernel_name}_kernel(
+    a_ptr,        # Write destination
+    a_copy_ptr,   # Read source
+    ...
+):
+    offsets = ...
+    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)  # Read from COPY
+
+    result = ...  # Compute using loaded values
+
+    tl.store(a_ptr + write_offsets, result, mask=mask)  # Write to ORIGINAL
+```
+
+**Why this works**: The copy preserves original values for all threads. Reads from immutable copy,
+writes to original - no conflict possible.
+
+
+## Requirements:
 Please generate a complete, optimized Triton implementation that:
 1. Includes a @triton.jit kernel function named `s112_kernel`
 2. Includes a Python wrapper function named `s112_triton` (NOT `s112_pytorch`)
@@ -45,12 +97,13 @@ Please generate a complete, optimized Triton implementation that:
 5. Handles edge cases with masking
 6. Is functionally equivalent to the baseline (same inputs, same outputs)
 7. Returns the same type as the baseline (single tensor or tuple of tensors)
-8. Includes brief comments explaining key optimizations
+8. **CRITICAL**: If WAR dependencies are shown above, you MUST use the read-only copy pattern
 
 IMPORTANT:
 - Wrapper function name: `s112_triton`
 - Function signature must match the baseline exactly (same parameters in same order)
 - Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+- If WAR analysis shows arrays needing copies, you MUST clone those arrays and pass both original and copy to the kernel
 
 Provide ONLY the Python code, no additional explanation.
 
@@ -63,61 +116,48 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s112_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    """
-    Triton kernel for s112 - Forward linear recurrence.
-    Processes one iteration of the recurrence relation.
-    """
-    # Get program ID and compute block boundaries
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
+def s112_kernel(
+    a_ptr,
+    a_copy_ptr,
+    b_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    block_id = tl.program_id(0)
+    block_start = block_id * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < (n_elements - 1)
     
-    # Create mask for valid elements
-    mask = offsets < n_elements - 1
+    # Load from copy and b
+    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
-    # Compute indices for the recurrence relation (reverse order)
-    # Map block indices to reverse iteration order
-    reverse_offsets = n_elements - 2 - offsets
-    reverse_mask = reverse_offsets >= 0
-    
-    # Load data with masking
-    a_vals = tl.load(a_ptr + reverse_offsets, mask=reverse_mask, other=0.0)
-    b_vals = tl.load(b_ptr + reverse_offsets, mask=reverse_mask, other=0.0)
-    
-    # Compute recurrence: a[i+1] = a[i] + b[i]
+    # Compute result
     result = a_vals + b_vals
     
-    # Store result at i+1 position
-    store_offsets = reverse_offsets + 1
-    store_mask = reverse_mask & (store_offsets < n_elements)
-    tl.store(a_ptr + store_offsets, result, mask=store_mask)
+    # Store to original a at offset+1
+    write_offsets = offsets + 1
+    write_mask = write_offsets < n_elements
+    tl.store(a_ptr + write_offsets, result, mask=write_mask)
 
 def s112_triton(a, b, iterations):
-    """
-    Triton implementation of TSVC s112 - Forward linear recurrence.
-    
-    Uses sequential kernel launches to handle data dependencies.
-    Each kernel processes one iteration of the outer loop.
-    """
     a = a.contiguous()
     b = b.contiguous()
     
-    n_elements = a.shape[0]
-    
-    # Handle edge case
-    if n_elements <= 1:
-        return a
-    
-    # Use smaller block size due to reverse memory access pattern
-    BLOCK_SIZE = 256
-    grid = lambda meta: (triton.cdiv(n_elements - 1, meta['BLOCK_SIZE']),)
-    
-    # Sequential execution of iterations to handle data dependencies
     for nl in range(3 * iterations):
+        # Create read-only copy for WAR dependency handling
+        a_copy = a.clone()
+        
+        n_elements = a.numel()
+        BLOCK_SIZE = 256
+        grid = (triton.cdiv(n_elements - 1, BLOCK_SIZE),)
+        
         s112_kernel[grid](
-            a, b, n_elements,
-            BLOCK_SIZE=BLOCK_SIZE
+            a,
+            a_copy,
+            b,
+            n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
         )
     
     return a

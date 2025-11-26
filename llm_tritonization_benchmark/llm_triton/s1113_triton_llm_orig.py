@@ -12,45 +12,50 @@ def s1113_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """
-    Triton kernel for s1113: vectorized addition with broadcast scalar.
-    Optimized for coalesced memory access and efficient broadcasting.
+    Triton kernel for s1113: vectorized addition with broadcast scalar
+    Optimized for coalesced memory access and efficient parallelization
     """
+    # Calculate global thread index
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
+    
+    # Create offset array for this block
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    
+    # Mask for boundary checking
     mask = offsets < n_elements
     
     # Load b values with masking for edge cases
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask, other=0.0)
     
-    # Broadcast scalar addition - scalar_val is already loaded on host
+    # Compute: scalar_val + b[i] (broadcast scalar addition)
     result = scalar_val + b_vals
     
-    # Store result with masking
+    # Store results with masking
     tl.store(output_ptr + offsets, result, mask=mask)
 
 def s1113_triton(a, b):
     """
     Triton implementation of TSVC s1113.
-    Optimized with coalesced memory access and efficient scalar broadcasting.
+    Optimized for GPU with coalesced memory access and efficient broadcasting.
     """
     a = a.contiguous()
     b = b.contiguous()
     
     LEN_1D = a.size(0)
-    # Extract scalar value on host to avoid device-to-host transfer in kernel
-    scalar_val = a[LEN_1D // 2].item()
+    n_elements = LEN_1D
     
-    # Allocate output tensor
+    # Extract scalar value (same as baseline)
+    scalar_val = a[LEN_1D // 2]
+    
+    # Create output tensor
     output = torch.empty_like(a)
     
-    n_elements = a.numel()
-    
-    # Use block size optimized for memory bandwidth
-    BLOCK_SIZE = 1024
+    # Choose block size for optimal memory coalescing
+    BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Launch kernel with scalar value passed directly
+    # Launch kernel with optimized grid configuration
     s1113_kernel[grid](
         a, b, output,
         scalar_val,

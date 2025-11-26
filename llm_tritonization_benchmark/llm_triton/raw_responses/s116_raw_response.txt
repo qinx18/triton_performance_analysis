@@ -1,16 +1,17 @@
 # LLM-Generated Triton Implementation for s116
-# Generated: 2025-11-17 17:02:53
+# Generated: 2025-11-26 15:50:11
 # Model: claude-sonnet-4-20250514
+# WAR Dependencies: ['a']
 # Stop Reason: end_turn
-# Input Tokens: 745
-# Output Tokens: 1195
+# Input Tokens: 1288
+# Output Tokens: 864
 
 ================================================================================
 PROMPT:
 ================================================================================
 I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
 
-Baseline Implementation:
+## Baseline Implementation:
 ```python
 import torch
 
@@ -57,6 +58,57 @@ def s116_pytorch(a):
     return a
 ```
 
+## CRITICAL: WAR Race Condition Handling Required
+
+This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
+**Arrays requiring read-only copy**: ['a']
+
+### Problem
+In parallel execution across GPU blocks, if block B writes to a location before block A reads from it,
+block A reads the wrong (modified) value instead of the original value.
+
+For example, in `a[i+1] = a[i] + b[i]`:
+- Thread processing i=100 reads a[100], writes a[101]
+- Thread processing i=101 reads a[101], writes a[102]
+- If the write to a[101] happens before the read from a[101], incorrect results occur.
+
+### Required Solution: Read-Only Copy Pattern
+Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
+and store results to the original array.
+
+### Implementation Template
+```python
+# In wrapper function - create read-only copy BEFORE launching kernel:
+def s116_triton(...):
+    a_copy = a.clone()  # Read-only copy
+
+    # Pass BOTH original (for writes) AND copy (for reads) to kernel
+    s116_kernel[grid](
+        a,        # Write destination (original)
+        a_copy,   # Read source (immutable copy)
+        ...other_args...
+    )
+
+# In kernel - LOAD from copy, STORE to original:
+@triton.jit
+def {kernel_name}_kernel(
+    a_ptr,        # Write destination
+    a_copy_ptr,   # Read source
+    ...
+):
+    offsets = ...
+    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)  # Read from COPY
+
+    result = ...  # Compute using loaded values
+
+    tl.store(a_ptr + write_offsets, result, mask=mask)  # Write to ORIGINAL
+```
+
+**Why this works**: The copy preserves original values for all threads. Reads from immutable copy,
+writes to original - no conflict possible.
+
+
+## Requirements:
 Please generate a complete, optimized Triton implementation that:
 1. Includes a @triton.jit kernel function named `s116_kernel`
 2. Includes a Python wrapper function named `s116_triton` (NOT `s116_pytorch`)
@@ -65,12 +117,13 @@ Please generate a complete, optimized Triton implementation that:
 5. Handles edge cases with masking
 6. Is functionally equivalent to the baseline (same inputs, same outputs)
 7. Returns the same type as the baseline (single tensor or tuple of tensors)
-8. Includes brief comments explaining key optimizations
+8. **CRITICAL**: If WAR dependencies are shown above, you MUST use the read-only copy pattern
 
 IMPORTANT:
 - Wrapper function name: `s116_triton`
 - Function signature must match the baseline exactly (same parameters in same order)
 - Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+- If WAR analysis shows arrays needing copies, you MUST clone those arrays and pass both original and copy to the kernel
 
 Provide ONLY the Python code, no additional explanation.
 
@@ -85,90 +138,64 @@ import triton.language as tl
 @triton.jit
 def s116_kernel(
     a_ptr,
-    n_elements,
+    a_copy_ptr,
+    n,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """
-    Triton kernel for s116 - processes 5 consecutive elements with dependencies.
-    Uses block-level processing with proper dependency handling.
-    """
-    # Get program ID and calculate starting position (aligned to groups of 5)
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     
-    # Calculate offsets for the current block (process in groups of 5)
+    # Process in chunks of 5, so we need to ensure we have enough elements
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n - 5
     
-    # Create mask to handle boundary conditions
-    # Need to ensure we don't go beyond n_elements - 5
-    mask = offsets < (n_elements - 5)
-    
-    # Only process if we have valid indices and they're aligned to groups of 5
-    valid_mask = mask & ((offsets % 5) == 0)
-    
-    # Load groups of 6 consecutive elements (5 + 1 for dependency)
-    base_offsets = tl.where(valid_mask, offsets, 0)
-    
-    # Load 6 consecutive values starting from each base offset
-    a0 = tl.load(a_ptr + base_offsets, mask=valid_mask, other=0.0)
-    a1 = tl.load(a_ptr + base_offsets + 1, mask=valid_mask, other=0.0)
-    a2 = tl.load(a_ptr + base_offsets + 2, mask=valid_mask, other=0.0)
-    a3 = tl.load(a_ptr + base_offsets + 3, mask=valid_mask, other=0.0)
-    a4 = tl.load(a_ptr + base_offsets + 4, mask=valid_mask, other=0.0)
-    a5 = tl.load(a_ptr + base_offsets + 5, mask=valid_mask, other=0.0)
-    
-    # Compute the 5 operations with proper dependencies
-    # a[i] = a[i + 1] * a[i]
-    # a[i + 1] = a[i + 2] * a[i + 1]
-    # a[i + 2] = a[i + 3] * a[i + 2]
-    # a[i + 3] = a[i + 4] * a[i + 3]
-    # a[i + 4] = a[i + 5] * a[i + 4]
-    
-    new_a0 = a1 * a0
-    new_a1 = a2 * a1
-    new_a2 = a3 * a2
-    new_a3 = a4 * a3
-    new_a4 = a5 * a4
-    
-    # Store results back to memory
-    tl.store(a_ptr + base_offsets, new_a0, mask=valid_mask)
-    tl.store(a_ptr + base_offsets + 1, new_a1, mask=valid_mask)
-    tl.store(a_ptr + base_offsets + 2, new_a2, mask=valid_mask)
-    tl.store(a_ptr + base_offsets + 3, new_a3, mask=valid_mask)
-    tl.store(a_ptr + base_offsets + 4, new_a4, mask=valid_mask)
-
+    # We need to process in steps of 5
+    for step in range(0, BLOCK_SIZE, 5):
+        i = block_start + step
+        if i >= n - 5:
+            break
+            
+        # Load values from the read-only copy
+        a_i = tl.load(a_copy_ptr + i, mask=i < n)
+        a_i1 = tl.load(a_copy_ptr + i + 1, mask=i + 1 < n)
+        a_i2 = tl.load(a_copy_ptr + i + 2, mask=i + 2 < n)
+        a_i3 = tl.load(a_copy_ptr + i + 3, mask=i + 3 < n)
+        a_i4 = tl.load(a_copy_ptr + i + 4, mask=i + 4 < n)
+        a_i5 = tl.load(a_copy_ptr + i + 5, mask=i + 5 < n)
+        
+        # Compute the new values
+        temp0 = a_i1 * a_i
+        temp1 = a_i2 * a_i1
+        temp2 = a_i3 * a_i2
+        temp3 = a_i4 * a_i3
+        temp4 = a_i5 * a_i4
+        
+        # Store results to the original array
+        tl.store(a_ptr + i, temp0, mask=i < n)
+        tl.store(a_ptr + i + 1, temp1, mask=i + 1 < n)
+        tl.store(a_ptr + i + 2, temp2, mask=i + 2 < n)
+        tl.store(a_ptr + i + 3, temp3, mask=i + 3 < n)
+        tl.store(a_ptr + i + 4, temp4, mask=i + 4 < n)
 
 def s116_triton(a):
-    """
-    Triton implementation of TSVC s116 - linear dependence testing with unrolling.
-    Optimized for GPU execution with proper memory coalescing and dependency handling.
-    
-    Args:
-        a: Input/output tensor
-        
-    Returns:
-        torch.Tensor: Modified array a
-    """
     a = a.contiguous()
     n = a.size(0)
     
     if n <= 5:
         return a
     
-    # Calculate number of groups of 5 elements we can process
-    n_groups = (n - 5) // 5
-    if n_groups == 0:
-        return a
+    # Create read-only copy to handle WAR dependencies
+    a_copy = a.clone()
     
-    # Use block size that processes multiple groups efficiently
-    BLOCK_SIZE = 64  # Process 64 groups of 5 at once
+    # Calculate grid size - process in chunks of 5, but use larger blocks
+    BLOCK_SIZE = 256
+    # Ensure we cover all elements that need processing (n-5 elements in groups of 5)
+    num_elements_to_process = ((n - 5) // 5) * 5
+    grid = (triton.cdiv(num_elements_to_process, BLOCK_SIZE),)
     
-    # Calculate grid size - number of blocks needed
-    grid_size = triton.cdiv(n_groups, BLOCK_SIZE)
-    
-    # Launch kernel with appropriate grid
-    s116_kernel[(grid_size,)](
+    s116_kernel[grid](
         a,
+        a_copy,
         n,
         BLOCK_SIZE=BLOCK_SIZE,
     )

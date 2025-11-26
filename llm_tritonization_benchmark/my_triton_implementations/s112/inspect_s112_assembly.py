@@ -5,7 +5,7 @@ why it works despite apparent race conditions.
 """
 import torch
 import triton
-from llm_triton.s112_triton_llm import s112_kernel
+from triton_performance_analysis.llm_tritonization_benchmark.llm_triton.s112_triton_llm_orig import s112_kernel
 import os
 import tempfile
 

@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s4116_baseline import s4116_pytorch
-    from llm_triton.s4116_triton_llm import s4116_triton
+    from llm_triton.s4116_triton_correct import s4116_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -32,14 +32,15 @@ def test_correctness():
             # Initialize arrays
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
-            ip = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            off = 1  # Scalar parameter (integer)
+            ip = torch.randint(0, N + 10, (N + 10,), device='cuda', dtype=torch.int64)  # Integer indices
+            inc = 1  # Increment parameter
+            j = 5   # Row index parameter
 
             # Run PyTorch baseline
-            pytorch_result = s4116_pytorch(a.clone(), aa.clone(), ip.clone(), off)
+            pytorch_result = s4116_pytorch(a.clone(), aa.clone(), ip.clone(), inc, j)
 
             # Run Triton LLM
-            triton_result = s4116_triton(a.clone(), aa.clone(), ip.clone(), off)
+            triton_result = s4116_triton(a.clone(), aa.clone(), ip.clone(), inc, j)
 
             # Compare results
             if isinstance(pytorch_result, tuple):

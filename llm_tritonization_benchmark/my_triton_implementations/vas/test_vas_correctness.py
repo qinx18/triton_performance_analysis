@@ -10,8 +10,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from baselines.vas_baseline import vas_pytorch
-    from llm_triton.vas_triton_llm import vas_triton
+    from baselines.vas_baseline_correct import vas_pytorch
+    from llm_triton.vas_triton_correct import vas_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -32,7 +32,7 @@ def test_correctness():
             # Initialize arrays
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
-            ip = torch.randn(N, device='cuda', dtype=torch.float32)
+            ip = torch.randint(0, N, (N,), device='cuda', dtype=torch.int64)  # Integer indices
 
             # Run PyTorch baseline
             pytorch_result = vas_pytorch(a.clone(), b.clone(), ip.clone())

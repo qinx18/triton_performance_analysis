@@ -10,8 +10,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from baselines.s4113_baseline import s4113_pytorch
-    from llm_triton.s4113_triton_llm import s4113_triton
+    from baselines.s4113_baseline_correct import s4113_pytorch
+    from llm_triton.s4113_triton_correct import s4113_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -33,7 +33,7 @@ def test_correctness():
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             c = torch.randn(N, device='cuda', dtype=torch.float32)
-            ip = torch.randn(N, device='cuda', dtype=torch.float32)
+            ip = torch.randint(0, N, (N,), device='cuda', dtype=torch.int64)  # Integer indices
 
             # Run PyTorch baseline
             pytorch_result = s4113_pytorch(a.clone(), b.clone(), c.clone(), ip.clone())

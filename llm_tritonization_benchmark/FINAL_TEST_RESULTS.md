@@ -298,13 +298,13 @@ The LLM successfully generated correct Triton implementations for **nearly two-t
 
 ## 📊 Function Categories Summary
 
-**s000-s113:** Single dimension operations
+**s000-s113:** Single dimension operations (s1113)
 - Most pass with element-wise or simple dependencies
 - **s112**: Works despite race conditions (SIMT synchronization)
 - **s116**: Fixed incorrect group indexing
 
 **s114-s119, s1119:** Double dimensions, triangular operations
-- **s115**: Fixed tolerance metric (relative vs absolute)
+- **s115**: need in-kernel loop and the pattern of s114
 - **s118**: Optimized with in-kernel loop (8-19x speedup)
 - **s119**: Requires sequential launches (diagonal dependency)
 - **s1119**: Already optimal (in-kernel loop with vertical dependency)
@@ -369,7 +369,14 @@ The LLM successfully generated correct Triton implementations for **nearly two-t
 
 **s491** vector semantics, only parreliszable when each ip element is unique
 
-**s4112-s4117** indirect addressing
+**s4112-s4117** indirect addressing,   | Operation                                          | Parallelizable? | Method                |
+  |----------------------------------------------------|-----------------|-----------------------|
+  | Scatter with overwrite (a[ip[i]] = x) + duplicates | ❌ NO            | Sequential processing |
+  | Scatter with accumulation (a[ip[i]] += x)          | ✅ YES           | tl.atomic_add         |
+  | Scatter with unique indices                        | ✅ YES           | Normal parallel store |
+  | Gather (x = a[ip[i]])                              | ✅ YES           | Normal parallel load  |
+
+**va-vbor** control loops
 
 ---
 
