@@ -2,7 +2,7 @@ import torch
 
 def s126_pytorch(bb, cc, flat_2d_array):
     """
-    PyTorch implementation of TSVC s126 function.
+    PyTorch implementation of TSVC s126 kernel.
     
     Original C code:
     for (int nl = 0; nl < 10*(iterations/LEN_2D); nl++) {
@@ -15,6 +15,8 @@ def s126_pytorch(bb, cc, flat_2d_array):
             ++k;
         }
     }
+    
+    Arrays: bb (rw), cc (r), flat_2d_array (r)
     """
     bb = bb.contiguous()
     cc = cc.contiguous()
@@ -28,5 +30,3 @@ def s126_pytorch(bb, cc, flat_2d_array):
             bb[j, i] = bb[j-1, i] + flat_2d_array[k-1] * cc[j, i]
             k += 1
         k += 1
-    
-    return bb

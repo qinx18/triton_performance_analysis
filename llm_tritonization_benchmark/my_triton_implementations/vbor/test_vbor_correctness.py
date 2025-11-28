@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for vbor
-Tests: PyTorch baseline vs Triton LLM implementation
+Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vbor_baseline import vbor_pytorch
-    from llm_triton.vbor_triton_llm import vbor_triton
+    from llm_triton.vbor_triton_llm_v3 import vbor_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -29,7 +29,7 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            # Initialize arrays
+            # Initialize base arrays
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
@@ -37,25 +37,37 @@ def test_correctness():
             d = torch.randn(N, device='cuda', dtype=torch.float32)
             e = torch.randn(N, device='cuda', dtype=torch.float32)
             x = torch.randn(N, device='cuda', dtype=torch.float32)
+            iterations = 1  # Scalar parameter (integer)
 
-            # Run PyTorch baseline
-            pytorch_result = vbor_pytorch(a.clone(), aa.clone(), b.clone(), c.clone(), d.clone(), e.clone(), x.clone())
+            # Create copies for PyTorch baseline
+            a_pt = a.clone()
+            aa_pt = aa.clone()
+            b_pt = b.clone()
+            c_pt = c.clone()
+            d_pt = d.clone()
+            e_pt = e.clone()
+            x_pt = x.clone()
 
-            # Run Triton LLM
-            triton_result = vbor_triton(a.clone(), aa.clone(), b.clone(), c.clone(), d.clone(), e.clone(), x.clone())
+            # Create copies for Triton implementation
+            a_tr = a.clone()
+            aa_tr = aa.clone()
+            b_tr = b.clone()
+            c_tr = c.clone()
+            d_tr = d.clone()
+            e_tr = e.clone()
+            x_tr = x.clone()
 
-            # Compare results
-            if isinstance(pytorch_result, tuple):
-                # Multiple outputs
-                max_error = max([torch.max(torch.abs(p - t)).item()
-                               for p, t in zip(pytorch_result, triton_result)])
-            else:
-                # Single output
-                max_error = torch.max(torch.abs(pytorch_result - triton_result)).item()
+            # Run PyTorch baseline (may modify arrays in-place or return result)
+            pytorch_result = vbor_pytorch(a_pt, aa_pt, b_pt, c_pt, d_pt, e_pt, x_pt, iterations)
+
+            # Run Triton LLM (modifies arrays in-place)
+            vbor_triton(a_tr, aa_tr, b_tr, c_tr, d_tr, e_tr, x_tr, iterations)
+
+            # Compare output arrays directly (in-place modification)
+            max_error = torch.max(torch.abs(x_pt - x_tr)).item()
 
             # Check if within tolerance
-            # Relaxed tolerance for complex polynomial with many multiplications
-            if max_error < 1e-2:
+            if max_error < 1e-3:  # Relaxed tolerance for complex functions
                 print(f"✓ PASS  (max_err={max_error:.2e})")
             else:
                 print(f"✗ FAIL  (max_error={max_error:.2e})")
@@ -63,6 +75,8 @@ def test_correctness():
 
         except Exception as e:
             print(f"✗ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             all_passed = False
 
     print("="*70)

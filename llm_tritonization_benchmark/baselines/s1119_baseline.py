@@ -23,5 +23,3 @@ def s1119_pytorch(aa, bb):
     for i in range(1, LEN_2D):
         for j in range(LEN_2D):
             aa[i, j] = aa[i-1, j] + bb[i, j]
-    
-    return aa

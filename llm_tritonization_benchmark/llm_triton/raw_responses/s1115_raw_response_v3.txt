@@ -1,0 +1,175 @@
+# LLM-Generated Triton Implementation for s1115
+# Generated: 2025-11-28 17:24:49
+# Model: claude-sonnet-4-20250514
+# Source: Original TSVC C code
+# WAR Dependencies: None
+# Parallelization: Multiple valid
+# Triton Strategy: i-seq:SINGLE_KERNEL_INLOOP, j-seq:SINGLE_KERNEL_INLOOP
+# Stop Reason: end_turn
+# Input Tokens: 1206
+# Output Tokens: 707
+
+================================================================================
+PROMPT:
+================================================================================
+I have an original TSVC (Test Suite for Vectorizing Compilers) C function that I want to implement in Triton for GPU acceleration.
+
+## Original TSVC C Code:
+```c
+
+real_t s1115(struct args_t * func_args)
+{
+
+//    linear dependence testing
+//    triangular saxpy loop
+
+    initialise_arrays(__func__);
+    gettimeofday(&func_args->t1, NULL);
+
+    for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
+        for (int i = 0; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                aa[i][j] = aa[i][j]*cc[j][i] + bb[i][j];
+            }
+        }
+        dummy(a, b, c, d, e, aa, bb, cc, 0.);
+    }
+
+    gettimeofday(&func_args->t2, NULL);
+    return calc_checksum(__func__);
+}
+```
+
+## Kernel Loop to Implement:
+```c
+        for (int i = 0; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                aa[i][j] = aa[i][j]*cc[j][i] + bb[i][j];
+            }
+        }
+```
+
+## CRITICAL: Parallelization Dimension Analysis
+
+**Loop structure**: `for (int i = 0; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                aa[i][j] = aa[i][j]*cc[j][i] + bb[i][j];
+            }
+        }`
+**Dimensions**: ['i', 'j']
+
+**Data dependencies detected**:
+- Array `aa`: write to `[(i), (j)]`, read from `[(i), (j)]`
+
+### VALID Parallelization Strategies
+**Option 1**: i-sequential, j-parallel (independent)
+  **Triton Strategy**: `SINGLE_KERNEL_INLOOP`
+  - ✓ aa: Same location read/write [same_location]
+  - Same location read/write [(i), (j)]
+**Option 2**: j-sequential, i-parallel (independent)
+  **Triton Strategy**: `SINGLE_KERNEL_INLOOP`
+  - ✓ aa: Same location read/write [same_location]
+  - Same location read/write [(i), (j)]
+
+
+## Array Information:
+- Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
+- Arrays `aa`, `bb`, `cc`, `tt` are 2D float arrays of size LEN_2D x LEN_2D (typically 256x256)
+- `flat_2d_array` is a 1D float array of size LEN_2D*LEN_2D
+- `indx` is a 1D int array of size LEN_1D
+
+## Requirements:
+Please generate a complete Triton implementation that:
+1. Includes a @triton.jit kernel function named `s1115_kernel`
+2. Includes a Python wrapper function named `s1115_triton`
+3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation (e.g., a, b, c)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the C code (same computation, same results)
+
+## CRITICAL: Function Signature Requirements
+**DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
+The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
+
+**Correct example**:
+```python
+def s1115_triton(a, b):  # Only array parameters
+    ...  # Just the kernel computation, NO timing loop
+```
+
+**Incorrect example**:
+```python
+def s1115_triton(a, b, iterations):  # WRONG: No iterations parameter
+    for _ in range(iterations):  # WRONG: No timing loop
+        ...
+```
+
+IMPORTANT:
+- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+- Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
+- If WAR dependencies are shown above, you MUST use the read-only copy pattern
+- If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
+- DO NOT parallelize dimensions marked as INVALID - this will cause race conditions
+- Use forward iteration (ascending indices) for memory access patterns
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import triton
+import triton.language as tl
+import torch
+
+@triton.jit
+def s1115_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D, 
+                 BLOCK_SIZE_I: tl.constexpr, BLOCK_SIZE_J: tl.constexpr):
+    pid_i = tl.program_id(0)
+    pid_j = tl.program_id(1)
+    
+    i_offset = pid_i * BLOCK_SIZE_I
+    j_offset = pid_j * BLOCK_SIZE_J
+    
+    i_range = tl.arange(0, BLOCK_SIZE_I)
+    j_range = tl.arange(0, BLOCK_SIZE_J)
+    
+    i_indices = i_offset + i_range
+    j_indices = j_offset + j_range
+    
+    i_mask = i_indices < LEN_2D
+    j_mask = j_indices < LEN_2D
+    
+    i_indices = tl.expand_dims(i_indices, 1)
+    j_indices = tl.expand_dims(j_indices, 0)
+    
+    aa_indices = i_indices * LEN_2D + j_indices
+    bb_indices = i_indices * LEN_2D + j_indices
+    cc_indices = j_indices * LEN_2D + i_indices
+    
+    mask = tl.expand_dims(i_mask, 1) & tl.expand_dims(j_mask, 0)
+    
+    aa_vals = tl.load(aa_ptr + aa_indices, mask=mask)
+    bb_vals = tl.load(bb_ptr + bb_indices, mask=mask)
+    cc_vals = tl.load(cc_ptr + cc_indices, mask=mask)
+    
+    result = aa_vals * cc_vals + bb_vals
+    
+    tl.store(aa_ptr + aa_indices, result, mask=mask)
+
+def s1115_triton(aa, bb, cc):
+    LEN_2D = aa.shape[0]
+    
+    BLOCK_SIZE_I = min(16, LEN_2D)
+    BLOCK_SIZE_J = min(16, LEN_2D)
+    
+    grid_i = (LEN_2D + BLOCK_SIZE_I - 1) // BLOCK_SIZE_I
+    grid_j = (LEN_2D + BLOCK_SIZE_J - 1) // BLOCK_SIZE_J
+    grid = (grid_i, grid_j)
+    
+    s1115_kernel[grid](
+        aa, bb, cc, LEN_2D,
+        BLOCK_SIZE_I=BLOCK_SIZE_I,
+        BLOCK_SIZE_J=BLOCK_SIZE_J
+    )
+```

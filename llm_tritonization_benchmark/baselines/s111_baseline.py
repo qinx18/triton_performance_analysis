@@ -1,23 +1,23 @@
 import torch
 
-def s111_pytorch(a, b, iterations):
+def s111_pytorch(a, b):
     """
-    TSVC s111 - Conditional store
+    PyTorch implementation of TSVC s111 function.
     
-    Original C code:
+    Original C loop code:
     for (int nl = 0; nl < 2*iterations; nl++) {
         for (int i = 1; i < LEN_1D; i += 2) {
             a[i] = a[i - 1] + b[i];
         }
     }
     
-    Arrays: a (rw), b (r)
+    Arrays used: a (rw), b (r)
     """
     a = a.contiguous()
     b = b.contiguous()
     
-    for _ in range(2 * iterations):
-        for i in range(1, a.shape[0], 2):
-            a[i] = a[i - 1] + b[i]
+    # for (int i = 1; i < LEN_1D; i += 2)
+    indices = torch.arange(1, a.size(0), 2, device=a.device)
     
-    return a
+    if indices.numel() > 0:
+        a[indices] = a[indices - 1] + b[indices]

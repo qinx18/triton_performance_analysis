@@ -2,7 +2,7 @@ import torch
 
 def s113_pytorch(a, b):
     """
-    PyTorch implementation of TSVC s113.
+    PyTorch implementation of TSVC s113
     
     Original C code:
     for (int nl = 0; nl < 4*iterations; nl++) {
@@ -11,12 +11,9 @@ def s113_pytorch(a, b):
         }
     }
     
-    Arrays used: a (rw), b (r)
+    Arrays: a (rw), b (r)
     """
     a = a.contiguous()
     b = b.contiguous()
     
-    # a[i] = a[0] + b[i] for i from 1 to LEN_1D-1
     a[1:] = a[0] + b[1:]
-    
-    return a

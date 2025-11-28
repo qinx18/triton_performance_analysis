@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s431
-Tests: PyTorch baseline vs Triton LLM implementation
+Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s431_baseline import s431_pytorch
-    from llm_triton.s431_triton_llm import s431_triton
+    from llm_triton.s431_triton_llm_v3 import s431_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -29,25 +29,28 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            # Initialize arrays
+            # Initialize base arrays
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
+            iterations = 1  # Scalar parameter (integer)
             k = 5  # Scalar parameter for offset
 
-            # Run PyTorch baseline
-            pytorch_result = s431_pytorch(a.clone(), b.clone(), k)
+            # Create copies for PyTorch baseline
+            a_pt = a.clone()
+            b_pt = b.clone()
 
-            # Run Triton LLM
-            triton_result = s431_triton(a.clone(), b.clone(), k)
+            # Create copies for Triton implementation
+            a_tr = a.clone()
+            b_tr = b.clone()
 
-            # Compare results
-            if isinstance(pytorch_result, tuple):
-                # Multiple outputs
-                max_error = max([torch.max(torch.abs(p - t)).item()
-                               for p, t in zip(pytorch_result, triton_result)])
-            else:
-                # Single output
-                max_error = torch.max(torch.abs(pytorch_result - triton_result)).item()
+            # Run PyTorch baseline (may modify arrays in-place or return result)
+            pytorch_result = s431_pytorch(a_pt, b_pt, iterations, k)
+
+            # Run Triton LLM (modifies arrays in-place)
+            s431_triton(a_tr, b_tr, iterations, k)
+
+            # Compare output arrays directly (in-place modification)
+            max_error = torch.max(torch.abs(a_pt - a_tr)).item()
 
             # Check if within tolerance
             if max_error < 1e-3:  # Relaxed tolerance for complex functions
@@ -58,6 +61,8 @@ def test_correctness():
 
         except Exception as e:
             print(f"✗ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             all_passed = False
 
     print("="*70)

@@ -5,64 +5,90 @@ import triton.language as tl
 @triton.jit
 def s116_kernel(
     a_ptr,
-    a_copy_ptr,
-    n,
+    n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
+    """
+    Triton kernel for s116 - processes 5 consecutive elements with dependencies.
+    Uses block-level processing with proper dependency handling.
+    """
+    # Get program ID and calculate starting position (aligned to groups of 5)
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     
-    # Process in chunks of 5, so we need to ensure we have enough elements
+    # Calculate offsets for the current block (process in groups of 5)
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n - 5
     
-    # We need to process in steps of 5
-    for step in range(0, BLOCK_SIZE, 5):
-        i = block_start + step
-        if i >= n - 5:
-            break
-            
-        # Load values from the read-only copy
-        a_i = tl.load(a_copy_ptr + i, mask=i < n)
-        a_i1 = tl.load(a_copy_ptr + i + 1, mask=i + 1 < n)
-        a_i2 = tl.load(a_copy_ptr + i + 2, mask=i + 2 < n)
-        a_i3 = tl.load(a_copy_ptr + i + 3, mask=i + 3 < n)
-        a_i4 = tl.load(a_copy_ptr + i + 4, mask=i + 4 < n)
-        a_i5 = tl.load(a_copy_ptr + i + 5, mask=i + 5 < n)
-        
-        # Compute the new values
-        temp0 = a_i1 * a_i
-        temp1 = a_i2 * a_i1
-        temp2 = a_i3 * a_i2
-        temp3 = a_i4 * a_i3
-        temp4 = a_i5 * a_i4
-        
-        # Store results to the original array
-        tl.store(a_ptr + i, temp0, mask=i < n)
-        tl.store(a_ptr + i + 1, temp1, mask=i + 1 < n)
-        tl.store(a_ptr + i + 2, temp2, mask=i + 2 < n)
-        tl.store(a_ptr + i + 3, temp3, mask=i + 3 < n)
-        tl.store(a_ptr + i + 4, temp4, mask=i + 4 < n)
+    # Create mask to handle boundary conditions
+    # Need to ensure we don't go beyond n_elements - 5
+    mask = offsets < (n_elements - 5)
+    
+    # Only process if we have valid indices and they're aligned to groups of 5
+    valid_mask = mask & ((offsets % 5) == 0)
+    
+    # Load groups of 6 consecutive elements (5 + 1 for dependency)
+    base_offsets = tl.where(valid_mask, offsets, 0)
+    
+    # Load 6 consecutive values starting from each base offset
+    a0 = tl.load(a_ptr + base_offsets, mask=valid_mask, other=0.0)
+    a1 = tl.load(a_ptr + base_offsets + 1, mask=valid_mask, other=0.0)
+    a2 = tl.load(a_ptr + base_offsets + 2, mask=valid_mask, other=0.0)
+    a3 = tl.load(a_ptr + base_offsets + 3, mask=valid_mask, other=0.0)
+    a4 = tl.load(a_ptr + base_offsets + 4, mask=valid_mask, other=0.0)
+    a5 = tl.load(a_ptr + base_offsets + 5, mask=valid_mask, other=0.0)
+    
+    # Compute the 5 operations with proper dependencies
+    # a[i] = a[i + 1] * a[i]
+    # a[i + 1] = a[i + 2] * a[i + 1]
+    # a[i + 2] = a[i + 3] * a[i + 2]
+    # a[i + 3] = a[i + 4] * a[i + 3]
+    # a[i + 4] = a[i + 5] * a[i + 4]
+    
+    new_a0 = a1 * a0
+    new_a1 = a2 * a1
+    new_a2 = a3 * a2
+    new_a3 = a4 * a3
+    new_a4 = a5 * a4
+    
+    # Store results back to memory
+    tl.store(a_ptr + base_offsets, new_a0, mask=valid_mask)
+    tl.store(a_ptr + base_offsets + 1, new_a1, mask=valid_mask)
+    tl.store(a_ptr + base_offsets + 2, new_a2, mask=valid_mask)
+    tl.store(a_ptr + base_offsets + 3, new_a3, mask=valid_mask)
+    tl.store(a_ptr + base_offsets + 4, new_a4, mask=valid_mask)
+
 
 def s116_triton(a):
+    """
+    Triton implementation of TSVC s116 - linear dependence testing with unrolling.
+    Optimized for GPU execution with proper memory coalescing and dependency handling.
+    
+    Args:
+        a: Input/output tensor
+        
+    Returns:
+        torch.Tensor: Modified array a
+    """
     a = a.contiguous()
     n = a.size(0)
     
     if n <= 5:
         return a
     
-    # Create read-only copy to handle WAR dependencies
-    a_copy = a.clone()
+    # Calculate number of groups of 5 elements we can process
+    n_groups = (n - 5) // 5
+    if n_groups == 0:
+        return a
     
-    # Calculate grid size - process in chunks of 5, but use larger blocks
-    BLOCK_SIZE = 256
-    # Ensure we cover all elements that need processing (n-5 elements in groups of 5)
-    num_elements_to_process = ((n - 5) // 5) * 5
-    grid = (triton.cdiv(num_elements_to_process, BLOCK_SIZE),)
+    # Use block size that processes multiple groups efficiently
+    BLOCK_SIZE = 64  # Process 64 groups of 5 at once
     
-    s116_kernel[grid](
+    # Calculate grid size - number of blocks needed
+    grid_size = triton.cdiv(n_groups, BLOCK_SIZE)
+    
+    # Launch kernel with appropriate grid
+    s116_kernel[(grid_size,)](
         a,
-        a_copy,
         n,
         BLOCK_SIZE=BLOCK_SIZE,
     )

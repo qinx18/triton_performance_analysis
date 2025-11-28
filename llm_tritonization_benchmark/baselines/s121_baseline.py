@@ -2,7 +2,7 @@ import torch
 
 def s121_pytorch(a, b):
     """
-    PyTorch implementation of TSVC s121 function.
+    PyTorch implementation of TSVC s121 kernel.
     
     Original C code:
     for (int nl = 0; nl < 3*iterations; nl++) {
@@ -17,8 +17,5 @@ def s121_pytorch(a, b):
     a = a.contiguous()
     b = b.contiguous()
     
-    # For i = 0 to LEN_1D-2, a[i] = a[i+1] + b[i]
-    if len(a) > 1:
-        a[:-1] = a[1:] + b[:-1]
-    
-    return a
+    # Implement the inner loop computation
+    a[:-1] = a[1:] + b[:-1]

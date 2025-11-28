@@ -2,7 +2,7 @@ import torch
 
 def s127_pytorch(a, b, c, d, e):
     """
-    PyTorch implementation of TSVC s127.
+    PyTorch implementation of TSVC s127 kernel.
     
     Original C code:
     for (int nl = 0; nl < 2*iterations; nl++) {
@@ -29,5 +29,3 @@ def s127_pytorch(a, b, c, d, e):
         j = 2 * i
         a[j] = b[i] + c[i] * d[i]
         a[j + 1] = b[i] + d[i] * e[i]
-    
-    return a

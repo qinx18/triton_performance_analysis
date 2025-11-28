@@ -2,7 +2,7 @@ import torch
 
 def s128_pytorch(a, b, c, d):
     """
-    PyTorch implementation of TSVC s128.
+    PyTorch implementation of TSVC s128 kernel.
     
     Original C code:
     for (int nl = 0; nl < 2*iterations; nl++) {
@@ -22,14 +22,11 @@ def s128_pytorch(a, b, c, d):
     c = c.contiguous()
     d = d.contiguous()
     
-    len_1d = len(a)
-    half_len = len_1d // 2
+    len_half = len(a) // 2
     
     j = -1
-    for i in range(half_len):
+    for i in range(len_half):
         k = j + 1
         a[i] = b[k] - d[i]
         j = k + 1
         b[k] = a[i] + c[k]
-    
-    return a, b

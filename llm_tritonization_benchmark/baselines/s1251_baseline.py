@@ -2,7 +2,7 @@ import torch
 
 def s1251_pytorch(a, b, c, d, e):
     """
-    PyTorch implementation of TSVC s1251
+    PyTorch implementation of TSVC s1251.
     
     Original C code:
     for (int nl = 0; nl < 4*iterations; nl++) {
@@ -22,7 +22,5 @@ def s1251_pytorch(a, b, c, d, e):
     e = e.contiguous()
     
     s = b + c
-    b = a + d
-    a = s * e
-    
-    return a, b
+    b[:] = a + d
+    a[:] = s * e

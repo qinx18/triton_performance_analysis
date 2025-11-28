@@ -2,7 +2,7 @@ import torch
 
 def s115_pytorch(a, aa):
     """
-    PyTorch implementation of TSVC s115 - back substitution.
+    PyTorch implementation of TSVC s115 kernel.
     
     Original C code:
     for (int nl = 0; nl < 1000*(iterations/LEN_2D); nl++) {
@@ -13,20 +13,13 @@ def s115_pytorch(a, aa):
         }
     }
     
-    Args:
-        a: 1D tensor (read-write)
-        aa: 2D tensor (read-only)
-    
-    Returns:
-        torch.Tensor: Modified array a
+    Arrays: a (rw), aa (r)
     """
     a = a.contiguous()
     aa = aa.contiguous()
     
-    LEN_2D = aa.shape[0]
+    LEN_2D = aa.size(0)
     
     for j in range(LEN_2D):
-        for i in range(j + 1, LEN_2D):
+        for i in range(j+1, LEN_2D):
             a[i] -= aa[j, i] * a[j]
-    
-    return a

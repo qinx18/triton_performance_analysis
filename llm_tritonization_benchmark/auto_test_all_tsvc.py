@@ -41,11 +41,14 @@ def generate_pytorch_baseline(func_name, func_spec):
     # Build array list description
     array_desc = ', '.join([f"{arr} ({mode})" for arr, mode in sorted(arrays.items())])
 
-    # Build scalar params description
+    # Filter out 'iterations' from scalar params - it's the timing loop parameter, not a computational one
+    filtered_scalars = {k: v for k, v in scalar_params.items() if k != 'iterations'}
+
+    # Build scalar params description (excluding iterations)
     scalar_desc = ""
-    if scalar_params:
-        scalar_list = ', '.join(sorted(scalar_params.keys()))
-        scalar_desc = f"\nScalar parameters: {scalar_list}"
+    if filtered_scalars:
+        scalar_list = ', '.join(sorted(filtered_scalars.keys()))
+        scalar_desc = f"\nScalar parameters (computational only): {scalar_list}"
 
     prompt = f"""Generate a PyTorch baseline implementation for TSVC function {func_name}.
 
@@ -62,22 +65,30 @@ Generate a complete, simple, and correct PyTorch implementation:
 1. Create a Python file with:
    - Start with: `import torch` at the very top
    - Docstring explaining the function and showing the C code
-   - Function named `{func_name}_pytorch` that takes torch.Tensor arguments for ALL arrays (read, write, and read-write){", plus scalar parameters" if scalar_params else ""}
+   - Function named `{func_name}_pytorch` that takes torch.Tensor arguments for ALL arrays (read, write, and read-write){", plus computational scalar parameters" if filtered_scalars else ""}
    - Parameters should be in alphabetical order: a, b, c, d, e, etc., then scalar parameters
    - Returns the modified array(s) (single tensor or tuple of tensors)
 
 2. Implementation guidelines:
-   - The outer "for (int nl = 0; nl < iterations; nl++)" loop is for timing - REMOVE it, implement only the inner computation
+   - The outer "for (int nl = 0; nl < iterations; nl++)" loop is for timing - REMOVE it completely
+   - DO NOT include 'iterations' as a parameter - it's only for benchmarking timing
+   - Implement ONLY the inner computation (the actual algorithm)
    - Use torch operations (torch.where for conditionals, standard ops for arithmetic)
    - Handle all edge cases properly (boundary conditions, offset access)
    - Keep arrays contiguous: arr.contiguous()
    - For conditionals, use torch.where()
    - For reductions, use torch.sum(), torch.max(), etc.
-   - Return modified arrays in alphabetical order (a, then b, etc.) - single tensor if only one output, tuple if multiple
+   - CRITICAL: Modify arrays IN-PLACE using slice assignment (a[:] = ...) NOT reassignment (a = ...)
+   - Example: Use `a[:] = b + 1` instead of `a = b + 1`
+   - This is important for correctness testing against Triton which modifies arrays in-place
+   - Do NOT return the arrays - just modify them in-place
 
-3. Keep it SIMPLE and functionally equivalent to the C code
+3. Keep it SIMPLE and functionally equivalent to the C code (one iteration only)
 
-IMPORTANT: Include ALL arrays as parameters, even write-only ones{", and all scalar parameters" if scalar_params else ""}. The function signature should match what the test will pass.
+CRITICAL:
+- Include ALL arrays as parameters, even write-only ones
+- Do NOT include 'iterations' parameter - this is a timing loop parameter only
+- The function should perform ONE iteration of the kernel computation
 
 Provide ONLY the complete Python code, no explanation."""
 
@@ -149,7 +160,7 @@ def generate_correctness_test(func_name, func_spec):
     else:
         size_expr = "N"
 
-    # Build array initialization
+    # Build array initialization - create base arrays that will be cloned
     array_inits = []
     for arr, mode in sorted(arrays.items()):
         if mode in ['r', 'rw', 'w']:
@@ -166,6 +177,8 @@ def generate_correctness_test(func_name, func_spec):
                 array_inits.append(f"            {arr} = torch.randn({size_expr}, device='cuda', dtype=torch.float32)")
 
     # Add scalar parameter initializations
+    # Include 'iterations' for backward compatibility with existing baselines,
+    # but new implementations should not use it (prompt now excludes it)
     for scalar_name in sorted(scalar_params.keys()):
         # Use reasonable default values for scalars
         if scalar_name == 'k':
@@ -183,17 +196,51 @@ def generate_correctness_test(func_name, func_spec):
 
     array_init_str = '\n'.join(array_inits) if array_inits else "            pass  # No arrays"
 
-    # Build function call arguments (arrays + scalars)
-    args = [arr for arr, mode in sorted(arrays.items()) if mode in ['r', 'rw', 'w']]
-    args += sorted(scalar_params.keys())
-    args_str = ", ".join([f"{arr}.clone()" if arr in arrays else arr for arr in args]) if args else ""
+    # Get array names and output arrays (write or read-write)
+    array_names = [arr for arr, mode in sorted(arrays.items()) if mode in ['r', 'rw', 'w']]
+    output_arrays = [arr for arr, mode in sorted(arrays.items()) if mode in ['rw', 'w']]
+
+    # Scalar params handling:
+    # Include all scalars (including 'iterations') for backward compatibility
+    # Dynamic signature detection will only pass what each function actually needs
+    all_scalar_names = sorted(scalar_params.keys())
+
+    # Build clone statements for pytorch copies
+    pytorch_clones = []
+    for arr in array_names:
+        pytorch_clones.append(f"            {arr}_pt = {arr}.clone()")
+    pytorch_clone_str = '\n'.join(pytorch_clones) if pytorch_clones else "            pass"
+
+    # Build clone statements for triton copies
+    triton_clones = []
+    for arr in array_names:
+        triton_clones.append(f"            {arr}_tr = {arr}.clone()")
+    triton_clone_str = '\n'.join(triton_clones) if triton_clones else "            pass"
+
+    # Both pytorch and triton use the same scalar params (iterations excluded from both)
+    # Note: the test still uses dynamic signature detection via inspect,
+    # but having consistent available scalars ensures compatibility
+
+    # Build comparison for output arrays
+    if len(output_arrays) == 1:
+        compare_str = f"            max_error = torch.max(torch.abs({output_arrays[0]}_pt - {output_arrays[0]}_tr)).item()"
+    elif len(output_arrays) > 1:
+        compare_parts = [f"torch.max(torch.abs({arr}_pt - {arr}_tr)).item()" for arr in output_arrays]
+        compare_str = f"            max_error = max([{', '.join(compare_parts)}])"
+    else:
+        compare_str = "            max_error = 0.0  # No output arrays to compare"
+
+    # Build available params dict (what the test can provide)
+    available_arrays = array_names
+    available_scalars = all_scalar_names
 
     test_code = f'''#!/usr/bin/env python3
 """
 Correctness Test for {func_name}
-Tests: PyTorch baseline vs Triton LLM implementation
+Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
+import inspect
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
@@ -201,10 +248,26 @@ import torch
 
 try:
     from baselines.{func_name}_baseline import {func_name}_pytorch
-    from llm_triton.{func_name}_triton_llm import {func_name}_triton
+    from llm_triton.{func_name}_triton_llm_v3 import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
+
+def get_func_params(func):
+    """Get the parameter names a function accepts"""
+    sig = inspect.signature(func)
+    return list(sig.parameters.keys())
+
+def build_args(func, available_tensors, available_scalars):
+    """Build argument list based on what the function actually accepts"""
+    params = get_func_params(func)
+    args = []
+    for p in params:
+        if p in available_tensors:
+            args.append(available_tensors[p])
+        elif p in available_scalars:
+            args.append(available_scalars[p])
+    return args
 
 def test_correctness():
     """Test correctness across multiple sizes"""
@@ -219,23 +282,32 @@ def test_correctness():
         print(f"Testing N={{N:>6}}...", end=" ")
 
         try:
-            # Initialize arrays
+            # Initialize base arrays
 {array_init_str}
 
-            # Run PyTorch baseline
-            pytorch_result = {func_name}_pytorch({args_str})
+            # Create copies for PyTorch baseline
+{pytorch_clone_str}
 
-            # Run Triton LLM
-            triton_result = {func_name}_triton({args_str})
+            # Create copies for Triton implementation
+{triton_clone_str}
 
-            # Compare results
-            if isinstance(pytorch_result, tuple):
-                # Multiple outputs
-                max_error = max([torch.max(torch.abs(p - t)).item()
-                               for p, t in zip(pytorch_result, triton_result)])
-            else:
-                # Single output
-                max_error = torch.max(torch.abs(pytorch_result - triton_result)).item()
+            # Available tensors and scalars for dynamic argument building
+            pt_tensors = {{{', '.join([f'"{arr}": {arr}_pt' for arr in available_arrays])}}}
+            tr_tensors = {{{', '.join([f'"{arr}": {arr}_tr' for arr in available_arrays])}}}
+            scalars = {{{', '.join([f'"{s}": {s}' for s in available_scalars])}}}
+
+            # Build argument lists based on actual function signatures
+            pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+            tr_args = build_args({func_name}_triton, tr_tensors, scalars)
+
+            # Run PyTorch baseline (may modify arrays in-place or return result)
+            pytorch_result = {func_name}_pytorch(*pt_args)
+
+            # Run Triton LLM (modifies arrays in-place)
+            {func_name}_triton(*tr_args)
+
+            # Compare output arrays directly (in-place modification)
+{compare_str}
 
             # Check if within tolerance
             if max_error < 1e-3:  # Relaxed tolerance for complex functions
@@ -246,6 +318,8 @@ def test_correctness():
 
         except Exception as e:
             print(f"✗ ERROR: {{e}}")
+            import traceback
+            traceback.print_exc()
             all_passed = False
 
     print("="*70)
@@ -284,7 +358,7 @@ def process_function(func_name, func_spec, skip_existing=True):
     test_dir.mkdir(exist_ok=True, parents=True)
 
     baseline_file = baselines_dir / f"{func_name}_baseline.py"
-    triton_file = llm_triton_dir / f"{func_name}_triton_llm.py"
+    triton_file = llm_triton_dir / f"{func_name}_triton_llm_v3.py"
     test_file = test_dir / f"test_{func_name}_correctness.py"
 
     results = {
@@ -310,26 +384,26 @@ def process_function(func_name, func_spec, skip_existing=True):
             print(f"  ✗ Failed to generate baseline")
             return results
 
-    # Step 2: Generate Triton LLM implementation (ALWAYS regenerate)
-    print(f"  Generating Triton LLM implementation...")
-    if generate_triton_llm(func_name):
+    # Step 2: Check if v3 Triton file exists, skip generation if so
+    if triton_file.exists():
+        print(f"  ✓ Triton v3 already exists: {triton_file}")
         results["triton_generated"] = True
     else:
-        print(f"  ✗ Failed to generate Triton implementation")
-        return results
+        print(f"  Generating Triton LLM implementation...")
+        if generate_triton_llm(func_name):
+            results["triton_generated"] = True
+        else:
+            print(f"  ✗ Failed to generate Triton implementation")
+            return results
 
-    # Step 3: Generate correctness test (skip if already exists)
-    if test_file.exists():
-        print(f"  ✓ Test already exists: {test_file}")
-        results["test_generated"] = True
-    else:
-        print(f"  Generating correctness test...")
-        test_code = generate_correctness_test(func_name, func_spec)
-        with open(test_file, 'w') as f:
-            f.write(test_code)
-        test_file.chmod(0o755)
-        print(f"  ✓ Test saved to: {test_file}")
-        results["test_generated"] = True
+    # Step 3: Generate correctness test (ALWAYS regenerate to use v3 imports)
+    print(f"  Generating correctness test (v3)...")
+    test_code = generate_correctness_test(func_name, func_spec)
+    with open(test_file, 'w') as f:
+        f.write(test_code)
+    test_file.chmod(0o755)
+    print(f"  ✓ Test saved to: {test_file}")
+    results["test_generated"] = True
 
     # Step 4: Run correctness test
     print(f"  Running correctness test...")

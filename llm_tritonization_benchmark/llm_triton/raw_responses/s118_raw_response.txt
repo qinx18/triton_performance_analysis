@@ -1,16 +1,18 @@
 # LLM-Generated Triton Implementation for s118
-# Generated: 2025-11-17 17:03:23
+# Generated: 2025-11-27 18:02:59
 # Model: claude-sonnet-4-20250514
+# WAR Dependencies: None
+# Parallelization: REQUIRED: i-seq, j-par (reduction)
 # Stop Reason: end_turn
-# Input Tokens: 491
-# Output Tokens: 588
+# Input Tokens: 1160
+# Output Tokens: 666
 
 ================================================================================
 PROMPT:
 ================================================================================
 I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
 
-Baseline Implementation:
+## Baseline Implementation:
 ```python
 import torch
 
@@ -39,6 +41,57 @@ def s118_pytorch(a, bb):
     return a
 ```
 
+## CRITICAL: Parallelization Dimension Analysis
+
+**Loop structure**: `for (int i = 1; i < LEN_2D; i++) {
+            for (int j = 0; j <= i - 1; j++) {
+                a[i] += bb[j][i] * a[i-j-1];
+            }
+        }`
+**Dimensions**: ['i', 'j']
+**Triangular bounds**: j < i
+
+**Data dependencies detected**:
+- Array `a`: write to `[(i)]`, read from `[(i)]`
+- Array `a`: write to `[(i)]`, read from `[(-1 + i - j)]`
+
+### VALID Parallelization Strategies
+**Option 1**: i-sequential, j-parallel (reduction)
+  - Broadcast read: [(i)] doesn't contain j
+  - Reduction pattern: read [(-1 + i - j)] varies with j, write [(i)] doesn't. Reads from different locations than write -> SAFE
+
+### INVALID Parallelization (DO NOT USE)
+**j-sequential, i-parallel**: INCORRECT
+  - Same location read/write [(i)]
+  - Shift dependency: write [(i)] and read [(-1 + i - j)] both use i differently. i iteration k may read what k-1 wrote.
+
+### Required Implementation Strategy
+**You MUST use**: i-sequential, j-parallel
+
+This is the ONLY correct parallelization for this loop pattern.
+
+### Implementation Template
+
+**Multi-kernel approach** (sequential kernel launches):
+```python
+def s118_triton(a, matrix, ...):
+    N = a.shape[0]
+    
+    # Sequential loop over i dimension
+    for i in range(N - 1):  # Adjust bounds as needed
+        num_j = i  # Number of j values for reduction
+        grid = (triton.cdiv(num_j, BLOCK_SIZE),)
+        kernel[grid](a, matrix, N, i, BLOCK_SIZE=BLOCK_SIZE)
+```
+
+**Key correctness requirements**:
+1. i MUST be processed sequentially (Python loop)
+2. j can be parallelized within each i iteration
+3. Each kernel launch completes before the next i iteration
+4. Use `tl.sum()` for reduction and `tl.atomic_add()` if multiple blocks
+
+
+## Requirements:
 Please generate a complete, optimized Triton implementation that:
 1. Includes a @triton.jit kernel function named `s118_kernel`
 2. Includes a Python wrapper function named `s118_triton` (NOT `s118_pytorch`)
@@ -47,12 +100,16 @@ Please generate a complete, optimized Triton implementation that:
 5. Handles edge cases with masking
 6. Is functionally equivalent to the baseline (same inputs, same outputs)
 7. Returns the same type as the baseline (single tensor or tuple of tensors)
-8. Includes brief comments explaining key optimizations
+8. **CRITICAL**: If WAR dependencies are shown above, you MUST use the read-only copy pattern
+9. **CRITICAL**: If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
 
 IMPORTANT:
 - Wrapper function name: `s118_triton`
 - Function signature must match the baseline exactly (same parameters in same order)
 - Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+- If WAR analysis shows arrays needing copies, you MUST clone those arrays and pass both original and copy to the kernel
+- If parallelization analysis shows only ONE valid strategy, you MUST use that strategy (sequential kernel launches)
+- DO NOT parallelize dimensions marked as INVALID - this will cause race conditions
 
 Provide ONLY the Python code, no additional explanation.
 
@@ -65,68 +122,60 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s118_kernel(
-    a_ptr,
-    bb_ptr,
-    n,
-    BLOCK_SIZE: tl.constexpr,
-):
-    """
-    Triton kernel for s118 computation.
-    Each program handles one value of i, processing all j values sequentially.
-    """
+def s118_kernel(a_ptr, bb_ptr, N, i, BLOCK_SIZE: tl.constexpr):
+    # Get program ID for j dimension
     pid = tl.program_id(0)
-    i = pid + 1  # i starts from 1
     
-    if i >= n:
-        return
+    # Calculate j indices for this block
+    j_offset = pid * BLOCK_SIZE
+    j_indices = j_offset + tl.arange(0, BLOCK_SIZE)
     
-    # Load current a[i] value
-    a_i = tl.load(a_ptr + i)
+    # Mask for valid j values (j < i)
+    j_mask = j_indices < i
     
-    # Sequential loop over j from 0 to i-1
-    for j in range(i):
-        # Load bb[j, i] and a[i-j-1]
-        bb_ji = tl.load(bb_ptr + j * n + i)
-        a_idx = i - j - 1
-        a_val = tl.load(a_ptr + a_idx)
-        
-        # Accumulate: a[i] += bb[j][i] * a[i-j-1]
-        a_i += bb_ji * a_val
+    # Load bb[j, i] values
+    bb_offsets = j_indices * N + i
+    bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
     
-    # Store updated a[i]
-    tl.store(a_ptr + i, a_i)
+    # Load a[i - j - 1] values
+    a_read_indices = i - j_indices - 1
+    a_read_offsets = a_read_indices
+    a_vals = tl.load(a_ptr + a_read_offsets, mask=j_mask, other=0.0)
+    
+    # Compute products
+    products = bb_vals * a_vals
+    
+    # Reduce to single value
+    result = tl.sum(products)
+    
+    # Atomically add to a[i] (only first thread in first block)
+    if pid == 0 and tl.program_id(1) == 0 and tl.program_id(2) == 0:
+        if BLOCK_SIZE == 1 or j_offset == 0:
+            # For single thread or first block, add the local reduction
+            tl.atomic_add(a_ptr + i, result)
+    elif pid == 0:
+        # First block handles the reduction
+        tl.atomic_add(a_ptr + i, result)
 
 def s118_triton(a, bb):
     """
     Triton implementation of TSVC s118 function.
-    
-    Optimizations:
-    - Parallelizes over i dimension (outer loop)
-    - Sequential processing of j loop to maintain dependencies
-    - Coalesced memory access patterns for bb matrix
-    - Direct in-place updates to minimize memory traffic
     """
     a = a.contiguous()
     bb = bb.contiguous()
+    N = a.size(0)
     
-    n = a.size(0)
+    BLOCK_SIZE = 256
     
-    if n <= 1:
-        return a
-    
-    # Launch kernel with one thread per i value (excluding i=0)
-    num_programs = n - 1
-    BLOCK_SIZE = 128
-    
-    grid = (triton.cdiv(num_programs, 1),)
-    
-    s118_kernel[grid](
-        a_ptr=a,
-        bb_ptr=bb,
-        n=n,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+    # Sequential loop over i dimension (required for correctness)
+    for i in range(1, N):
+        num_j = i  # Number of j values: 0 <= j < i
+        if num_j > 0:
+            grid = (triton.cdiv(num_j, BLOCK_SIZE),)
+            s118_kernel[grid](
+                a, bb, N, i,
+                BLOCK_SIZE=BLOCK_SIZE
+            )
     
     return a
 ```

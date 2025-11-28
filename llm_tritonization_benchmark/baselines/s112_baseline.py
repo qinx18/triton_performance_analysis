@@ -1,8 +1,8 @@
 import torch
 
-def s112_pytorch(a, b, iterations):
+def s112_pytorch(a, b):
     """
-    PyTorch implementation of TSVC s112 - Forward linear recurrence.
+    PyTorch implementation of TSVC s112 kernel.
     
     Original C code:
     for (int nl = 0; nl < 3*iterations; nl++) {
@@ -16,8 +16,5 @@ def s112_pytorch(a, b, iterations):
     a = a.contiguous()
     b = b.contiguous()
     
-    for nl in range(3 * iterations):
-        for i in range(len(a) - 2, -1, -1):
-            a[i + 1] = a[i] + b[i]
-    
-    return a
+    for i in range(len(a) - 2, -1, -1):
+        a[i + 1] = a[i] + b[i]

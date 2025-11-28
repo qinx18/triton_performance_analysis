@@ -1,6 +1,6 @@
 import torch
 
-def s1112_pytorch(a, b, iterations):
+def s1112_pytorch(a, b):
     """
     PyTorch implementation of TSVC s1112 function.
     
@@ -16,8 +16,6 @@ def s1112_pytorch(a, b, iterations):
     a = a.contiguous()
     b = b.contiguous()
     
-    for _ in range(iterations * 3):
-        for i in range(len(a) - 1, -1, -1):
-            a[i] = b[i] + 1.0
-    
-    return a
+    # Reverse iteration: from LEN_1D-1 down to 0
+    for i in range(len(a) - 1, -1, -1):
+        a[i] = b[i] + 1.0

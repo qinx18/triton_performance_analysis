@@ -2,7 +2,7 @@ import torch
 
 def s1232_pytorch(aa, bb, cc):
     """
-    PyTorch implementation of TSVC s1232
+    PyTorch implementation of TSVC s1232 kernel.
     
     Original C code:
     for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
@@ -13,16 +13,14 @@ def s1232_pytorch(aa, bb, cc):
         }
     }
     
-    Arrays used: aa (r), bb (r), cc (r)
+    Arrays: aa (write), bb (read), cc (read)
     """
     aa = aa.contiguous()
     bb = bb.contiguous()
     cc = cc.contiguous()
     
-    LEN_2D = aa.shape[0]
+    len_2d = aa.size(0)
     
-    for j in range(LEN_2D):
-        for i in range(j, LEN_2D):
+    for j in range(len_2d):
+        for i in range(j, len_2d):
             aa[i, j] = bb[i, j] + cc[i, j]
-    
-    return aa

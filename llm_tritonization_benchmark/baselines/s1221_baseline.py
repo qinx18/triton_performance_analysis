@@ -2,7 +2,7 @@ import torch
 
 def s1221_pytorch(a, b):
     """
-    PyTorch implementation of TSVC s1221 function.
+    PyTorch implementation of TSVC s1221 kernel.
     
     Original C code:
     for (int nl = 0; nl < iterations; nl++) {
@@ -16,7 +16,4 @@ def s1221_pytorch(a, b):
     a = a.contiguous()
     b = b.contiguous()
     
-    for i in range(4, len(b)):
-        b[i] = b[i - 4] + a[i]
-    
-    return b
+    b[4:] = b[:-4] + a[4:]

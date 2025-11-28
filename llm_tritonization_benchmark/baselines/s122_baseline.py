@@ -20,13 +20,11 @@ def s122_pytorch(a, b, n1, n3):
     a = a.contiguous()
     b = b.contiguous()
     
-    LEN_1D = len(a)
+    LEN_1D = a.shape[0]
     
     j = 1
     k = 0
     
-    for i in range(n1-1, LEN_1D, n3):
+    for i in range(n1 - 1, LEN_1D, n3):
         k += j
         a[i] += b[LEN_1D - k]
-    
-    return a

@@ -4,7 +4,7 @@ Extract PTX assembly from s112 kernel
 """
 import torch
 import triton
-from triton_performance_analysis.llm_tritonization_benchmark.llm_triton.s112_triton_llm_orig import s112_kernel
+from triton_performance_analysis.llm_tritonization_benchmark.llm_triton.s112_triton_llm import s112_kernel
 
 # Create test inputs
 a = torch.randn(1024, device='cuda')

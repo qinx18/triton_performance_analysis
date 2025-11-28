@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s343
-Tests: PyTorch baseline vs Triton LLM implementation
+Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s343_baseline import s343_pytorch
-    from llm_triton.s343_triton_correct import s343_triton
+    from llm_triton.s343_triton_llm_v3 import s343_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -29,25 +29,30 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            # Initialize arrays
+            # Initialize base arrays
             aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
             bb = torch.randn(N, N, device='cuda', dtype=torch.float32)
             flat_2d_array = torch.randn(N * N, device='cuda', dtype=torch.float32)
+            iterations = 1  # Scalar parameter (integer)
 
-            # Run PyTorch baseline
-            pytorch_result = s343_pytorch(aa.clone(), bb.clone(), flat_2d_array.clone())
+            # Create copies for PyTorch baseline
+            aa_pt = aa.clone()
+            bb_pt = bb.clone()
+            flat_2d_array_pt = flat_2d_array.clone()
 
-            # Run Triton LLM
-            triton_result = s343_triton(aa.clone(), bb.clone(), flat_2d_array.clone())
+            # Create copies for Triton implementation
+            aa_tr = aa.clone()
+            bb_tr = bb.clone()
+            flat_2d_array_tr = flat_2d_array.clone()
 
-            # Compare results
-            if isinstance(pytorch_result, tuple):
-                # Multiple outputs
-                max_error = max([torch.max(torch.abs(p - t)).item()
-                               for p, t in zip(pytorch_result, triton_result)])
-            else:
-                # Single output
-                max_error = torch.max(torch.abs(pytorch_result - triton_result)).item()
+            # Run PyTorch baseline (may modify arrays in-place or return result)
+            pytorch_result = s343_pytorch(aa_pt, bb_pt, flat_2d_array_pt, iterations)
+
+            # Run Triton LLM (modifies arrays in-place)
+            s343_triton(aa_tr, bb_tr, flat_2d_array_tr, iterations)
+
+            # Compare output arrays directly (in-place modification)
+            max_error = torch.max(torch.abs(flat_2d_array_pt - flat_2d_array_tr)).item()
 
             # Check if within tolerance
             if max_error < 1e-3:  # Relaxed tolerance for complex functions
@@ -58,6 +63,8 @@ def test_correctness():
 
         except Exception as e:
             print(f"✗ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             all_passed = False
 
     print("="*70)

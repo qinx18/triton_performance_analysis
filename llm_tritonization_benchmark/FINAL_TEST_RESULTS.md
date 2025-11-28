@@ -1,17 +1,61 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-11-18 (Latest Investigation)
-**Previous Tests:** 2025-11-17, 2025-11-06
+**Test Date:** 2025-11-28 (C Ground Truth Testing)
+**Previous Tests:** 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
-**Infrastructure:** ALL BUGS FIXED ✅
+**Infrastructure:** C Ground Truth Comparison ✅
 
 ---
 
-## 📊 Overall Results
+## 🔬 C Ground Truth Testing (2025-11-28) - COMPLETE
+
+### Important Finding
+Previous testing compared LLM-generated Triton against LLM-generated PyTorch baselines. This creates a problem: **if both implementations have the same bug, the test passes incorrectly**.
+
+We created a **C reference library** compiled from the original TSVC source code to provide true ground truth.
+
+### C Ground Truth Results - ALL 151 Functions Tested
+
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 94 | 62.3% |
+| ❌ **FAILING** | 57 | 37.7% |
+| ⏭️ **SKIPPED** | 0 | 0% |
+
+**Infrastructure Bugs Fixed:**
+- `d` array initialization: Use TSVC-style `1/(i+1)` (always positive) to avoid `exit(0)` in s481
+- Helper functions added: s151s, s152s, test_helper, f_helper, s471s for interprocedural tests
+- Scalar parameter typing: Proper float vs int handling
+- No-array function support: s317 now testable
+
+### Passing Functions (94):
+s000, s111, s1111, s1112, s1119, s112, s113, s114, s116, s1161, s119, s121, s125, s1251, s126, s127, s1279, s128, s1281, s132, s1351, s141, s151, s152, s162, s171, s174, s175, s2101, s2102, s2111, s2233, s2275, s231, s232, s233, s242, s243, s251, s252, s253, s254, s255, s271, s2710, s2711, s2712, s272, s273, s274, s278, s279, s291, s292, s293, s311, s3111, s31111, s3112, s3113, s313, s314, s315, s316, s317, s318, s319, s331, s342, s4112, s4113, s4114, s4115, s4117, s4121, s421, s441, s443, s451, s453, s481, s491, va, vag, vas, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failure Categories (57 total):
+
+| Category | Count | Examples |
+|----------|-------|----------|
+| Compilation Errors | 18 | s1115, s118, s1213, s1232, s124, s13110, s2251, s235, s257, s258, s275, s3110, s312, s332, s352, s353, s4116 |
+| Numerical/Algorithm Errors | 39 | s1113, s115, s122, s1221, s123, s1244, s131, s1421, s161, s172, s173, s176, s211, s212, s221, s222, s2244, s241, s244, s256, s261, s276, s277, s281, s321, s322, s323, s3251, s341, s343, s351, s422, s423, s424, s431, s442, s452, s471, s482, vbor |
+
+### Common Triton Compilation Issues
+1. `break` statement not supported in Triton kernels (s124, s235, s275, s3110)
+2. `tl.zeros([BLOCK_SIZE + 2])` - dynamic-sized zeros not supported (s1213)
+3. Chained boolean operators (`a or b or c`) not supported (s1232)
+4. Unsupported tensor index patterns `tid[0]` (s118, s13110)
+5. Non-existent API functions: `tl.reduce_op` (s312), `tl.any` (s332)
+6. Type errors with scalar/pointer operations (s353)
+
+### Implication
+The **62.3% pass rate** against C ground truth is the true measure of LLM-generated Triton correctness. The 57 failures represent genuine implementation bugs in the LLM-generated Triton code, not test infrastructure issues.
+
+---
+
+## 📊 Overall Results (vs PyTorch Baseline)
 
 ### Summary
-- ✅ **PASSING: 99 / 151 (65.6%)**
+- ✅ **PASSING: 99 / 151 (65.6%)** *(Note: May include false positives)*
 - ❌ **FAILING: 52 / 151 (34.4%)**
 
 ### Test History
@@ -298,7 +342,7 @@ The LLM successfully generated correct Triton implementations for **nearly two-t
 
 ## 📊 Function Categories Summary
 
-**s000-s113:** Single dimension operations (s1113)
+**s000-s113:** Single dimension operations (s1113, loop-splitting)
 - Most pass with element-wise or simple dependencies
 - **s112**: Works despite race conditions (SIMT synchronization)
 - **s116**: Fixed incorrect group indexing
@@ -309,14 +353,14 @@ The LLM successfully generated correct Triton implementations for **nearly two-t
 - **s119**: Requires sequential launches (diagonal dependency)
 - **s1119**: Already optimal (in-kernel loop with vertical dependency)
 
-**s121-s128:** Induction variables
+**s121-s128:** Induction variables(s123, double phase)
 - **s123**: Fixed tl.any() bug and value detection
 - **s126**: Fixed grid size inefficiency (>119x speedup)
 
 **s131-s132:** Global data flow analysis
 - **s131, s132**: Test infrastructure bugs (missing parameters)
 
-**s141:** Nonlinear dependence
+**s141:** Nonlinear dependence(s141, loop interchange)
 - LLM correct, baseline times out at large N
 
 **s151-s152:** Interprocedural data flow

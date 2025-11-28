@@ -1,8 +1,8 @@
 import torch
 
-def s000_pytorch(a, b, iterations):
+def s000_pytorch(a, b):
     """
-    TSVC s000 - Simple vector addition with scalar
+    PyTorch implementation of TSVC s000 kernel.
     
     Original C code:
     for (int nl = 0; nl < 2*iterations; nl++) {
@@ -17,5 +17,3 @@ def s000_pytorch(a, b, iterations):
     b = b.contiguous()
     
     a[:] = b + 1
-    
-    return a

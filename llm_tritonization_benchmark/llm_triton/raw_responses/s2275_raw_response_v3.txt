@@ -1,0 +1,145 @@
+# LLM-Generated Triton Implementation for s2275
+# Generated: 2025-11-28 19:02:14
+# Model: claude-sonnet-4-20250514
+# Source: Original TSVC C code
+# WAR Dependencies: None
+# Parallelization: N/A
+# Triton Strategy: N/A
+# Stop Reason: end_turn
+# Input Tokens: 963
+# Output Tokens: 607
+
+================================================================================
+PROMPT:
+================================================================================
+I have an original TSVC (Test Suite for Vectorizing Compilers) C function that I want to implement in Triton for GPU acceleration.
+
+## Original TSVC C Code:
+```c
+
+real_t s2275(struct args_t * func_args)
+{
+
+//    loop distribution is needed to be able to interchange
+
+    initialise_arrays(__func__);
+    gettimeofday(&func_args->t1, NULL);
+
+    for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
+        for (int i = 0; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i];
+            }
+            a[i] = b[i] + c[i] * d[i];
+        }
+        dummy(a, b, c, d, e, aa, bb, cc, 0.);
+    }
+
+    gettimeofday(&func_args->t2, NULL);
+    return calc_checksum(__func__);
+}
+```
+
+## Kernel Loop to Implement:
+```c
+        for (int i = 0; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i];
+            }
+            a[i] = b[i] + c[i] * d[i];
+        }
+```
+
+
+## Array Information:
+- Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
+- Arrays `aa`, `bb`, `cc`, `tt` are 2D float arrays of size LEN_2D x LEN_2D (typically 256x256)
+- `flat_2d_array` is a 1D float array of size LEN_2D*LEN_2D
+- `indx` is a 1D int array of size LEN_1D
+
+## Requirements:
+Please generate a complete Triton implementation that:
+1. Includes a @triton.jit kernel function named `s2275_kernel`
+2. Includes a Python wrapper function named `s2275_triton`
+3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation (e.g., a, b, c)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the C code (same computation, same results)
+
+## CRITICAL: Function Signature Requirements
+**DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
+The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
+
+**Correct example**:
+```python
+def s2275_triton(a, b):  # Only array parameters
+    ...  # Just the kernel computation, NO timing loop
+```
+
+**Incorrect example**:
+```python
+def s2275_triton(a, b, iterations):  # WRONG: No iterations parameter
+    for _ in range(iterations):  # WRONG: No timing loop
+        ...
+```
+
+IMPORTANT:
+- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+- Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
+- If WAR dependencies are shown above, you MUST use the read-only copy pattern
+- If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
+- DO NOT parallelize dimensions marked as INVALID - this will cause race conditions
+- Use forward iteration (ascending indices) for memory access patterns
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s2275_kernel(
+    aa_ptr, bb_ptr, cc_ptr, a_ptr, b_ptr, c_ptr, d_ptr,
+    LEN_2D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr
+):
+    i = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    i_mask = i < LEN_2D
+    
+    # First inner loop: for j in range(LEN_2D)
+    for j in range(LEN_2D):
+        # Calculate linear indices for aa[j][i], bb[j][i], cc[j][i]
+        idx = j * LEN_2D + i
+        
+        aa_val = tl.load(aa_ptr + idx, mask=i_mask)
+        bb_val = tl.load(bb_ptr + idx, mask=i_mask)
+        cc_val = tl.load(cc_ptr + idx, mask=i_mask)
+        
+        result = aa_val + bb_val * cc_val
+        tl.store(aa_ptr + idx, result, mask=i_mask)
+    
+    # Second computation: a[i] = b[i] + c[i] * d[i]
+    a_val = tl.load(a_ptr + i, mask=i_mask)
+    b_val = tl.load(b_ptr + i, mask=i_mask)
+    c_val = tl.load(c_ptr + i, mask=i_mask)
+    d_val = tl.load(d_ptr + i, mask=i_mask)
+    
+    result = b_val + c_val * d_val
+    tl.store(a_ptr + i, result, mask=i_mask)
+
+def s2275_triton(aa, bb, cc, a, b, c, d):
+    LEN_2D = aa.shape[0]
+    
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
+    
+    s2275_kernel[grid](
+        aa, bb, cc, a, b, c, d,
+        LEN_2D=LEN_2D,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+```

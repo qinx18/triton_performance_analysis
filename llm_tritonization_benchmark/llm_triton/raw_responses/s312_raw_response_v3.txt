@@ -1,0 +1,203 @@
+# LLM-Generated Triton Implementation for s312
+# Generated: 2025-11-28 19:08:56
+# Model: claude-sonnet-4-20250514
+# Source: Original TSVC C code
+# WAR Dependencies: ['prod']
+# Parallelization: N/A
+# Triton Strategy: N/A
+# Stop Reason: end_turn
+# Input Tokens: 1373
+# Output Tokens: 467
+
+================================================================================
+PROMPT:
+================================================================================
+I have an original TSVC (Test Suite for Vectorizing Compilers) C function that I want to implement in Triton for GPU acceleration.
+
+## Original TSVC C Code:
+```c
+
+real_t s312(struct args_t * func_args)
+{
+
+//    reductions
+//    product reduction
+
+    initialise_arrays(__func__);
+    gettimeofday(&func_args->t1, NULL);
+
+    real_t prod;
+    for (int nl = 0; nl < 10*iterations; nl++) {
+        prod = (real_t)1.;
+        for (int i = 0; i < LEN_1D; i++) {
+            prod *= a[i];
+        }
+        dummy(a, b, c, d, e, aa, bb, cc, prod);
+    }
+
+    gettimeofday(&func_args->t2, NULL);
+    return prod;
+}
+```
+
+## Kernel Loop to Implement:
+```c
+// Local variables:
+    real_t prod;
+
+// Kernel loop:
+        prod = (real_t)1.;
+        for (int i = 0; i < LEN_1D; i++) {
+            prod *= a[i];
+        }
+```
+
+## CRITICAL: WAR Race Condition Handling Required
+
+This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
+**Arrays requiring read-only copy**: ['prod']
+
+### Problem
+In parallel execution across GPU blocks, if block B writes to a location before block A reads from it,
+block A reads the wrong (modified) value instead of the original value.
+
+### Required Solution: Read-Only Copy Pattern
+Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
+and store results to the original array.
+
+### Implementation Template
+```python
+# In wrapper function - create read-only copy BEFORE launching kernel:
+def s312_triton(...):
+    prod_copy = prod.clone()  # Read-only copy
+
+    # Pass BOTH original (for writes) AND copy (for reads) to kernel
+    s312_kernel[grid](
+        prod,        # Write destination (original)
+        prod_copy,   # Read source (immutable copy)
+        ...other_args...
+    )
+
+# In kernel - LOAD from copy, STORE to original:
+@triton.jit
+def {kernel_name}_kernel(
+    prod_ptr,        # Write destination
+    prod_copy_ptr,   # Read source
+    ...
+):
+    offsets = ...
+    prod_vals = tl.load(prod_copy_ptr + offsets, mask=mask)  # Read from COPY
+
+    result = ...  # Compute using loaded values
+
+    tl.store(prod_ptr + write_offsets, result, mask=mask)  # Write to ORIGINAL
+```
+
+**Why this works**: The copy preserves original values for all threads. Reads from immutable copy,
+writes to original - no conflict possible.
+
+**CRITICAL: Use forward iteration**
+ALWAYS use FORWARD iteration with ascending offsets:
+```python
+# CORRECT - Forward iteration
+offsets = block_start + tl.arange(0, BLOCK_SIZE)
+
+# INCORRECT - Reverse iteration (causes memory access issues in Triton)
+# offsets = block_start - tl.arange(0, BLOCK_SIZE)  # DO NOT USE
+```
+
+
+## Array Information:
+- Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
+- Arrays `aa`, `bb`, `cc`, `tt` are 2D float arrays of size LEN_2D x LEN_2D (typically 256x256)
+- `flat_2d_array` is a 1D float array of size LEN_2D*LEN_2D
+- `indx` is a 1D int array of size LEN_1D
+
+## Requirements:
+Please generate a complete Triton implementation that:
+1. Includes a @triton.jit kernel function named `s312_kernel`
+2. Includes a Python wrapper function named `s312_triton`
+3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation (e.g., a, b, c)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the C code (same computation, same results)
+
+## CRITICAL: Function Signature Requirements
+**DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
+The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
+
+**Correct example**:
+```python
+def s312_triton(a, b):  # Only array parameters
+    ...  # Just the kernel computation, NO timing loop
+```
+
+**Incorrect example**:
+```python
+def s312_triton(a, b, iterations):  # WRONG: No iterations parameter
+    for _ in range(iterations):  # WRONG: No timing loop
+        ...
+```
+
+IMPORTANT:
+- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+- Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
+- If WAR dependencies are shown above, you MUST use the read-only copy pattern
+- If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
+- DO NOT parallelize dimensions marked as INVALID - this will cause race conditions
+- Use forward iteration (ascending indices) for memory access patterns
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import triton
+import triton.language as tl
+import torch
+
+@triton.jit
+def s312_kernel(
+    a_ptr,
+    output_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    block_id = tl.program_id(0)
+    block_start = block_id * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load elements from array a
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=1.0)
+    
+    # Compute product reduction within this block
+    prod = tl.reduce(a_vals, 0, tl.reduce_op.MUL)
+    
+    # Store the partial product (only first thread in block writes)
+    if tl.program_id(0) == 0 and offsets[0] == block_start:
+        tl.store(output_ptr + block_id, prod)
+
+def s312_triton(a):
+    n_elements = a.shape[0]
+    BLOCK_SIZE = 1024
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    
+    # Create output tensor for partial products
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    partial_products = torch.ones(num_blocks, dtype=a.dtype, device=a.device)
+    
+    # Launch kernel to compute partial products
+    s312_kernel[grid](
+        a,
+        partial_products,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    # Final reduction on CPU/GPU
+    prod = torch.prod(partial_products)
+    
+    return prod
+```

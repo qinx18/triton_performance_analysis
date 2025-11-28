@@ -2,7 +2,7 @@ import torch
 
 def s1279_pytorch(a, b, c, d, e):
     """
-    PyTorch implementation of TSVC s1279
+    PyTorch implementation of TSVC s1279 kernel.
     
     Original C code:
     for (int nl = 0; nl < iterations; nl++) {
@@ -23,10 +23,10 @@ def s1279_pytorch(a, b, c, d, e):
     d = d.contiguous()
     e = e.contiguous()
     
-    # Create condition mask: a[i] < 0 AND b[i] > a[i]
-    condition = (a < 0.0) & (b > a)
+    # Create condition masks
+    mask1 = a < 0.0
+    mask2 = b > a
+    combined_mask = mask1 & mask2
     
-    # Update c where condition is true: c[i] += d[i] * e[i]
-    c = torch.where(condition, c + d * e, c)
-    
-    return c
+    # Update c where both conditions are true
+    c[:] = torch.where(combined_mask, c + d * e, c)

@@ -1,0 +1,183 @@
+# LLM-Generated Triton Implementation for s131
+# Generated: 2025-11-28 15:02:27
+# Model: claude-sonnet-4-20250514
+# WAR Dependencies: ['a']
+# Parallelization: N/A
+# Triton Strategy: N/A
+# Stop Reason: end_turn
+# Input Tokens: 1209
+# Output Tokens: 442
+
+================================================================================
+PROMPT:
+================================================================================
+I have a PyTorch/Python baseline implementation that I want to optimize using Triton for GPU acceleration.
+
+## Baseline Implementation:
+```python
+import torch
+
+def s131_pytorch(a, b, m):
+    """
+    PyTorch implementation of TSVC s131 function.
+    
+    Original C code:
+    for (int nl = 0; nl < 5*iterations; nl++) {
+        for (int i = 0; i < LEN_1D - 1; i++) {
+            a[i] = a[i + m] + b[i];
+        }
+    }
+    
+    Arrays used: a (rw), b (r)
+    """
+    a = a.contiguous()
+    b = b.contiguous()
+    
+    LEN_1D = a.size(0)
+    
+    for i in range(LEN_1D - 1):
+        if i + m < LEN_1D:
+            a[i] = a[i + m] + b[i]
+    
+    return a
+```
+
+## CRITICAL: WAR Race Condition Handling Required
+
+This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
+**Arrays requiring read-only copy**: ['a']
+
+### Problem
+In parallel execution across GPU blocks, if block B writes to a location before block A reads from it,
+block A reads the wrong (modified) value instead of the original value.
+
+For example, in `a[i+1] = a[i] + b[i]`:
+- Thread processing i=100 reads a[100], writes a[101]
+- Thread processing i=101 reads a[101], writes a[102]
+- If the write to a[101] happens before the read from a[101], incorrect results occur.
+
+### Required Solution: Read-Only Copy Pattern
+Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
+and store results to the original array.
+
+### Implementation Template
+```python
+# In wrapper function - create read-only copy BEFORE launching kernel:
+def s131_triton(...):
+    a_copy = a.clone()  # Read-only copy
+
+    # Pass BOTH original (for writes) AND copy (for reads) to kernel
+    s131_kernel[grid](
+        a,        # Write destination (original)
+        a_copy,   # Read source (immutable copy)
+        ...other_args...
+    )
+
+# In kernel - LOAD from copy, STORE to original:
+@triton.jit
+def {kernel_name}_kernel(
+    a_ptr,        # Write destination
+    a_copy_ptr,   # Read source
+    ...
+):
+    offsets = ...
+    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)  # Read from COPY
+
+    result = ...  # Compute using loaded values
+
+    tl.store(a_ptr + write_offsets, result, mask=mask)  # Write to ORIGINAL
+```
+
+**Why this works**: The copy preserves original values for all threads. Reads from immutable copy,
+writes to original - no conflict possible.
+
+**CRITICAL: Use forward iteration**
+Since the read-only copy preserves all original values, you can iterate in any order.
+ALWAYS use FORWARD iteration with ascending offsets:
+```python
+# CORRECT - Forward iteration
+offsets = block_start + tl.arange(0, BLOCK_SIZE)
+
+# INCORRECT - Reverse iteration (causes memory access issues in Triton)
+# offsets = block_start - tl.arange(0, BLOCK_SIZE)  # DO NOT USE
+```
+
+
+## Requirements:
+Please generate a complete, optimized Triton implementation that:
+1. Includes a @triton.jit kernel function named `s131_kernel`
+2. Includes a Python wrapper function named `s131_triton` (NOT `s131_pytorch`)
+3. The wrapper function must have THE EXACT SAME function signature as the baseline (same parameter names and order)
+4. Uses appropriate block sizes and memory access patterns
+5. Handles edge cases with masking
+6. Is functionally equivalent to the baseline (same inputs, same outputs)
+7. Returns the same type as the baseline (single tensor or tuple of tensors)
+8. **CRITICAL**: If WAR dependencies are shown above, you MUST use the read-only copy pattern
+9. **CRITICAL**: If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
+
+IMPORTANT:
+- Wrapper function name: `s131_triton`
+- Function signature must match the baseline exactly (same parameters in same order)
+- Accept all parameters the baseline accepts, even if some are modified in-place or used only as outputs
+- If WAR analysis shows arrays needing copies, you MUST clone those arrays and pass both original and copy to the kernel
+- If parallelization analysis shows only ONE valid strategy, you MUST use that strategy (sequential kernel launches)
+- DO NOT parallelize dimensions marked as INVALID - this will cause race conditions
+
+Provide ONLY the Python code, no additional explanation.
+
+================================================================================
+RESPONSE:
+================================================================================
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def s131_kernel(
+    a_ptr,
+    a_copy_ptr,
+    b_ptr,
+    m,
+    LEN_1D,
+    BLOCK_SIZE: tl.constexpr,
+):
+    block_id = tl.program_id(0)
+    block_start = block_id * BLOCK_SIZE
+    
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = (offsets < LEN_1D - 1) & (offsets + m < LEN_1D)
+    
+    # Read from copy and b
+    a_vals = tl.load(a_copy_ptr + offsets + m, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    
+    # Compute result
+    result = a_vals + b_vals
+    
+    # Write to original array
+    tl.store(a_ptr + offsets, result, mask=mask)
+
+def s131_triton(a, b, m):
+    a = a.contiguous()
+    b = b.contiguous()
+    
+    LEN_1D = a.size(0)
+    
+    # Create read-only copy to handle WAR dependencies
+    a_copy = a.clone()
+    
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(LEN_1D - 1, BLOCK_SIZE),)
+    
+    s131_kernel[grid](
+        a,
+        a_copy,
+        b,
+        m,
+        LEN_1D,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return a
+```

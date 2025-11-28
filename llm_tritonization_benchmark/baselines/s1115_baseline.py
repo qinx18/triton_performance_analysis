@@ -19,8 +19,4 @@ def s1115_pytorch(aa, bb, cc):
     bb = bb.contiguous()
     cc = cc.contiguous()
     
-    # aa[i][j] = aa[i][j] * cc[j][i] + bb[i][j]
-    # cc[j][i] is the transpose of cc
-    aa = aa * cc.t() + bb
-    
-    return aa
+    aa[:] = aa * cc.T + bb

@@ -2,7 +2,7 @@ import torch
 
 def s1113_pytorch(a, b):
     """
-    PyTorch implementation of TSVC s1113.
+    PyTorch implementation of TSVC s1113
     
     Original C code:
     for (int nl = 0; nl < 2*iterations; nl++) {
@@ -17,8 +17,4 @@ def s1113_pytorch(a, b):
     b = b.contiguous()
     
     LEN_1D = a.size(0)
-    scalar_val = a[LEN_1D // 2]
-    
-    a = scalar_val + b
-    
-    return a
+    a[:] = a[LEN_1D // 2] + b

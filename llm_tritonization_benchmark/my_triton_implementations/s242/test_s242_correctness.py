@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s242
-Tests: PyTorch baseline vs Triton LLM implementation
+Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s242_baseline import s242_pytorch
-    from llm_triton.s242_triton_llm import s242_triton
+    from llm_triton.s242_triton_llm_v3 import s242_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -29,30 +29,35 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            # Initialize arrays
+            # Initialize base arrays
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             d = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            iterations = 1  # Scalar parameter (integer)
+            s1 = 1  # Scalar parameter (integer)
+            s2 = 1  # Scalar parameter (integer)
 
-            # Scalar parameters
-            s1 = 0.5
-            s2 = 0.3
+            # Create copies for PyTorch baseline
+            a_pt = a.clone()
+            b_pt = b.clone()
+            c_pt = c.clone()
+            d_pt = d.clone()
 
-            # Run PyTorch baseline
-            pytorch_result = s242_pytorch(a.clone(), b.clone(), c.clone(), d.clone(), s1, s2)
+            # Create copies for Triton implementation
+            a_tr = a.clone()
+            b_tr = b.clone()
+            c_tr = c.clone()
+            d_tr = d.clone()
 
-            # Run Triton LLM
-            triton_result = s242_triton(a.clone(), b.clone(), c.clone(), d.clone(), s1, s2)
+            # Run PyTorch baseline (may modify arrays in-place or return result)
+            pytorch_result = s242_pytorch(a_pt, b_pt, c_pt, d_pt, iterations, s1, s2)
 
-            # Compare results
-            if isinstance(pytorch_result, tuple):
-                # Multiple outputs
-                max_error = max([torch.max(torch.abs(p - t)).item()
-                               for p, t in zip(pytorch_result, triton_result)])
-            else:
-                # Single output
-                max_error = torch.max(torch.abs(pytorch_result - triton_result)).item()
+            # Run Triton LLM (modifies arrays in-place)
+            s242_triton(a_tr, b_tr, c_tr, d_tr, iterations, s1, s2)
+
+            # Compare output arrays directly (in-place modification)
+            max_error = torch.max(torch.abs(a_pt - a_tr)).item()
 
             # Check if within tolerance
             if max_error < 1e-3:  # Relaxed tolerance for complex functions
@@ -63,6 +68,8 @@ def test_correctness():
 
         except Exception as e:
             print(f"✗ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             all_passed = False
 
     print("="*70)

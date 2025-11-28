@@ -2,7 +2,7 @@ import torch
 
 def s119_pytorch(aa, bb):
     """
-    TSVC function s119 - 2D array dependency analysis
+    TSVC s119 - 2D array dependency with diagonal computation
     
     Original C code:
     for (int nl = 0; nl < 200*(iterations/(LEN_2D)); nl++) {
@@ -12,14 +12,10 @@ def s119_pytorch(aa, bb):
             }
         }
     }
-    
-    Arrays used: aa (rw), bb (r)
     """
     aa = aa.contiguous()
     bb = bb.contiguous()
     
-    for i in range(1, aa.shape[0]):
-        for j in range(1, aa.shape[1]):
+    for i in range(1, aa.size(0)):
+        for j in range(1, aa.size(1)):
             aa[i, j] = aa[i-1, j-1] + bb[i, j]
-    
-    return aa

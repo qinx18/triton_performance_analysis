@@ -2,7 +2,7 @@ import torch
 
 def s124_pytorch(a, b, c, d, e):
     """
-    PyTorch implementation of TSVC s124 - conditional array packing
+    PyTorch implementation of TSVC s124 kernel.
     
     Original C code:
     for (int nl = 0; nl < iterations; nl++) {
@@ -17,6 +17,8 @@ def s124_pytorch(a, b, c, d, e):
             }
         }
     }
+    
+    Arrays: a (rw), b (r), c (r), d (r), e (r)
     """
     a = a.contiguous()
     b = b.contiguous()
@@ -24,11 +26,14 @@ def s124_pytorch(a, b, c, d, e):
     d = d.contiguous()
     e = e.contiguous()
     
-    # Compute the values for both conditions
+    # Compute d[i] * e[i] for all elements
     de_product = d * e
-    values = torch.where(b > 0.0, b + de_product, c + de_product)
     
-    # Copy values to output array (j increments for every iteration)
-    a[:len(values)] = values
+    # Use torch.where to select between b[i] and c[i] based on condition
+    selected_values = torch.where(b > 0.0, b, c)
     
-    return a
+    # Compute final result
+    result = selected_values + de_product
+    
+    # Copy result to array a in-place
+    a[:] = result

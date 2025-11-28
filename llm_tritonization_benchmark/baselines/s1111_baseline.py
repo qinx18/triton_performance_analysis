@@ -1,8 +1,8 @@
 import torch
 
-def s1111_pytorch(a, b, c, d, iterations):
+def s1111_pytorch(a, b, c, d):
     """
-    PyTorch implementation of TSVC s1111 function.
+    PyTorch implementation of TSVC s1111 kernel.
     
     Original C code:
     for (int nl = 0; nl < 2*iterations; nl++) {
@@ -18,10 +18,7 @@ def s1111_pytorch(a, b, c, d, iterations):
     c = c.contiguous()
     d = d.contiguous()
     
-    len_1d = a.size(0)
+    len_half = a.shape[0] // 2
     
-    for nl in range(2 * iterations):
-        for i in range(len_1d // 2):
-            a[2*i] = c[i] * b[i] + d[i] * b[i] + c[i] * c[i] + d[i] * b[i] + d[i] * c[i]
-    
-    return a
+    indices = torch.arange(len_half, device=a.device)
+    a[2*indices] = c[indices] * b[indices] + d[indices] * b[indices] + c[indices] * c[indices] + d[indices] * b[indices] + d[indices] * c[indices]
