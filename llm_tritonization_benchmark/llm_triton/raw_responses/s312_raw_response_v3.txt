@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s312
-# Generated: 2025-11-30 11:03:48
+# Generated: 2025-11-30 14:06:05
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 859
-# Output Tokens: 600
+# Output Tokens: 659
 
 ================================================================================
 PROMPT:
@@ -105,48 +105,61 @@ import torch
 
 @triton.jit
 def s312_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This is a reduction operation - compute product of all elements in array a
-    # Each block processes BLOCK_SIZE elements and computes partial product
-    block_start = tl.program_id(0) * BLOCK_SIZE
+    pid = tl.program_id(axis=0)
+    
+    # Each program handles BLOCK_SIZE elements
+    block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load elements with mask, use 1.0 as default for out-of-bounds
+    # Load elements from array a
     a_vals = tl.load(a_ptr + offsets, mask=mask, other=1.0)
     
-    # Compute partial product for this block
-    partial_prod = tl.reduce(a_vals, axis=0, combine_fn=lambda x, y: x * y)
+    # Compute product of elements in this block
+    block_prod = tl.reduce(a_vals, axis=0, op=tl.associative_scan.MUL)
     
-    # Store partial result
-    tl.store(result_ptr + tl.program_id(0), partial_prod)
+    # Store the partial product
+    if pid == 0:
+        tl.store(result_ptr + pid, block_prod)
+    else:
+        tl.store(result_ptr + pid, block_prod)
+
+@triton.jit
+def s312_final_reduction_kernel(partial_results_ptr, final_result_ptr, num_blocks, BLOCK_SIZE: tl.constexpr):
+    # Single thread reduces all partial products
+    pid = tl.program_id(axis=0)
+    if pid != 0:
+        return
+    
+    final_prod = 1.0
+    for i in range(num_blocks):
+        partial_prod = tl.load(partial_results_ptr + i)
+        final_prod *= partial_prod
+    
+    tl.store(final_result_ptr, final_prod)
 
 def s312_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
-    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    BLOCK_SIZE = 256
     
-    # Create temporary array to store partial products
-    partial_results = torch.ones(n_blocks, dtype=a.dtype, device=a.device)
+    # Calculate number of blocks needed
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    
+    # Allocate temporary storage for partial products
+    partial_results = torch.ones(num_blocks, dtype=a.dtype, device=a.device)
+    final_result = torch.ones(1, dtype=a.dtype, device=a.device)
     
     # Launch kernel to compute partial products
-    grid = (n_blocks,)
+    grid = (num_blocks,)
     s312_kernel[grid](
         a, partial_results, n_elements, BLOCK_SIZE
     )
     
-    # Compute final product by multiplying all partial results on CPU
-    # For numerical stability, we do this reduction on GPU as well if needed
-    while partial_results.shape[0] > 1:
-        n_partials = partial_results.shape[0]
-        n_blocks_next = triton.cdiv(n_partials, BLOCK_SIZE)
-        next_partials = torch.ones(n_blocks_next, dtype=a.dtype, device=a.device)
-        
-        grid = (n_blocks_next,)
-        s312_kernel[grid](
-            partial_results, next_partials, n_partials, BLOCK_SIZE
-        )
-        
-        partial_results = next_partials
+    # Launch final reduction kernel
+    grid = (1,)
+    s312_final_reduction_kernel[grid](
+        partial_results, final_result, num_blocks, BLOCK_SIZE
+    )
     
-    return partial_results[0]
+    return final_result.item()
 ```

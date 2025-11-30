@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s235
-# Generated: 2025-11-30 10:58:51
+# Generated: 2025-11-30 14:00:49
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['aa']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1466
-# Output Tokens: 803
+# Output Tokens: 663
 
 ================================================================================
 PROMPT:
@@ -152,71 +152,62 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s235_kernel(
-    a_ptr,
-    b_ptr, 
-    c_ptr,
-    aa_ptr,
-    aa_copy_ptr,
-    bb_ptr,
+    a_ptr, b_ptr, c_ptr,
+    aa_ptr, aa_copy_ptr, bb_ptr,
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Get program ID for the i dimension
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < LEN_2D
+    # Get the current block
+    i = tl.program_id(0)
     
-    # Load a[i], b[i], c[i]
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    if i >= LEN_2D:
+        return
     
-    # Update a[i] += b[i] * c[i]
-    a_new = a_vals + b_vals * c_vals
-    tl.store(a_ptr + offsets, a_new, mask=mask)
+    # First compute a[i] += b[i] * c[i]
+    a_val = tl.load(a_ptr + i)
+    b_val = tl.load(b_ptr + i)
+    c_val = tl.load(c_ptr + i)
     
-    # Inner j loop: aa[j][i] = aa[j-1][i] + bb[j][i] * a[i]
-    # This must be sequential in j dimension
+    new_a_val = a_val + b_val * c_val
+    tl.store(a_ptr + i, new_a_val)
+    
+    # Now compute the inner loop: aa[j][i] = aa[j-1][i] + bb[j][i] * a[i]
+    # This must be done sequentially due to the dependency on aa[j-1][i]
     for j in range(1, LEN_2D):
-        # Calculate offsets for 2D arrays
-        j_prev_offsets = (j - 1) * LEN_2D + offsets
-        j_offsets = j * LEN_2D + offsets
-        
-        # Load aa[j-1][i] from read-only copy
-        aa_prev_vals = tl.load(aa_copy_ptr + j_prev_offsets, mask=mask)
+        # Load aa[j-1][i] from the copy (read-only)
+        prev_aa_offset = (j - 1) * LEN_2D + i
+        prev_aa_val = tl.load(aa_copy_ptr + prev_aa_offset)
         
         # Load bb[j][i]
-        bb_vals = tl.load(bb_ptr + j_offsets, mask=mask)
+        bb_offset = j * LEN_2D + i
+        bb_val = tl.load(bb_ptr + bb_offset)
         
-        # Compute aa[j][i] = aa[j-1][i] + bb[j][i] * a[i]
-        aa_new = aa_prev_vals + bb_vals * a_new
+        # Compute new value
+        new_aa_val = prev_aa_val + bb_val * new_a_val
         
         # Store to original aa array
-        tl.store(aa_ptr + j_offsets, aa_new, mask=mask)
-        
-        # Update copy for next iteration
-        tl.store(aa_copy_ptr + j_offsets, aa_new, mask=mask)
+        aa_offset = j * LEN_2D + i
+        tl.store(aa_ptr + aa_offset, new_aa_val)
 
 def s235_triton(a, b, c, aa, bb):
-    LEN_2D = a.shape[0]
-    BLOCK_SIZE = 64
+    LEN_2D = aa.shape[0]
+    BLOCK_SIZE = 128
     
     # Create read-only copy of aa to handle WAR dependencies
     aa_copy = aa.clone()
     
-    # Calculate grid size
-    grid = ((LEN_2D + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+    # Launch kernel with one thread per i value
+    grid = (LEN_2D,)
     
-    # Launch kernel
     s235_kernel[grid](
-        a, b, c, aa, aa_copy, bb,
+        a, b, c,
+        aa, aa_copy, bb,
         LEN_2D=LEN_2D,
         BLOCK_SIZE=BLOCK_SIZE,
     )

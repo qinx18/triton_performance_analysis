@@ -9,18 +9,16 @@ def s121_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load a[i+1] (j = i + 1)
-    a_offsets = offsets + 1
-    a_mask = a_offsets < (n_elements + 1)
-    a_vals = tl.load(a_ptr + a_offsets, mask=a_mask)
-    
     # Load b[i]
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     
-    # Compute a[i] = a[j] + b[i]
+    # Load a[j] where j = i + 1, so a[i+1]
+    a_vals = tl.load(a_ptr + offsets + 1, mask=mask)
+    
+    # Compute a[i] = a[j] + b[i] = a[i+1] + b[i]
     result = a_vals + b_vals
     
-    # Store result
+    # Store result to a[i]
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s121_triton(a, b):

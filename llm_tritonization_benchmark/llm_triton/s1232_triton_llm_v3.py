@@ -1,58 +1,47 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s1232_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get program ID
-    pid = tl.program_id(0)
+    # Get program ID for the j dimension
+    j = tl.program_id(0)
     
-    # Calculate which (i, j) pair this program handles
-    total_elements = (LEN_2D * (LEN_2D + 1)) // 2
-    
-    if pid >= total_elements:
+    if j >= LEN_2D:
         return
     
-    # Convert linear index to triangular (i, j) coordinates
-    # For triangular iteration where i >= j
-    j = 0
-    cumulative = 0
-    remaining = pid
+    # Process elements in blocks along the i dimension
+    i_offset = tl.program_id(1) * BLOCK_SIZE
+    i_range = tl.arange(0, BLOCK_SIZE)
+    i = i_offset + i_range
     
-    # Find the j value
-    for k in range(LEN_2D):
-        elements_in_col = LEN_2D - k
-        if remaining < elements_in_col:
-            j = k
-            i = j + remaining
-            break
-        remaining -= elements_in_col
+    # Mask for valid i indices and triangular constraint (i >= j)
+    mask = (i < LEN_2D) & (i >= j)
     
-    # Bounds check
-    if i >= LEN_2D or j >= LEN_2D or i < j:
-        return
+    # Calculate memory offsets for 2D arrays (row-major order)
+    offsets = i * LEN_2D + j
     
-    # Calculate flat index for 2D arrays
-    idx = i * LEN_2D + j
+    # Load data with masking
+    bb_vals = tl.load(bb_ptr + offsets, mask=mask)
+    cc_vals = tl.load(cc_ptr + offsets, mask=mask)
     
-    # Load values
-    bb_val = tl.load(bb_ptr + idx)
-    cc_val = tl.load(cc_ptr + idx)
+    # Perform computation
+    result = bb_vals + cc_vals
     
-    # Compute and store
-    result = bb_val + cc_val
-    tl.store(aa_ptr + idx, result)
+    # Store result with masking
+    tl.store(aa_ptr + offsets, result, mask=mask)
 
 def s1232_triton(aa, bb, cc):
     LEN_2D = aa.shape[0]
+    BLOCK_SIZE = 32
     
-    # Total number of elements in upper triangular matrix (including diagonal)
-    total_elements = (LEN_2D * (LEN_2D + 1)) // 2
+    # Calculate grid dimensions
+    # Grid dimension 0: j values (0 to LEN_2D-1)
+    # Grid dimension 1: blocks of i values
+    grid_j = LEN_2D
+    grid_i = triton.cdiv(LEN_2D, BLOCK_SIZE)
     
-    BLOCK_SIZE = 256
-    grid_size = (triton.cdiv(total_elements, BLOCK_SIZE),)
-    
-    s1232_kernel[grid_size](
+    s1232_kernel[(grid_j, grid_i)](
         aa, bb, cc,
         LEN_2D=LEN_2D,
         BLOCK_SIZE=BLOCK_SIZE

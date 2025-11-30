@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s332
-# Generated: 2025-11-30 11:05:41
+# Generated: 2025-11-30 14:07:58
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1021
-# Output Tokens: 605
+# Output Tokens: 789
 
 ================================================================================
 PROMPT:
@@ -126,60 +126,69 @@ import triton.language as tl
 
 @triton.jit
 def s332_kernel(a_ptr, t, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This is a search operation that finds the first element > threshold
-    # Each program handles one search operation
-    pid = tl.program_id(0)
+    # This kernel finds the first value greater than threshold
+    # Each program handles one block of elements
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    if pid != 0:
-        return
+    # Load block of data
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=float('-inf'))
     
-    # Initialize result values
-    index = -2
-    value = -1.0
-    found = False
+    # Find first element > t in this block
+    condition = a_vals > t
     
-    # Sequential search through the array
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
+    # Create a mask for valid indices within bounds
+    valid_mask = mask & condition
+    
+    # If any element in this block satisfies condition
+    if tl.sum(valid_mask.to(tl.int32)) > 0:
+        # Find the first occurrence
+        # Create sequence numbers for each element in block
+        seq = tl.arange(0, BLOCK_SIZE)
         
-        # Load values
-        vals = tl.load(a_ptr + offsets, mask=mask, other=float('-inf'))
+        # Set sequence to large number where condition is false
+        seq = tl.where(valid_mask, seq, BLOCK_SIZE)
         
-        # Check which elements are greater than threshold
-        greater_mask = vals > t
+        # Find minimum sequence number (first occurrence)
+        min_seq = tl.min(seq)
         
-        if tl.any(greater_mask & mask):
-            # Find the first element that satisfies condition in this block
-            for i in range(BLOCK_SIZE):
-                if block_start + i < n_elements:
-                    val = tl.load(a_ptr + block_start + i)
-                    if val > t:
-                        index = block_start + i
-                        value = val
-                        found = True
-                        break
-            if found:
-                break
-    
-    # Store results
-    chksum = value + tl.cast(index, tl.float32)
-    tl.store(result_ptr, chksum)
-    tl.store(result_ptr + 1, value)
-    tl.store(result_ptr + 2, tl.cast(index, tl.float32))
+        # Check if this block has the first occurrence
+        if min_seq < BLOCK_SIZE:
+            first_idx = block_start + min_seq
+            first_val = tl.load(a_ptr + first_idx)
+            
+            # Atomically update result if this is earlier than current result
+            old_idx = tl.atomic_cas(result_ptr, -2, first_idx)
+            if old_idx == -2:
+                # We were first to find a result
+                tl.store(result_ptr + 1, first_val)
+            elif first_idx < old_idx:
+                # Our index is earlier, try to update
+                success = False
+                while not success and first_idx < tl.load(result_ptr):
+                    old_idx = tl.atomic_cas(result_ptr, old_idx, first_idx)
+                    if old_idx == first_idx or old_idx > first_idx:
+                        tl.store(result_ptr + 1, first_val)
+                        success = True
 
 def s332_triton(a, t_val):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
     
-    # Create result tensor to store [chksum, value, index]
-    result = torch.zeros(3, dtype=torch.float32, device=a.device)
+    # Result tensor: [index, value]
+    result = torch.tensor([-2, -1.0], dtype=torch.float32, device=a.device)
     
     BLOCK_SIZE = 256
-    grid = (1,)  # Single program since this is a sequential search
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s332_kernel[grid](
-        a, t_val, result, n_elements, BLOCK_SIZE
+        a, t_val, result, n_elements, BLOCK_SIZE=BLOCK_SIZE
     )
     
-    return result[1].item()  # Return the value found
+    index = int(result[0].item())
+    value = result[1].item()
+    chksum = value + float(index)
+    
+    return value
 ```

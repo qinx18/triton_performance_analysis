@@ -9,20 +9,21 @@ def s274_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.co
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load input arrays
-    c = tl.load(c_ptr + offsets, mask=mask)
-    d = tl.load(d_ptr + offsets, mask=mask)
-    e = tl.load(e_ptr + offsets, mask=mask)
-    b = tl.load(b_ptr + offsets, mask=mask)
+    # Load input data
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    d_vals = tl.load(d_ptr + offsets, mask=mask)
+    e_vals = tl.load(e_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
     # Compute a[i] = c[i] + e[i] * d[i]
-    a = c + e * d
+    a_vals = c_vals + e_vals * d_vals
     
     # Conditional computation
-    condition = a > 0.0
+    condition = a_vals > 0.0
+    
     # If a[i] > 0: b[i] = a[i] + b[i], else: a[i] = d[i] * e[i]
-    b_new = tl.where(condition, a + b, b)
-    a_new = tl.where(condition, a, d * e)
+    b_new = tl.where(condition, a_vals + b_vals, b_vals)
+    a_new = tl.where(condition, a_vals, d_vals * e_vals)
     
     # Store results
     tl.store(a_ptr + offsets, a_new, mask=mask)

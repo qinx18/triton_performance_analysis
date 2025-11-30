@@ -22,4 +22,8 @@ def s452_triton(a, b, c):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s452_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
+    s452_kernel[grid](
+        a, b, c, n_elements, BLOCK_SIZE
+    )
+    
+    return a

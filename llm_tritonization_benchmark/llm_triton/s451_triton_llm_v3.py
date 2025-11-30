@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s451_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):

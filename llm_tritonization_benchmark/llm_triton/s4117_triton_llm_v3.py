@@ -3,7 +3,11 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s4117_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s4117_kernel(
+    a_ptr, b_ptr, c_ptr, d_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -25,11 +29,12 @@ def s4117_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexp
 
 def s4117_triton(a, b, c, d):
     n_elements = a.numel()
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s4117_kernel[grid](
-        a, b, c, d, 
-        n_elements, 
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, c, d,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
     )

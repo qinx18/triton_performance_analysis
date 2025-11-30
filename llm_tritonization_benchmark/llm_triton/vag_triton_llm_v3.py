@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def vag_kernel(a_ptr, b_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -9,14 +9,14 @@ def vag_kernel(a_ptr, b_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load indices from ip array
+    # Load indices
     indices = tl.load(ip_ptr + offsets, mask=mask)
     
-    # Gather from b array using indices
-    b_values = tl.load(b_ptr + indices, mask=mask)
+    # Gather from b using indices
+    gathered_values = tl.load(b_ptr + indices, mask=mask)
     
-    # Store to a array
-    tl.store(a_ptr + offsets, b_values, mask=mask)
+    # Store to a
+    tl.store(a_ptr + offsets, gathered_values, mask=mask)
 
 def vag_triton(a, b, ip):
     n_elements = a.numel()

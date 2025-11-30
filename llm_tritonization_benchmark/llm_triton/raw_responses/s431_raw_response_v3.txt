@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s431
-# Generated: 2025-11-30 11:08:12
+# Generated: 2025-11-30 14:10:24
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 892
-# Output Tokens: 370
+# Output Tokens: 366
 
 ================================================================================
 PROMPT:
@@ -112,7 +112,7 @@ def s431_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load a[i+k] where k=0 (since k1=1, k2=2, k=2*1-2=0)
+    # Load a[i+k] where k=0 (k1=1, k2=2, k=2*k1-k2=0)
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     # Load b[i]
     b_vals = tl.load(b_ptr + offsets, mask=mask)
@@ -128,5 +128,5 @@ def s431_triton(a, b):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s431_kernel[grid](a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    s431_kernel[grid](a, b, n_elements, BLOCK_SIZE)
 ```

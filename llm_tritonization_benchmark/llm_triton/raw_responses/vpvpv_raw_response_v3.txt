@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for vpvpv
-# Generated: 2025-11-30 11:10:20
+# Generated: 2025-11-30 14:12:31
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 847
-# Output Tokens: 333
+# Output Tokens: 321
 
 ================================================================================
 PROMPT:
@@ -92,9 +92,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def vpvpv_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -114,12 +114,8 @@ def vpvpv_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 def vpvpv_triton(a, b, c):
     n_elements = a.numel()
     
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vpvpv_kernel[grid](
-        a, b, c,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    vpvpv_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
 ```

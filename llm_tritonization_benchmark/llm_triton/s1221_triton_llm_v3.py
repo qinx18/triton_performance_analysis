@@ -4,36 +4,38 @@ import torch
 
 @triton.jit
 def s1221_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get program ID and compute the range of elements this block will process
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Start from index 4, so adjust offsets
-    offsets = offsets + 4
-    mask = offsets < n_elements
+    # Create mask for valid elements (starting from index 4)
+    mask = (offsets >= 4) & (offsets < n_elements)
     
-    # Load current elements
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    # Load a[i] for current positions
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
     
-    # Load b[i-4] elements
+    # Load b[i-4] for the dependency
     b_prev_offsets = offsets - 4
-    b_prev_vals = tl.load(b_ptr + b_prev_offsets, mask=mask)
+    b_prev_mask = (b_prev_offsets >= 0) & mask
+    b_prev_vals = tl.load(b_ptr + b_prev_offsets, mask=b_prev_mask, other=0.0)
     
     # Compute b[i] = b[i-4] + a[i]
     result = b_prev_vals + a_vals
     
-    # Store result
+    # Store result back to b[i]
     tl.store(b_ptr + offsets, result, mask=mask)
 
 def s1221_triton(a, b):
     n_elements = a.shape[0]
     
-    # We start from index 4, so we process n_elements - 4 elements
-    elements_to_process = n_elements - 4
-    
+    # Choose block size
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(elements_to_process, BLOCK_SIZE),)
     
+    # Calculate grid size
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    # Launch kernel
     s1221_kernel[grid](
         a, b, n_elements,
         BLOCK_SIZE=BLOCK_SIZE

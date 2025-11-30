@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s2710
-# Generated: 2025-11-30 11:00:56
+# Generated: 2025-11-30 14:02:57
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1224
-# Output Tokens: 826
+# Output Tokens: 764
 
 ================================================================================
 PROMPT:
@@ -131,51 +131,50 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s2710_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, x, len_1d, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
+def s2710_kernel(
+    a_ptr, b_ptr, c_ptr, d_ptr, e_ptr,
+    len_1d: tl.constexpr,
+    x,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < len_1d
     
-    # Load data
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    d_vals = tl.load(d_ptr + offsets, mask=mask)
-    e_vals = tl.load(e_ptr + offsets, mask=mask)
+    # Load arrays
+    a = tl.load(a_ptr + offsets, mask=mask)
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
+    d = tl.load(d_ptr + offsets, mask=mask)
+    e = tl.load(e_ptr + offsets, mask=mask)
     
-    # Main conditional: if (a[i] > b[i])
-    cond1 = a_vals > b_vals
+    # Main condition: if (a[i] > b[i])
+    cond1 = a > b
     
-    # Branch 1: a[i] > b[i]
-    a_new_branch1 = a_vals + b_vals * d_vals
+    # If branch: a[i] > b[i]
+    a_new = tl.where(cond1, a + b * d, a)
     
-    # Nested conditional: if (LEN_1D > 10)
-    len_1d_gt_10 = len_1d > 10
-    if len_1d_gt_10:
-        c_new_branch1 = c_vals + d_vals * d_vals
+    # Nested if in true branch: if (LEN_1D > 10)
+    if len_1d > 10:
+        c_true_branch = tl.where(cond1, c + d * d, c)
     else:
-        c_new_branch1 = d_vals * e_vals + 1.0
+        c_true_branch = tl.where(cond1, d * e + 1.0, c)
     
-    # Branch 2: a[i] <= b[i]
-    b_new_branch2 = a_vals + e_vals * e_vals
+    # Else branch: a[i] <= b[i]
+    b_new = tl.where(~cond1, a + e * e, b)
     
-    # Nested conditional: if (x > 0.)
-    x_gt_zero = x > 0.0
-    if x_gt_zero:
-        c_new_branch2 = a_vals + d_vals * d_vals
+    # Nested if in false branch: if (x > 0.)
+    cond2 = x > 0.0
+    if cond2:
+        c_false_branch = tl.where(~cond1, a + d * d, c_true_branch)
     else:
-        c_new_branch2 = c_vals + e_vals * e_vals
-    
-    # Select based on main condition
-    a_final = tl.where(cond1, a_new_branch1, a_vals)
-    b_final = tl.where(cond1, b_vals, b_new_branch2)
-    c_final = tl.where(cond1, c_new_branch1, c_new_branch2)
+        c_false_branch = tl.where(~cond1, c + e * e, c_true_branch)
     
     # Store results
-    tl.store(a_ptr + offsets, a_final, mask=mask)
-    tl.store(b_ptr + offsets, b_final, mask=mask)
-    tl.store(c_ptr + offsets, c_final, mask=mask)
+    tl.store(a_ptr + offsets, a_new, mask=mask)
+    tl.store(b_ptr + offsets, b_new, mask=mask)
+    tl.store(c_ptr + offsets, c_false_branch, mask=mask)
 
 def s2710_triton(a, b, c, d, e, x):
     len_1d = a.shape[0]
@@ -183,8 +182,11 @@ def s2710_triton(a, b, c, d, e, x):
     grid = (triton.cdiv(len_1d, BLOCK_SIZE),)
     
     s2710_kernel[grid](
-        a, b, c, d, e, 
-        x, len_1d, 
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, c, d, e,
+        len_1d,
+        x,
+        BLOCK_SIZE=BLOCK_SIZE,
     )
+    
+    return a, b, c
 ```

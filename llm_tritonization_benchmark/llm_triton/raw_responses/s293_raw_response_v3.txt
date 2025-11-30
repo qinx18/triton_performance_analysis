@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s293
-# Generated: 2025-11-30 11:02:48
+# Generated: 2025-11-30 14:05:03
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['a']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1356
-# Output Tokens: 334
+# Output Tokens: 337
 
 ================================================================================
 PROMPT:
@@ -162,23 +162,22 @@ def s293_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load a[0] from the copy
-    a_0 = tl.load(a_copy_ptr)
+    # Load a[0] from the copy (broadcast to all elements in block)
+    a_0_val = tl.load(a_copy_ptr)
     
-    # Store a[0] to all positions a[i]
-    tl.store(a_ptr + offsets, a_0, mask=mask)
+    # Store a[0] to all positions in this block
+    tl.store(a_ptr + offsets, a_0_val, mask=mask)
 
 def s293_triton(a):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
     
     # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
     
-    # Calculate grid size
+    # Launch configuration
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Launch kernel
     s293_kernel[grid](
         a,
         a_copy,

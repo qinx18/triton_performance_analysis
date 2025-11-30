@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s1111_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -9,7 +9,7 @@ def s1111_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexp
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load data
+    # Load elements from b, c, d arrays
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
@@ -24,6 +24,7 @@ def s1111_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexp
 
 def s1111_triton(a, b, c, d):
     n_elements = a.shape[0] // 2
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     

@@ -12,9 +12,7 @@ def s256_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Get the current block
-    block_id = tl.program_id(0)
-    i = block_id
+    i = tl.program_id(0)
     
     if i >= LEN_2D:
         return
@@ -43,10 +41,10 @@ def s256_kernel(
 def s256_triton(a, aa, bb, d):
     LEN_2D = a.shape[0]
     
-    # Create read-only copy of array a to handle WAR dependencies
+    # Create read-only copy of array a
     a_copy = a.clone()
     
-    # Launch kernel with one block per i dimension
+    # Launch kernel with one thread per i dimension
     grid = (LEN_2D,)
     
     s256_kernel[grid](
@@ -55,6 +53,6 @@ def s256_triton(a, aa, bb, d):
         aa,
         bb,
         d,
-        LEN_2D,
+        LEN_2D=LEN_2D,
         BLOCK_SIZE=256,
     )

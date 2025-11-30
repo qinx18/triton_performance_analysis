@@ -5,45 +5,44 @@ import triton.language as tl
 @triton.jit
 def s331_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     # This kernel finds the last index where a[i] < 0
-    # We need to use a reduction approach since this is inherently sequential
+    # We need to process all elements and find the maximum valid index
     
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load data
+    # Load elements from array a
     a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
     
-    # Check condition and create valid indices
-    condition = a_vals < 0.0
-    valid_indices = tl.where(condition & mask, offsets, -1)
+    # Check which elements are < 0
+    negative_mask = a_vals < 0.0
     
-    # Find the maximum valid index in this block
-    max_idx = tl.max(valid_indices)
+    # Combine with bounds mask
+    valid_negative = negative_mask & mask
     
-    # Store the result for this block
-    tl.store(result_ptr + pid, max_idx)
+    # For each valid negative element, we want its index
+    # We'll use a reduction to find the maximum index
+    indices = tl.where(valid_negative, offsets, -1)
+    max_idx = tl.max(indices, axis=0)
+    
+    # Store the result using atomic max to handle multiple blocks
+    if max_idx >= 0:
+        tl.atomic_max(result_ptr, max_idx)
 
 def s331_triton(a):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
+    
+    # Initialize result tensor with -1 (no negative elements found)
+    result = torch.tensor([-1], dtype=torch.int32, device=a.device)
     
     # Choose block size
     BLOCK_SIZE = 256
-    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
-    
-    # Create output tensor for block results
-    block_results = torch.full((grid_size,), -1, dtype=torch.int32, device=a.device)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     # Launch kernel
-    s331_kernel[(grid_size,)](
-        a, block_results, n_elements, BLOCK_SIZE
+    s331_kernel[grid](
+        a, result, n_elements, BLOCK_SIZE
     )
     
-    # Find the maximum index across all blocks
-    j = torch.max(block_results).item()
-    
-    # Convert to float for chksum (matching C code behavior)
-    chksum = float(j)
-    
-    return j
+    return result.item()

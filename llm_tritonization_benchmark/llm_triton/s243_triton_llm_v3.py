@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s243_kernel(
@@ -8,20 +8,20 @@ def s243_kernel(
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_start = tl.program_id(axis=0) * BLOCK_SIZE
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load input values
+    # Load initial values
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     e_vals = tl.load(e_ptr + offsets, mask=mask)
     
-    # Load a[i+1] values from copy
+    # Load a[i+1] values for the third statement
     offsets_plus1 = offsets + 1
-    mask_plus1 = offsets_plus1 < (n_elements + 1)  # Allow reading a[i+1] for valid range
-    a_plus1_vals = tl.load(a_copy_ptr + offsets_plus1, mask=mask_plus1, other=0.0)
+    mask_plus1 = offsets_plus1 < (n_elements + 1)  # Allow reading a[i+1] where i < n_elements-1
+    a_plus1_vals = tl.load(a_copy_ptr + offsets_plus1, mask=mask_plus1)
     
     # First statement: a[i] = b[i] + c[i] * d[i]
     a_vals = b_vals + c_vals * d_vals
@@ -39,7 +39,7 @@ def s243_kernel(
 def s243_triton(a, b, c, d, e):
     n_elements = len(a) - 1  # Loop goes to LEN_1D-1
     
-    # Create read-only copy of array a for WAR dependency handling
+    # Create read-only copy of 'a' to handle WAR dependencies
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
@@ -48,5 +48,5 @@ def s243_triton(a, b, c, d, e):
     s243_kernel[grid](
         a, a_copy, b, c, d, e,
         n_elements,
-        BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE,
     )

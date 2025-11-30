@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s231_kernel(
@@ -10,16 +10,21 @@ def s231_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Get program ID for i dimension (columns)
-    i = tl.program_id(0)
+    # Get the current block's starting position for the i dimension
+    block_id = tl.program_id(0)
+    i = block_id
     
-    # Process column i sequentially for j from 1 to LEN_2D-1
+    if i >= LEN_2D:
+        return
+    
+    # Process j dimension sequentially from 1 to LEN_2D-1
     for j in range(1, LEN_2D):
-        # Calculate offsets for current and previous row
+        # Current position: aa[j][i]
         current_offset = j * LEN_2D + i
+        # Previous position: aa[j-1][i]
         prev_offset = (j - 1) * LEN_2D + i
         
-        # Load values from read-only copy and bb array
+        # Load from the read-only copy and bb array
         aa_prev_val = tl.load(aa_copy_ptr + prev_offset)
         bb_val = tl.load(bb_ptr + current_offset)
         
@@ -32,17 +37,17 @@ def s231_kernel(
 def s231_triton(aa, bb):
     LEN_2D = aa.shape[0]
     
-    # Create read-only copy to handle WAR dependencies
+    # Create read-only copy to handle WAR dependency
     aa_copy = aa.clone()
     
-    # Launch kernel with one thread per column (i dimension)
+    # Grid size: one block per column (i dimension)
     grid = (LEN_2D,)
-    BLOCK_SIZE = 256
     
+    # Launch kernel
     s231_kernel[grid](
         aa,
         aa_copy,
         bb,
-        LEN_2D,
-        BLOCK_SIZE,
+        LEN_2D=LEN_2D,
+        BLOCK_SIZE=1,
     )

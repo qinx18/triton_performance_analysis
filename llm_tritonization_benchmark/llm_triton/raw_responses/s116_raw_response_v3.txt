@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s116
-# Generated: 2025-11-30 10:51:47
+# Generated: 2025-11-30 13:53:44
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['a']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1562
-# Output Tokens: 729
+# Output Tokens: 947
 
 ================================================================================
 PROMPT:
@@ -165,32 +165,45 @@ def s116_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE * 5
+    block_start = block_id * BLOCK_SIZE
     
-    offsets = block_start + tl.arange(0, BLOCK_SIZE) * 5
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < (n_elements - 5)
     
-    # Load original values from read-only copy
-    a_i = tl.load(a_copy_ptr + offsets, mask=mask)
-    a_i1 = tl.load(a_copy_ptr + offsets + 1, mask=mask)
-    a_i2 = tl.load(a_copy_ptr + offsets + 2, mask=mask)
-    a_i3 = tl.load(a_copy_ptr + offsets + 3, mask=mask)
-    a_i4 = tl.load(a_copy_ptr + offsets + 4, mask=mask)
-    a_i5 = tl.load(a_copy_ptr + offsets + 5, mask=mask)
+    # Each thread processes one block of 5 elements
+    base_idx = offsets * 5
+    base_mask = base_idx < (n_elements - 5)
     
-    # Compute updates according to dependencies
-    new_a_i = a_i1 * a_i
-    new_a_i1 = a_i2 * a_i1
-    new_a_i2 = a_i3 * a_i2
-    new_a_i3 = a_i4 * a_i3
-    new_a_i4 = a_i5 * a_i4
+    # Load values from read-only copy for all required indices
+    a0_vals = tl.load(a_copy_ptr + base_idx, mask=base_mask, other=0.0)
+    a1_vals = tl.load(a_copy_ptr + base_idx + 1, mask=base_mask, other=0.0)
+    a2_vals = tl.load(a_copy_ptr + base_idx + 2, mask=base_mask, other=0.0)
+    a3_vals = tl.load(a_copy_ptr + base_idx + 3, mask=base_mask, other=0.0)
+    a4_vals = tl.load(a_copy_ptr + base_idx + 4, mask=base_mask, other=0.0)
+    a5_vals = tl.load(a_copy_ptr + base_idx + 5, mask=base_mask, other=0.0)
+    
+    # Compute results sequentially to maintain dependencies
+    # a[i] = a[i + 1] * a[i]
+    result0 = a1_vals * a0_vals
+    
+    # a[i + 1] = a[i + 2] * a[i + 1]
+    result1 = a2_vals * a1_vals
+    
+    # a[i + 2] = a[i + 3] * a[i + 2]
+    result2 = a3_vals * a2_vals
+    
+    # a[i + 3] = a[i + 4] * a[i + 3]
+    result3 = a4_vals * a3_vals
+    
+    # a[i + 4] = a[i + 5] * a[i + 4]
+    result4 = a5_vals * a4_vals
     
     # Store results to original array
-    tl.store(a_ptr + offsets, new_a_i, mask=mask)
-    tl.store(a_ptr + offsets + 1, new_a_i1, mask=mask)
-    tl.store(a_ptr + offsets + 2, new_a_i2, mask=mask)
-    tl.store(a_ptr + offsets + 3, new_a_i3, mask=mask)
-    tl.store(a_ptr + offsets + 4, new_a_i4, mask=mask)
+    tl.store(a_ptr + base_idx, result0, mask=base_mask)
+    tl.store(a_ptr + base_idx + 1, result1, mask=base_mask)
+    tl.store(a_ptr + base_idx + 2, result2, mask=base_mask)
+    tl.store(a_ptr + base_idx + 3, result3, mask=base_mask)
+    tl.store(a_ptr + base_idx + 4, result4, mask=base_mask)
 
 def s116_triton(a):
     n_elements = a.shape[0]
@@ -198,17 +211,16 @@ def s116_triton(a):
     # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
     
-    BLOCK_SIZE = 256
-    num_blocks = (n_elements + BLOCK_SIZE * 5 - 1) // (BLOCK_SIZE * 5)
+    # Calculate number of blocks (each block processes 5 elements)
+    num_blocks = (n_elements - 5 + 4) // 5  # Ceiling division
     
-    grid = (num_blocks,)
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(num_blocks, BLOCK_SIZE),)
     
     s116_kernel[grid](
         a,
         a_copy,
         n_elements,
-        BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a
 ```

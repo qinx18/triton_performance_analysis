@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s122
-# Generated: 2025-11-30 10:52:39
+# Generated: 2025-11-30 13:54:41
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 986
-# Output Tokens: 531
+# Output Tokens: 467
 
 ================================================================================
 PROMPT:
@@ -109,56 +109,56 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s122_kernel(
-    a_ptr, b_ptr,
-    n1, n3,
-    LEN_1D,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # Calculate the number of iterations in the original loop
-    num_iters = (LEN_1D - (n1 - 1) + n3 - 1) // n3
+def s122_kernel(a_ptr, b_ptr, n1, n3, LEN_1D, BLOCK_SIZE: tl.constexpr):
+    # Calculate iteration index
+    iter_idx = tl.program_id(0)
     
-    # Get program ID and calculate which iteration this thread handles
-    pid = tl.program_id(axis=0)
+    # Calculate the actual i value for this iteration
+    i = n1 - 1 + iter_idx * n3
     
-    if pid >= num_iters:
+    # Check if this iteration is valid
+    if i >= LEN_1D:
         return
     
-    # Calculate i, j, k values for this iteration
-    i = (n1 - 1) + pid * n3
-    j = 1
-    k = j * (pid + 1)  # k accumulates j for each iteration
+    # Calculate k = j * (iter_idx + 1), where j = 1
+    k = iter_idx + 1
     
-    # Bounds check
-    if i < LEN_1D:
-        # Load and update: a[i] += b[LEN_1D - k]
-        b_idx = LEN_1D - k
-        if b_idx >= 0 and b_idx < LEN_1D:
-            a_val = tl.load(a_ptr + i)
-            b_val = tl.load(b_ptr + b_idx)
-            tl.store(a_ptr + i, a_val + b_val)
+    # Calculate indices
+    b_idx = LEN_1D - k
+    
+    # Check bounds
+    if b_idx < 0 or b_idx >= LEN_1D:
+        return
+    
+    # Load values
+    a_val = tl.load(a_ptr + i)
+    b_val = tl.load(b_ptr + b_idx)
+    
+    # Compute and store
+    result = a_val + b_val
+    tl.store(a_ptr + i, result)
 
 def s122_triton(a, b, n1, n3):
     LEN_1D = a.shape[0]
     
     # Calculate number of iterations
-    num_iters = (LEN_1D - (n1 - 1) + n3 - 1) // n3
+    num_iters = 0
+    for i in range(n1-1, LEN_1D, n3):
+        num_iters += 1
     
-    if num_iters <= 0:
+    if num_iters == 0:
         return
     
+    # Launch kernel
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(num_iters, BLOCK_SIZE),)
+    grid = (num_iters,)
     
     s122_kernel[grid](
-        a, b,
-        n1, n3,
-        LEN_1D,
-        BLOCK_SIZE=BLOCK_SIZE,
+        a, b, n1, n3, LEN_1D, BLOCK_SIZE
     )
 ```

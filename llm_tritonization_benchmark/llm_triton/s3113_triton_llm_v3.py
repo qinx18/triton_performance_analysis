@@ -1,44 +1,36 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s3113_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    
-    # Calculate offsets for this block
-    block_start = pid * BLOCK_SIZE
+def s3113_kernel(a_ptr, max_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Load block of elements
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load data
+    # Load values and compute absolute values
     a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    
-    # Compute absolute values
     abs_vals = tl.abs(a_vals)
     
-    # Find maximum in this block
+    # Reduce to find maximum within block
     block_max = tl.max(abs_vals, axis=0)
     
     # Store block maximum
-    tl.store(output_ptr + pid, block_max)
+    tl.atomic_max(max_ptr, block_max)
 
 def s3113_triton(a):
-    n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
+    n_elements = a.numel()
     
-    # Calculate number of blocks needed
-    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
+    # Initialize max with absolute value of first element
+    max_result = torch.abs(a[0:1]).clone()
     
-    # Create output tensor for block maximums
-    block_maxs = torch.zeros(grid_size, device=a.device, dtype=a.dtype)
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Launch kernel to find maximum in each block
-    s3113_kernel[(grid_size,)](
-        a, block_maxs, n_elements, BLOCK_SIZE
+    s3113_kernel[grid](
+        a, max_result, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Find global maximum from block maximums
-    max_val = torch.max(block_maxs)
-    
-    return max_val
+    return max_result.item()

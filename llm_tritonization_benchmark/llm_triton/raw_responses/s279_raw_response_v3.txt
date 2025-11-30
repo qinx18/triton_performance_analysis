@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s279
-# Generated: 2025-11-30 11:02:20
+# Generated: 2025-11-30 14:04:28
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1092
-# Output Tokens: 859
+# Output Tokens: 854
 
 ================================================================================
 PROMPT:
@@ -116,9 +116,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s279_kernel(
@@ -131,42 +131,38 @@ def s279_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load arrays
+    # Load all arrays
     a = tl.load(a_ptr + offsets, mask=mask)
     b = tl.load(b_ptr + offsets, mask=mask)
     c = tl.load(c_ptr + offsets, mask=mask)
     d = tl.load(d_ptr + offsets, mask=mask)
     e = tl.load(e_ptr + offsets, mask=mask)
     
-    # Condition: a[i] > 0
+    # Control flow logic using conditional operations
+    # if (a[i] > 0.) goto L20; else continue to next line
     cond1 = a > 0.0
     
-    # Path 1: a[i] <= 0
+    # Path when a[i] <= 0:
     # b[i] = -b[i] + d[i] * d[i]
     b_new = -b + d * d
     
-    # Condition: b[i] <= a[i] (only for path 1)
+    # if (b[i] <= a[i]) goto L30; else continue
     cond2 = b_new <= a
     
-    # Path 1a: a[i] <= 0 and b[i] > a[i]
-    # c[i] += d[i] * e[i]
-    c_path1a = c + d * e
+    # c[i] += d[i] * e[i] (when a[i] <= 0 and b[i] > a[i])
+    c_path1 = c + d * e
     
-    # Path 1b: a[i] <= 0 and b[i] <= a[i]
-    # c remains unchanged
-    c_path1b = c
-    
-    # Combine path 1a and 1b
-    c_path1 = tl.where(cond2, c_path1b, c_path1a)
-    
-    # Path 2: a[i] > 0
-    # c[i] = -c[i] + e[i] * e[i]
+    # L20: c[i] = -c[i] + e[i] * e[i] (when a[i] > 0)
     c_path2 = -c + e * e
-    b_path2 = b  # b remains unchanged in this path
     
-    # Select between paths based on condition 1
-    c_final = tl.where(cond1, c_path2, c_path1)
-    b_final = tl.where(cond1, b_path2, b_new)
+    # Select c based on conditions
+    # If a[i] > 0, use c_path2
+    # If a[i] <= 0 and b[i] <= a[i], use original c
+    # If a[i] <= 0 and b[i] > a[i], use c_path1
+    c_final = tl.where(cond1, c_path2, tl.where(cond2, c, c_path1))
+    
+    # Update b only when a[i] <= 0
+    b_final = tl.where(cond1, b, b_new)
     
     # L30: a[i] = b[i] + c[i] * d[i]
     a_final = b_final + c_final * d

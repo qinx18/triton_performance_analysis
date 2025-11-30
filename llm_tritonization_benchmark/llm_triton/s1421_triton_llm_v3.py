@@ -9,14 +9,14 @@ def s1421_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load from a and xx (which is b + n_elements)
+    # Load a[i] and xx[i] where xx = &b[LEN_1D/2]
     a_vals = tl.load(a_ptr + offsets, mask=mask)
-    xx_vals = tl.load(b_ptr + n_elements + offsets, mask=mask)
+    xx_vals = tl.load(b_ptr + (n_elements + offsets), mask=mask)  # xx[i] = b[LEN_1D/2 + i]
     
     # Compute b[i] = xx[i] + a[i]
     result = xx_vals + a_vals
     
-    # Store to b
+    # Store result
     tl.store(b_ptr + offsets, result, mask=mask)
 
 def s1421_triton(a, b):
@@ -26,5 +26,6 @@ def s1421_triton(a, b):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s1421_kernel[grid](
-        a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE
+        a, b, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )

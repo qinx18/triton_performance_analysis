@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s315
-# Generated: 2025-11-30 11:04:16
+# Generated: 2025-11-30 14:06:29
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1011
-# Output Tokens: 762
+# Output Tokens: 550
 
 ================================================================================
 PROMPT:
@@ -120,63 +120,54 @@ import torch
 
 @triton.jit
 def s315_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel finds the maximum value and its index using reduction
+    # This is a reduction operation to find max value and its index
+    # We need to use a single block to handle the reduction properly
     pid = tl.program_id(0)
     
-    # Each block processes BLOCK_SIZE elements
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    if pid > 0:
+        return
     
-    # Load values with mask
-    vals = tl.load(a_ptr + offsets, mask=mask, other=float('-inf'))
+    # Initialize with first element
+    max_val = tl.load(a_ptr)
+    max_idx = 0
     
-    # Find local maximum and its index
-    local_max = tl.max(vals)
-    local_max_mask = vals == local_max
+    # Process elements in blocks
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        
+        # Load block of data
+        vals = tl.load(a_ptr + offsets, mask=mask, other=float('-inf'))
+        
+        # Find local max in this block
+        for i in range(BLOCK_SIZE):
+            if block_start + i < n_elements:
+                current_val = tl.load(a_ptr + block_start + i)
+                if current_val > max_val:
+                    max_val = current_val
+                    max_idx = block_start + i
     
-    # Get the first index where maximum occurs
-    indices = tl.arange(0, BLOCK_SIZE)
-    masked_indices = tl.where(local_max_mask & mask, offsets, n_elements)
-    local_max_idx = tl.min(masked_indices)
-    
-    # Store results: [max_value, max_index] for each block
-    result_offset = pid * 2
-    tl.store(result_ptr + result_offset, local_max)
-    tl.store(result_ptr + result_offset + 1, local_max_idx.to(tl.float32))
+    # Store results
+    tl.store(result_ptr, max_val)
+    tl.store(result_ptr + 1, max_idx)
 
 def s315_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
     
-    # Calculate number of blocks needed
-    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
+    # Result tensor to store [max_value, max_index]
+    result = torch.zeros(2, dtype=a.dtype, device=a.device)
     
-    # Create result tensor to store [max_value, max_index] pairs
-    block_results = torch.empty((grid_size * 2,), device=a.device, dtype=a.dtype)
+    BLOCK_SIZE = 256
+    grid = (1,)  # Single block for reduction
     
-    # Launch kernel for block-wise reduction
-    s315_kernel[(grid_size,)](
-        a, block_results, n_elements, BLOCK_SIZE
+    s315_kernel[grid](
+        a, result, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Final reduction on CPU for simplicity (small number of blocks)
-    block_results_cpu = block_results.cpu()
+    max_val = result[0]
+    max_idx = int(result[1])
+    chksum = max_val + max_idx
     
-    # Extract max values and indices from each block
-    max_vals = block_results_cpu[::2]
-    max_indices = block_results_cpu[1::2].int()
-    
-    # Find global maximum
-    global_max_val = torch.max(max_vals).item()
-    global_max_block = torch.argmax(max_vals).item()
-    global_max_idx = max_indices[global_max_block].item()
-    
-    # Handle case where global_max_idx might be invalid due to masking
-    if global_max_idx >= n_elements:
-        # Find the actual index by checking the original array
-        global_max_idx = torch.argmax(a).item()
-    
-    # Return the final result as in original C code
-    return global_max_idx + global_max_val + 1
+    return max_val, max_idx, chksum
 ```

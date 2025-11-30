@@ -13,32 +13,28 @@ def s119_kernel(
 ):
     pid = tl.program_id(0)
     j_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE) + 1
-    mask = j_offsets < LEN_2D
+    j_mask = j_offsets < LEN_2D
     
-    # Calculate 2D indices for aa[i][j]
-    write_offsets = i_val * LEN_2D + j_offsets
-    
-    # Calculate 2D indices for aa[i-1][j-1] 
+    # Calculate 2D array offsets
     read_offsets = (i_val - 1) * LEN_2D + (j_offsets - 1)
-    
-    # Calculate 2D indices for bb[i][j]
+    write_offsets = i_val * LEN_2D + j_offsets
     bb_offsets = i_val * LEN_2D + j_offsets
     
-    # Load values
-    aa_vals = tl.load(aa_copy_ptr + read_offsets, mask=mask)
-    bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask)
+    # Load from read-only copy and bb array
+    aa_vals = tl.load(aa_copy_ptr + read_offsets, mask=j_mask)
+    bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask)
     
     # Compute result
     result = aa_vals + bb_vals
     
-    # Store result
-    tl.store(aa_ptr + write_offsets, result, mask=mask)
+    # Store to original array
+    tl.store(aa_ptr + write_offsets, result, mask=j_mask)
 
 def s119_triton(aa, bb):
     LEN_2D = aa.shape[0]
     BLOCK_SIZE = 256
     
-    # Create read-only copy for WAR dependency handling
+    # Create read-only copy
     aa_copy = aa.clone()
     
     # Sequential loop over i, parallel over j

@@ -24,7 +24,7 @@ def s421_kernel(xx_ptr, a_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     tl.store(xx_ptr + offsets, result, mask=mask)
 
 def s421_triton(xx, a):
-    n_elements = len(xx) - 1
+    n_elements = xx.shape[0] - 1
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)

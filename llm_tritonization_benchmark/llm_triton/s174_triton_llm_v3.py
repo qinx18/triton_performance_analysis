@@ -19,13 +19,8 @@ def s174_kernel(a_ptr, b_ptr, M, BLOCK_SIZE: tl.constexpr):
     # Store to a[i+M]
     tl.store(a_ptr + offsets + M, result, mask=mask)
 
-def s174_triton(a, b):
-    M = a.shape[0] // 2  # Assuming a has size 2*M based on access pattern a[i+M]
-    
+def s174_triton(a, b, M):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(M, BLOCK_SIZE),)
     
-    s174_kernel[grid](
-        a, b, M,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s174_kernel[grid](a, b, M, BLOCK_SIZE)

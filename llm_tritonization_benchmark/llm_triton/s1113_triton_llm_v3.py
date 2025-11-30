@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s1113_kernel(
@@ -8,14 +8,15 @@ def s1113_kernel(
     a_copy_ptr,
     b_ptr,
     n_elements,
-    mid_idx,
+    len_1d,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_start = tl.program_id(axis=0) * BLOCK_SIZE
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load the value from the middle of the array (read from copy)
+    # Read from copy for a[LEN_1D/2]
+    mid_idx = len_1d // 2
     a_mid_val = tl.load(a_copy_ptr + mid_idx)
     
     # Load b values
@@ -29,19 +30,17 @@ def s1113_kernel(
 
 def s1113_triton(a, b):
     n_elements = a.numel()
-    mid_idx = n_elements // 2
+    len_1d = n_elements
     
     # Create read-only copy to handle WAR dependency
     a_copy = a.clone()
     
-    BLOCK_SIZE = 1024
+    # Launch parameters
+    BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s1113_kernel[grid](
-        a,
-        a_copy,
-        b,
-        n_elements,
-        mid_idx,
+        a, a_copy, b,
+        n_elements, len_1d,
         BLOCK_SIZE=BLOCK_SIZE,
     )

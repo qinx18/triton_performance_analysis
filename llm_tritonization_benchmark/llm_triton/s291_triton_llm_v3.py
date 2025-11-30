@@ -9,26 +9,24 @@ def s291_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Sequential computation due to dependency: im1 = i from previous iteration
+    # Sequential computation due to dependency
     for i in range(n_elements):
         if i == 0:
-            im1 = n_elements - 1
+            im1_val = tl.load(b_ptr + n_elements - 1)  # b[LEN_1D-1]
         else:
-            im1 = i - 1
-            
-        b_i = tl.load(b_ptr + i)
-        b_im1 = tl.load(b_ptr + im1)
-        result = (b_i + b_im1) * 0.5
+            im1_val = tl.load(b_ptr + i - 1)  # b[i-1]
+        
+        b_val = tl.load(b_ptr + i)
+        result = (b_val + im1_val) * 0.5
         tl.store(a_ptr + i, result)
 
 def s291_triton(a, b):
     n_elements = a.shape[0]
-    
-    # Use single thread since computation is inherently sequential
-    BLOCK_SIZE = 1
-    grid = (1,)
+    BLOCK_SIZE = 256
+    grid = (1,)  # Single block due to sequential dependency
     
     s291_kernel[grid](
-        a, b, n_elements,
+        a, b,
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )

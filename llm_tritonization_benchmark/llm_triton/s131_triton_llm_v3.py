@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s131_kernel(
@@ -27,7 +27,7 @@ def s131_kernel(
 def s131_triton(a, b):
     n_elements = a.shape[0] - 1
     
-    # Create read-only copy before launching kernel
+    # Create read-only copy for WAR race condition handling
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
@@ -38,5 +38,5 @@ def s131_triton(a, b):
         a_copy,
         b,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE,
     )

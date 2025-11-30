@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1351
-# Generated: 2025-11-30 10:54:50
+# Generated: 2025-11-30 13:56:53
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 928
-# Output Tokens: 289
+# Output Tokens: 291
 
 ================================================================================
 PROMPT:
@@ -103,9 +103,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s1351_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -125,5 +125,6 @@ def s1351_triton(a, b, c):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s1351_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
+    
     return a
 ```

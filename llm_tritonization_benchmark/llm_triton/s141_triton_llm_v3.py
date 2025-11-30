@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s141_kernel(flat_2d_array_ptr, bb_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
@@ -9,27 +9,29 @@ def s141_kernel(flat_2d_array_ptr, bb_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.
     if i >= LEN_2D:
         return
     
-    # Calculate initial k: k = (i+1) * ((i+1) - 1) / 2 + (i+1)-1
+    # Calculate initial k value: k = (i+1) * ((i+1) - 1) / 2 + (i+1) - 1
     # Simplifying: k = i * (i + 1) / 2 + i = i * (i + 3) / 2
     k = i * (i + 1) // 2 + i
     
-    # Process elements from j = i to j = LEN_2D-1
+    # Process the inner j loop sequentially
     for j in range(i, LEN_2D):
         # Load bb[j][i]
-        bb_val = tl.load(bb_ptr + j * LEN_2D + i)
+        bb_offset = j * LEN_2D + i
+        bb_val = tl.load(bb_ptr + bb_offset)
         
-        # Load current flat_2d_array[k], add bb[j][i], and store back
+        # Load current value from flat_2d_array[k]
         current_val = tl.load(flat_2d_array_ptr + k)
-        new_val = current_val + bb_val
-        tl.store(flat_2d_array_ptr + k, new_val)
+        
+        # Update flat_2d_array[k]
+        tl.store(flat_2d_array_ptr + k, current_val + bb_val)
         
         # Update k for next iteration: k += j+1
         k += j + 1
 
 def s141_triton(flat_2d_array, bb):
     LEN_2D = bb.shape[0]
+    BLOCK_SIZE = 256
     
-    BLOCK_SIZE = 128
     grid = (triton.cdiv(LEN_2D, 1),)
     
     s141_kernel[grid](

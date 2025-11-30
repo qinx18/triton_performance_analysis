@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for vag
-# Generated: 2025-11-30 11:09:42
+# Generated: 2025-11-30 14:11:54
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 855
-# Output Tokens: 314
+# Output Tokens: 309
 
 ================================================================================
 PROMPT:
@@ -95,9 +95,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def vag_kernel(a_ptr, b_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -106,14 +106,14 @@ def vag_kernel(a_ptr, b_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load indices from ip array
+    # Load indices
     indices = tl.load(ip_ptr + offsets, mask=mask)
     
-    # Gather from b array using indices
-    b_values = tl.load(b_ptr + indices, mask=mask)
+    # Gather from b using indices
+    gathered_values = tl.load(b_ptr + indices, mask=mask)
     
-    # Store to a array
-    tl.store(a_ptr + offsets, b_values, mask=mask)
+    # Store to a
+    tl.store(a_ptr + offsets, gathered_values, mask=mask)
 
 def vag_triton(a, b, ip):
     n_elements = a.numel()

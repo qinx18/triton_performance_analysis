@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s125
-# Generated: 2025-11-30 10:53:29
+# Generated: 2025-11-30 13:55:34
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 958
-# Output Tokens: 542
+# Output Tokens: 541
 
 ================================================================================
 PROMPT:
@@ -101,48 +101,57 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s125_kernel(flat_2d_array_ptr, aa_ptr, bb_ptr, cc_ptr, 
-                LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s125_kernel(
+    flat_2d_array_ptr,
+    aa_ptr,
+    bb_ptr,
+    cc_ptr,
+    LEN_2D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
     pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < (LEN_2D * LEN_2D)
     
-    # Calculate starting offset for this block
-    offset = pid * BLOCK_SIZE
-    offsets = offset + tl.arange(0, BLOCK_SIZE)
+    # Convert linear index to 2D coordinates
+    i = offsets // LEN_2D
+    j = offsets % LEN_2D
     
-    # Create mask for valid indices
-    mask = offsets < LEN_2D * LEN_2D
+    # Calculate 2D array indices
+    aa_indices = i * LEN_2D + j
     
-    # Load data from 2D arrays using linear indexing
-    aa_vals = tl.load(aa_ptr + offsets, mask=mask, other=0.0)
-    bb_vals = tl.load(bb_ptr + offsets, mask=mask, other=0.0)
-    cc_vals = tl.load(cc_ptr + offsets, mask=mask, other=0.0)
+    # Load values from 2D arrays
+    aa_vals = tl.load(aa_ptr + aa_indices, mask=mask)
+    bb_vals = tl.load(bb_ptr + aa_indices, mask=mask)
+    cc_vals = tl.load(cc_ptr + aa_indices, mask=mask)
     
     # Compute: aa[i][j] + bb[i][j] * cc[i][j]
     result = aa_vals + bb_vals * cc_vals
     
-    # Store result to flat array
+    # Store to flat array
     tl.store(flat_2d_array_ptr + offsets, result, mask=mask)
 
 def s125_triton(flat_2d_array, aa, bb, cc):
     LEN_2D = aa.shape[0]
     total_elements = LEN_2D * LEN_2D
     
-    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(total_elements, BLOCK_SIZE),)
     
-    # Flatten 2D arrays for linear access
-    aa_flat = aa.contiguous().view(-1)
-    bb_flat = bb.contiguous().view(-1)
-    cc_flat = cc.contiguous().view(-1)
-    
     s125_kernel[grid](
-        flat_2d_array, aa_flat, bb_flat, cc_flat,
-        LEN_2D, BLOCK_SIZE
+        flat_2d_array,
+        aa,
+        bb,
+        cc,
+        LEN_2D=LEN_2D,
+        BLOCK_SIZE=BLOCK_SIZE,
     )
+    
+    return flat_2d_array
 ```
