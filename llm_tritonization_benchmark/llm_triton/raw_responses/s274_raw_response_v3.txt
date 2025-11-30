@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s274
-# Generated: 2025-11-28 19:06:19
+# Generated: 2025-11-29 18:13:24
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 958
-# Output Tokens: 527
+# Output Tokens: 548
 
 ================================================================================
 PROMPT:
@@ -102,9 +102,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s274_kernel(
@@ -117,25 +117,24 @@ def s274_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load inputs
+    # Load input arrays
     c = tl.load(c_ptr + offsets, mask=mask)
     d = tl.load(d_ptr + offsets, mask=mask)
     e = tl.load(e_ptr + offsets, mask=mask)
     b = tl.load(b_ptr + offsets, mask=mask)
     
-    # First computation: a[i] = c[i] + e[i] * d[i]
-    a = c + e * d
+    # a[i] = c[i] + e[i] * d[i]
+    a_val = c + e * d
     
-    # Conditional logic
-    condition = a > 0.0
+    # Conditional computation
+    condition = a_val > 0.0
     
-    # If condition is true: b[i] = a[i] + b[i]
-    # If condition is false: a[i] = d[i] * e[i]
-    b_new = tl.where(condition, a + b, b)
-    a_new = tl.where(condition, a, d * e)
+    # if (a[i] > 0.) { b[i] = a[i] + b[i]; } else { a[i] = d[i] * e[i]; }
+    b_new = tl.where(condition, a_val + b, b)
+    a_final = tl.where(condition, a_val, d * e)
     
     # Store results
-    tl.store(a_ptr + offsets, a_new, mask=mask)
+    tl.store(a_ptr + offsets, a_final, mask=mask)
     tl.store(b_ptr + offsets, b_new, mask=mask)
 
 def s274_triton(a, b, c, d, e):
@@ -145,9 +144,12 @@ def s274_triton(a, b, c, d, e):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
+    # Launch kernel
     s274_kernel[grid](
         a, b, c, d, e,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
+    
+    return a, b
 ```

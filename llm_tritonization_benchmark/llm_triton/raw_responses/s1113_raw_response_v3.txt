@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1113
-# Generated: 2025-11-28 17:24:31
+# Generated: 2025-11-29 18:01:50
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['a']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1385
-# Output Tokens: 417
+# Output Tokens: 436
 
 ================================================================================
 PROMPT:
@@ -156,33 +156,33 @@ def s1113_kernel(
     a_copy_ptr,
     b_ptr,
     n_elements,
-    len_1d,
+    mid_idx,
     BLOCK_SIZE: tl.constexpr,
 ):
     block_start = tl.program_id(axis=0) * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Read from copy at fixed position LEN_1D/2
-    mid_idx = len_1d // 2
-    a_mid_val = tl.load(a_copy_ptr + mid_idx)
+    # Load a[LEN_1D/2] from copy (read-only)
+    a_mid = tl.load(a_copy_ptr + mid_idx)
     
-    # Load b values
+    # Load b[i] values
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     
-    # Compute result
-    result = a_mid_val + b_vals
+    # Compute a[i] = a[LEN_1D/2] + b[i]
+    result = a_mid + b_vals
     
     # Store to original array
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s1113_triton(a, b):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    mid_idx = n_elements // 2
     
-    # Create read-only copy to handle WAR race condition
+    # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
     
-    # Choose block size
+    # Launch kernel
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
@@ -191,7 +191,7 @@ def s1113_triton(a, b):
         a_copy,
         b,
         n_elements,
-        a.numel(),
+        mid_idx,
         BLOCK_SIZE=BLOCK_SIZE,
     )
 ```

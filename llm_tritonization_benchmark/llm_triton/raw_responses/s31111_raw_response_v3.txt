@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s31111
-# Generated: 2025-11-28 20:43:13
+# Generated: 2025-11-29 18:15:12
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 963
-# Output Tokens: 595
+# Output Tokens: 483
 
 ================================================================================
 PROMPT:
@@ -109,63 +109,45 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def test_function(ptr, offset):
+def test_kernel(a_ptr, offset):
     # Simple test function - returns the value at the given offset
-    return tl.load(ptr + offset)
+    return tl.load(a_ptr + offset)
 
 @triton.jit
-def s31111_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel computes the sum reduction for specific array elements
-    pid = tl.program_id(axis=0)
+def s31111_kernel(a_ptr, sum_ptr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     
-    if pid == 0:  # Only one block needed for this simple reduction
-        # Load elements at specific offsets and sum them
+    if pid == 0:
+        # Only one thread computes the sum
         sum_val = 0.0
+        sum_val += tl.load(a_ptr + 0)    # test(a)
+        sum_val += tl.load(a_ptr + 4)    # test(&a[4])
+        sum_val += tl.load(a_ptr + 8)    # test(&a[8])
+        sum_val += tl.load(a_ptr + 12)   # test(&a[12])
+        sum_val += tl.load(a_ptr + 16)   # test(&a[16])
+        sum_val += tl.load(a_ptr + 20)   # test(&a[20])
+        sum_val += tl.load(a_ptr + 24)   # test(&a[24])
+        sum_val += tl.load(a_ptr + 28)   # test(&a[28])
         
-        # Check bounds for each access
-        if 0 < n_elements:
-            sum_val += tl.load(a_ptr + 0)
-        if 4 < n_elements:
-            sum_val += tl.load(a_ptr + 4)
-        if 8 < n_elements:
-            sum_val += tl.load(a_ptr + 8)
-        if 12 < n_elements:
-            sum_val += tl.load(a_ptr + 12)
-        if 16 < n_elements:
-            sum_val += tl.load(a_ptr + 16)
-        if 20 < n_elements:
-            sum_val += tl.load(a_ptr + 20)
-        if 24 < n_elements:
-            sum_val += tl.load(a_ptr + 24)
-        if 28 < n_elements:
-            sum_val += tl.load(a_ptr + 28)
-        
-        tl.store(output_ptr, sum_val)
+        tl.store(sum_ptr, sum_val)
 
 def s31111_triton(a):
-    # Ensure input is contiguous
-    a = a.contiguous()
+    # Create output tensor for sum
+    sum_out = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    n_elements = a.shape[0]
-    
-    # Create output tensor for the sum
-    output = torch.zeros(1, dtype=a.dtype, device=a.device)
-    
-    # Launch kernel with single block since we only need one sum
-    BLOCK_SIZE = 32
+    # Launch kernel with single block
     grid = (1,)
+    BLOCK_SIZE = 32
     
     s31111_kernel[grid](
-        a, 
-        output, 
-        n_elements,
+        a, sum_out,
         BLOCK_SIZE=BLOCK_SIZE
     )
     
-    return output.item()
+    return sum_out
 ```

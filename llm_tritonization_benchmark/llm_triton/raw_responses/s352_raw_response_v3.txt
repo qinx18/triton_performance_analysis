@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s352
-# Generated: 2025-11-28 19:11:41
+# Generated: 2025-11-29 18:18:24
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['dot']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1530
-# Output Tokens: 478
+# Output Tokens: 619
 
 ================================================================================
 PROMPT:
@@ -161,49 +161,56 @@ import triton.language as tl
 
 @triton.jit
 def s352_kernel(
-    a_ptr,
-    b_ptr,
-    output_ptr,
+    a_ptr, b_ptr, result_ptr,
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Get block start position
+    # Each program handles one block of the dot product computation
     block_start = tl.program_id(0) * BLOCK_SIZE
     
-    # Initialize dot product accumulator
-    dot_sum = 0.0
+    # Initialize dot accumulator
+    dot = 0.0
     
-    # Process elements in steps of 5
+    # Process elements in blocks of 5 (unrolled)
     for i in range(0, n_elements, 5):
-        if i + 4 < n_elements:  # Ensure we have 5 elements available
+        # Check if we have at least 5 elements remaining
+        if i + 4 < n_elements:
             # Load 5 consecutive elements from both arrays
             a_vals = tl.load(a_ptr + i + tl.arange(0, 5))
             b_vals = tl.load(b_ptr + i + tl.arange(0, 5))
             
-            # Compute dot product for these 5 elements
-            products = a_vals * b_vals
-            dot_sum += tl.sum(products)
+            # Compute unrolled dot product for these 5 elements
+            dot += tl.sum(a_vals * b_vals)
+        else:
+            # Handle remaining elements
+            remaining = n_elements - i
+            if remaining > 0:
+                mask = tl.arange(0, 5) < remaining
+                a_vals = tl.load(a_ptr + i + tl.arange(0, 5), mask=mask, other=0.0)
+                b_vals = tl.load(b_ptr + i + tl.arange(0, 5), mask=mask, other=0.0)
+                dot += tl.sum(a_vals * b_vals)
+            break
     
-    # Store the result (only first thread writes the final result)
-    if tl.program_id(0) == 0:
-        tl.store(output_ptr, dot_sum)
+    # Store the result for this block
+    program_id = tl.program_id(0)
+    tl.store(result_ptr + program_id, dot)
 
 def s352_triton(a, b):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    
+    # Use single block since we need to compute a single dot product
+    BLOCK_SIZE = 1
+    grid = (1,)
     
     # Create output tensor for the dot product result
-    output = torch.zeros(1, dtype=a.dtype, device=a.device)
-    
-    # Use single block since we need to accumulate across all elements
-    BLOCK_SIZE = 1024
-    grid = (1,)
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
     # Launch kernel
     s352_kernel[grid](
-        a, b, output,
+        a, b, result,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
     
-    return output.item()
+    return result[0].item()
 ```

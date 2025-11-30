@@ -5,66 +5,94 @@ import triton.language as tl
 @triton.jit
 def s4116_kernel(
     a_ptr, aa_ptr, ip_ptr,
-    j, inc, len_2d,
+    inc, j, len_2d,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Get program ID
-    pid = tl.program_id(0)
+    # This kernel computes a reduction, so we use one block
+    block_id = tl.program_id(0)
+    if block_id != 0:
+        return
     
-    # Calculate the range of indices this block will handle
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    # Initialize sum
+    sum_val = 0.0
     
-    # Mask for valid indices
-    mask = offsets < (len_2d - 1)
+    # Process elements in blocks
+    for block_start in range(0, len_2d - 1, BLOCK_SIZE):
+        # Load indices for this block
+        i_offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = i_offsets < (len_2d - 1)
+        
+        # Compute offsets for array a
+        a_offsets = inc + i_offsets
+        
+        # Load ip indices
+        ip_indices = tl.load(ip_ptr + i_offsets, mask=mask, other=0)
+        
+        # Compute aa offsets: aa[j-1][ip[i]]
+        aa_offsets = (j - 1) * len_2d + ip_indices
+        
+        # Load from arrays
+        a_vals = tl.load(a_ptr + a_offsets, mask=mask, other=0.0)
+        aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask, other=0.0)
+        
+        # Compute products and sum
+        products = a_vals * aa_vals
+        sum_val += tl.sum(tl.where(mask, products, 0.0))
     
-    # Load indices from ip array
-    ip_indices = tl.load(ip_ptr + offsets, mask=mask, other=0)
-    
-    # Calculate offsets for array a
-    a_offsets = inc + offsets
-    
-    # Load from array a
-    a_vals = tl.load(a_ptr + a_offsets, mask=mask, other=0.0)
-    
-    # Calculate 2D indices for aa array
-    row_idx = j - 1
-    aa_offsets = row_idx * len_2d + ip_indices
-    
-    # Load from aa array
-    aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask, other=0.0)
-    
-    # Compute products
-    products = a_vals * aa_vals
-    
-    # Sum the products
-    partial_sum = tl.sum(products)
-    
-    # Store partial sum (will be reduced on host)
-    tl.store(tl.program_id(0) + tl.zeros([1], dtype=tl.float32), partial_sum)
+    # Store result (only one thread stores)
+    if tl.program_id(0) == 0:
+        result_ptr = a_ptr + 0  # Use a temporary location
+        # We'll return the sum through a separate output tensor
 
-def s4116_triton(a, aa, ip, j, inc, len_2d):
-    # Ensure inputs are on GPU
-    device = a.device
-    aa = aa.to(device)
-    ip = ip.to(device)
+@triton.jit
+def s4116_reduction_kernel(
+    a_ptr, aa_ptr, ip_ptr, output_ptr,
+    inc, j, len_2d,
+    BLOCK_SIZE: tl.constexpr,
+):
+    # Initialize sum
+    sum_val = 0.0
     
-    # Calculate grid size
+    # Process all elements
+    for block_start in range(0, len_2d - 1, BLOCK_SIZE):
+        # Load indices for this block
+        i_offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = i_offsets < (len_2d - 1)
+        
+        # Compute offsets for array a
+        a_offsets = inc + i_offsets
+        
+        # Load ip indices
+        ip_indices = tl.load(ip_ptr + i_offsets, mask=mask, other=0)
+        
+        # Compute aa offsets: aa[j-1][ip[i]]
+        aa_offsets = (j - 1) * len_2d + ip_indices
+        
+        # Load from arrays
+        a_vals = tl.load(a_ptr + a_offsets, mask=mask, other=0.0)
+        aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask, other=0.0)
+        
+        # Compute products and sum
+        products = a_vals * aa_vals
+        sum_val += tl.sum(tl.where(mask, products, 0.0))
+    
+    # Store result
+    tl.store(output_ptr, sum_val)
+
+def s4116_triton(a, aa, ip, inc, j):
+    len_2d = aa.shape[1]  # Assuming aa is 2D array
+    
+    # Create output tensor for the result
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
+    
+    # Launch kernel with single block since we need reduction
     BLOCK_SIZE = 256
-    num_elements = len_2d - 1
-    grid_size = triton.cdiv(num_elements, BLOCK_SIZE)
+    grid = (1,)
     
-    # Create output tensor for partial sums
-    partial_sums = torch.zeros(grid_size, dtype=torch.float32, device=device)
-    
-    # Launch kernel
-    s4116_kernel[(grid_size,)](
-        a, aa, ip,
-        j, inc, len_2d,
+    s4116_reduction_kernel[grid](
+        a, aa, ip, output,
+        inc, j, len_2d,
         BLOCK_SIZE=BLOCK_SIZE,
     )
     
-    # Reduce partial sums on host
-    total_sum = partial_sums.sum().item()
-    
-    return total_sum
+    return output.item()

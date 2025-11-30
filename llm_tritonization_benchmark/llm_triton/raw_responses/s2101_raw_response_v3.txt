@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s2101
-# Generated: 2025-11-28 19:00:37
+# Generated: 2025-11-29 18:08:05
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 860
-# Output Tokens: 504
+# Output Tokens: 450
 
 ================================================================================
 PROMPT:
@@ -93,52 +93,42 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s2101_kernel(
-    aa_ptr, bb_ptr, cc_ptr,
-    LEN_2D: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr,
-):
-    pid = tl.program_id(0)
+def s2101_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
     
-    # Calculate the range of diagonal elements this block will handle
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < LEN_2D
     
-    # Calculate diagonal offsets (i*LEN_2D + i for element [i][i])
-    diag_offsets = offsets * LEN_2D + offsets
+    # Calculate diagonal indices (i, i) -> i * LEN_2D + i
+    diagonal_indices = offsets * LEN_2D + offsets
     
-    # Load diagonal elements with masking
-    aa_vals = tl.load(aa_ptr + diag_offsets, mask=mask)
-    bb_vals = tl.load(bb_ptr + diag_offsets, mask=mask)
-    cc_vals = tl.load(cc_ptr + diag_offsets, mask=mask)
+    # Load diagonal elements
+    bb_diag = tl.load(bb_ptr + diagonal_indices, mask=mask)
+    cc_diag = tl.load(cc_ptr + diagonal_indices, mask=mask)
+    aa_diag = tl.load(aa_ptr + diagonal_indices, mask=mask)
     
     # Perform computation: aa[i][i] += bb[i][i] * cc[i][i]
-    result = aa_vals + bb_vals * cc_vals
+    result = aa_diag + bb_diag * cc_diag
     
-    # Store result back to diagonal elements
-    tl.store(aa_ptr + diag_offsets, result, mask=mask)
+    # Store result
+    tl.store(aa_ptr + diagonal_indices, result, mask=mask)
 
 def s2101_triton(aa, bb, cc):
     LEN_2D = aa.shape[0]
     
-    # Choose block size - power of 2, reasonable for diagonal access
-    BLOCK_SIZE = 128
-    
-    # Calculate number of blocks needed
+    # Choose block size
+    BLOCK_SIZE = 256
     grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
     
-    # Launch kernel
     s2101_kernel[grid](
         aa, bb, cc,
-        LEN_2D,
-        BLOCK_SIZE,
+        LEN_2D=LEN_2D,
+        BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return aa
 ```

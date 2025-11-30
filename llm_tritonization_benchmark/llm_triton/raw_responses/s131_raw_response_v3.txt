@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s131
-# Generated: 2025-11-28 18:58:32
+# Generated: 2025-11-29 18:05:49
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['a']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1390
-# Output Tokens: 372
+# Output Tokens: 353
 
 ================================================================================
 PROMPT:
@@ -166,20 +166,18 @@ def s131_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load from read-only copy and b array
+    # Read from copy and b
     a_vals = tl.load(a_copy_ptr + offsets + 1, mask=mask)
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     
     # Compute result
     result = a_vals + b_vals
     
-    # Store to original array
+    # Store to original a
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s131_triton(a, b):
     n_elements = a.shape[0] - 1
-    
-    # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
     
     BLOCK_SIZE = 256

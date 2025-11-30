@@ -22,10 +22,11 @@ def s1279_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.c
     # Combined condition
     combined_cond = cond1 & cond2
     
-    # c[i] += d[i] * e[i]
-    result = tl.where(combined_cond, c + d * e, c)
+    # c[i] += d[i] * e[i] (only where condition is true)
+    update = d * e
+    c = tl.where(combined_cond, c + update, c)
     
-    tl.store(c_ptr + offsets, result, mask=mask)
+    tl.store(c_ptr + offsets, c, mask=mask)
 
 def s1279_triton(a, b, c, d, e):
     n_elements = a.numel()

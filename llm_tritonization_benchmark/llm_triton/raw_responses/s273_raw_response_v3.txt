@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s273
-# Generated: 2025-11-28 19:06:10
+# Generated: 2025-11-29 18:13:15
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 930
-# Output Tokens: 588
+# Output Tokens: 575
 
 ================================================================================
 PROMPT:
@@ -98,9 +98,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s273_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -111,37 +111,33 @@ def s273_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.co
     
     # Load values
     a_vals = tl.load(a_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     e_vals = tl.load(e_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
     # Compute d[i] * e[i] once
     de_product = d_vals * e_vals
     
     # a[i] += d[i] * e[i]
-    a_new = a_vals + de_product
+    a_vals = a_vals + de_product
     
     # if (a[i] < 0.) b[i] += d[i] * e[i]
-    condition = a_new < 0.0
-    b_new = tl.where(condition, b_vals + de_product, b_vals)
+    condition = a_vals < 0.0
+    b_vals = tl.where(condition, b_vals + de_product, b_vals)
     
     # c[i] += a[i] * d[i]
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    c_new = c_vals + a_new * d_vals
+    c_vals = c_vals + a_vals * d_vals
     
     # Store results
-    tl.store(a_ptr + offsets, a_new, mask=mask)
-    tl.store(b_ptr + offsets, b_new, mask=mask)
-    tl.store(c_ptr + offsets, c_new, mask=mask)
+    tl.store(a_ptr + offsets, a_vals, mask=mask)
+    tl.store(b_ptr + offsets, b_vals, mask=mask)
+    tl.store(c_ptr + offsets, c_vals, mask=mask)
 
 def s273_triton(a, b, c, d, e):
     n_elements = a.numel()
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s273_kernel[grid](
-        a, b, c, d, e,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s273_kernel[grid](a, b, c, d, e, n_elements, BLOCK_SIZE)
 ```

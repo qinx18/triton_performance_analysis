@@ -9,12 +9,12 @@ def s2712_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    a = tl.load(a_ptr + offsets, mask=mask)
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
     
-    condition = a_vals > b_vals
-    result = tl.where(condition, a_vals + b_vals * c_vals, a_vals)
+    condition = a > b
+    result = tl.where(condition, a + b * c, a)
     
     tl.store(a_ptr + offsets, result, mask=mask)
 
@@ -23,8 +23,4 @@ def s2712_triton(a, b, c):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s2712_kernel[grid](
-        a, b, c,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s2712_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)

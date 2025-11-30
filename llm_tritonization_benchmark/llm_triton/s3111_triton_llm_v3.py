@@ -4,27 +4,25 @@ import torch
 
 @triton.jit
 def s3111_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Get program ID
+    # Get program ID and calculate offsets
     pid = tl.program_id(axis=0)
-    
-    # Calculate the starting offset for this block
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
     # Create mask for valid elements
     mask = offsets < n_elements
     
-    # Load data from memory
+    # Load elements from array a
     a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
     
-    # Conditional sum: only add positive values
+    # Apply condition: only sum elements > 0
     condition = a_vals > 0.0
     conditional_vals = tl.where(condition, a_vals, 0.0)
     
-    # Sum within this block
+    # Sum the conditional values in this block
     block_sum = tl.sum(conditional_vals)
     
-    # Store the block sum (will be reduced later)
+    # Store block sum (will be reduced later)
     tl.store(output_ptr + pid, block_sum)
 
 def s3111_triton(a):
@@ -43,6 +41,6 @@ def s3111_triton(a):
     )
     
     # Reduce partial sums to get final result
-    final_sum = torch.sum(partial_sums)
+    total_sum = torch.sum(partial_sums)
     
-    return final_sum
+    return total_sum

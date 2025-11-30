@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s291_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -9,13 +9,13 @@ def s291_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Sequential computation required due to dependency
+    # Sequential computation due to dependency
     for i in range(n_elements):
         if i == 0:
             im1 = n_elements - 1
         else:
             im1 = i - 1
-            
+        
         b_i = tl.load(b_ptr + i)
         b_im1 = tl.load(b_ptr + im1)
         result = (b_i + b_im1) * 0.5
@@ -23,12 +23,11 @@ def s291_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 def s291_triton(a, b):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
     
-    # Launch with single block since computation must be sequential
+    # Use single thread due to sequential dependency
+    BLOCK_SIZE = n_elements
     grid = (1,)
-    s291_kernel[grid](
-        a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE
-    )
     
-    return a
+    s291_kernel[grid](
+        a, b, n_elements, BLOCK_SIZE
+    )

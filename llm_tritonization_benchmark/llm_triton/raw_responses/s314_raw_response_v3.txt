@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s314
-# Generated: 2025-11-28 19:09:16
+# Generated: 2025-11-29 18:15:52
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 882
-# Output Tokens: 471
+# Output Tokens: 458
 
 ================================================================================
 PROMPT:
@@ -103,51 +103,48 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s314_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Each block computes a partial maximum
-    block_start = tl.program_id(0) * BLOCK_SIZE
+    # Each program handles one block of elements
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load data
+    # Load block of data
     a_vals = tl.load(a_ptr + offsets, mask=mask, other=float('-inf'))
     
-    # Find maximum within this block
+    # Find maximum in this block
     block_max = tl.max(a_vals, axis=0)
     
-    # Store partial result
-    tl.store(result_ptr + tl.program_id(0), block_max)
+    # Store the block maximum
+    tl.store(result_ptr + pid, block_max)
 
 def s314_triton(a):
     n_elements = a.shape[0]
-    
-    # First phase: compute partial maxima
     BLOCK_SIZE = 1024
     num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Create output tensor for partial results
-    partial_results = torch.empty(num_blocks, device=a.device, dtype=a.dtype)
+    # First pass: compute block-wise maxima
+    block_maxes = torch.empty(num_blocks, device=a.device, dtype=a.dtype)
     
-    # Launch kernel for first reduction phase
     s314_kernel[(num_blocks,)](
-        a, partial_results, n_elements, BLOCK_SIZE
+        a, block_maxes, n_elements, BLOCK_SIZE
     )
     
-    # Second phase: find maximum among partial results
-    if num_blocks > 1:
-        # For small number of blocks, use CPU reduction
-        if num_blocks <= 1024:
-            result = torch.max(partial_results)
-        else:
-            # Recursively apply reduction for very large arrays
-            result = s314_triton(partial_results)
-    else:
-        result = partial_results[0]
+    # Second pass: find global maximum from block maxima
+    # Start with a[0] as required by the original algorithm
+    x = a[0].clone()
     
-    return result
+    # Compare with all block maxima to find global maximum
+    global_max = torch.max(block_maxes)
+    
+    # Return the maximum of a[0] and the computed global maximum
+    x = torch.max(x, global_max)
+    
+    return x
 ```

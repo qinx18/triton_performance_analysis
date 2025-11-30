@@ -1,27 +1,29 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-11-28 (C Ground Truth Testing)
-**Previous Tests:** 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-11-29 (Latest Regeneration with Original Prompt)
+**Previous Tests:** 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** C Ground Truth Comparison ✅
 
 ---
 
-## 🔬 C Ground Truth Testing (2025-11-28) - COMPLETE
+## 🔬 C Ground Truth Testing (2025-11-29) - LATEST RUN
 
 ### Important Finding
 Previous testing compared LLM-generated Triton against LLM-generated PyTorch baselines. This creates a problem: **if both implementations have the same bug, the test passes incorrectly**.
 
 We created a **C reference library** compiled from the original TSVC source code to provide true ground truth.
 
-### C Ground Truth Results - ALL 151 Functions Tested
+### C Ground Truth Results - ALL 151 Functions Tested (2025-11-29)
 
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| ✅ **PASSING** | 94 | 62.3% |
-| ❌ **FAILING** | 57 | 37.7% |
+| ✅ **PASSING** | 97 | 64.2% |
+| ❌ **FAILING** | 54 | 35.8% |
 | ⏭️ **SKIPPED** | 0 | 0% |
+
+**Note:** This run used the original prompt (no restrictions). Results vary slightly between runs due to LLM non-determinism.
 
 **Infrastructure Bugs Fixed:**
 - `d` array initialization: Use TSVC-style `1/(i+1)` (always positive) to avoid `exit(0)` in s481
@@ -29,26 +31,57 @@ We created a **C reference library** compiled from the original TSVC source code
 - Scalar parameter typing: Proper float vs int handling
 - No-array function support: s317 now testable
 
-### Passing Functions (94):
-s000, s111, s1111, s1112, s1119, s112, s113, s114, s116, s1161, s119, s121, s125, s1251, s126, s127, s1279, s128, s1281, s132, s1351, s141, s151, s152, s162, s171, s174, s175, s2101, s2102, s2111, s2233, s2275, s231, s232, s233, s242, s243, s251, s252, s253, s254, s255, s271, s2710, s2711, s2712, s272, s273, s274, s278, s279, s291, s292, s293, s311, s3111, s31111, s3112, s3113, s313, s314, s315, s316, s317, s318, s319, s331, s342, s4112, s4113, s4114, s4115, s4117, s4121, s421, s441, s443, s451, s453, s481, s491, va, vag, vas, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+### Passing Functions (97):
+s000, s111, s1111, s1112, s1115, s1119, s112, s113, s114, s116, s1161, s119, s121, s1232, s122, s124, s125, s1251, s127, s1279, s128, s1281, s13110, s132, s1351, s151, s152, s162, s171, s172, s174, s175, s2101, s2102, s2111, s2233, s2275, s231, s232, s235, s243, s251, s253, s271, s2710, s2711, s2712, s272, s273, s274, s275, s278, s279, s293, s311, s3110, s3111, s31111, s3112, s3113, s312, s313, s314, s315, s316, s317, s318, s319, s323, s331, s342, s4112, s4113, s4114, s4115, s4117, s4121, s421, s441, s443, s451, s453, s481, s491, va, vag, vas, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
 
-### Failure Categories (57 total):
+### Failure Categories (54 total):
 
 | Category | Count | Examples |
 |----------|-------|----------|
-| Compilation Errors | 18 | s1115, s118, s1213, s1232, s124, s13110, s2251, s235, s257, s258, s275, s3110, s312, s332, s352, s353, s4116 |
-| Numerical/Algorithm Errors | 39 | s1113, s115, s122, s1221, s123, s1244, s131, s1421, s161, s172, s173, s176, s211, s212, s221, s222, s2244, s241, s244, s256, s261, s276, s277, s281, s321, s322, s323, s3251, s341, s343, s351, s422, s423, s424, s431, s442, s452, s471, s482, vbor |
+| Compilation Errors | 14 | s126, s141, s233, s2251, s252, s255, s257, s291, s332, s341, s351, s352, s4116, s482 |
+| Numerical/Algorithm Errors | 40 | s1113, s115, s118, s1213, s1221, s123, s1244, s131, s1421, s161, s173, s176, s211, s221, s222, s2244, s241, s242, s244, s254, s256, s258, s261, s276, s277, s281, s292, s321, s322, s3251, s343, s353, s422, s423, s424, s431, s442, s452, s471, vbor |
 
-### Common Triton Compilation Issues
-1. `break` statement not supported in Triton kernels (s124, s235, s275, s3110)
-2. `tl.zeros([BLOCK_SIZE + 2])` - dynamic-sized zeros not supported (s1213)
-3. Chained boolean operators (`a or b or c`) not supported (s1232)
-4. Unsupported tensor index patterns `tid[0]` (s118, s13110)
-5. Non-existent API functions: `tl.reduce_op` (s312), `tl.any` (s332)
-6. Type errors with scalar/pointer operations (s353)
+### Detailed Compilation Errors (14 functions - 2025-11-29 run)
+
+| Function | Error Type | Root Cause |
+|----------|------------|------------|
+| **s126** | UnsupportedLanguageConstruct | `break` statement not supported in Triton kernels |
+| **s141** | CompilationError | Tensor indexing outside JIT: `bb_vals[idx]` |
+| **s2251** | UnsupportedLanguageConstruct | `break` statement not supported in Triton kernels |
+| **s233** | UnsupportedLanguageConstruct | `break` statement not supported in Triton kernels |
+| **s252** | CompilationError | Tensor indexing outside JIT: `b_vals[i] * c_vals[i]` |
+| **s255** | CompilationError | `tl.arange(0, BLOCK_SIZE)` compilation issue |
+| **s257** | CompilationError | `tl.store` with incompatible mask/shape |
+| **s291** | CompilationError | `tl.arange(0, BLOCK_SIZE)` compilation issue |
+| **s332** | UnsupportedLanguageConstruct | `break` statement not supported in Triton kernels |
+| **s341** | CompilationError | Tensor indexing outside JIT: `valid_mask[i]` |
+| **s351** | IncompatibleTypeError | Type mismatch: `alpha * b_vals` - pointer vs float |
+| **s352** | CompilationError | Using `tl.arange(0, 5)` inline in load expression inside loop |
+| **s4116** | IncompatibleTypeError | Type mismatch: `(j_idx - 1) * len_2d` - pointer vs int |
+| **s482** | UnsupportedLanguageConstruct | `break` statement not supported in Triton kernels |
+
+### Compilation Error Summary by Category (2025-11-29)
+| Category | Count | Functions |
+|----------|-------|-----------|
+| `break` statement | 5 | s126, s2251, s233, s332, s482 |
+| Tensor indexing outside JIT | 3 | s141, s252, s341 |
+| Type/pointer errors | 3 | s351, s4116, s257 |
+| tl.arange compilation issues | 3 | s255, s291, s352 |
 
 ### Implication
-The **62.3% pass rate** against C ground truth is the true measure of LLM-generated Triton correctness. The 57 failures represent genuine implementation bugs in the LLM-generated Triton code, not test infrastructure issues.
+The **64.2% pass rate** against C ground truth is the true measure of LLM-generated Triton correctness. The 54 failures represent genuine implementation bugs in the LLM-generated Triton code, not test infrastructure issues.
+
+---
+
+## 📈 Test History Comparison
+
+| Date | PASS | FAIL | Pass Rate | Notes |
+|------|------|------|-----------|-------|
+| **2025-11-29** | **97** | **54** | **64.2%** | Latest regeneration with original prompt |
+| 2025-11-28 | 94 | 57 | 62.3% | Previous C ground truth run |
+| 2025-11-18 | 99 | 52 | 65.6% | PyTorch baseline comparison |
+
+**Key Observation:** LLM output varies between runs. The original prompt without explicit restrictions performs best.
 
 ---
 

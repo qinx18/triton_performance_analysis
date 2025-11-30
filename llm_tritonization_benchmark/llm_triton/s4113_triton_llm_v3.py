@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s4113_kernel(a_ptr, b_ptr, c_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -9,24 +9,21 @@ def s4113_kernel(a_ptr, b_ptr, c_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constex
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load indices
+    # Load indices and c values
     indices = tl.load(ip_ptr + offsets, mask=mask)
-    
-    # Load c[i] (direct access)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     
-    # Load b[ip[i]] (gather operation)
+    # Load b values using indirect addressing
     b_vals = tl.load(b_ptr + indices, mask=mask)
     
     # Compute result
     result = b_vals + c_vals
     
-    # Store a[ip[i]] = result (scatter operation)
+    # Store result using indirect addressing
     tl.store(a_ptr + indices, result, mask=mask)
 
 def s4113_triton(a, b, c, ip):
     n_elements = a.shape[0]
-    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     

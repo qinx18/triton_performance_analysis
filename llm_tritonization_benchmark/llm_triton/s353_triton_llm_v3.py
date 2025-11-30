@@ -10,36 +10,28 @@ def s353_kernel(a_ptr, b_ptr, ip_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexp
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Handle unrolled loop pattern - process 5 elements at a time
-    for unroll_offset in range(5):
-        current_offsets = offsets * 5 + unroll_offset
-        current_mask = mask & (current_offsets < n_elements)
-        
-        # Load indices for gather operation
-        ip_indices = tl.load(ip_ptr + current_offsets, mask=current_mask, other=0)
-        
-        # Gather from b array using loaded indices
-        b_values = tl.load(b_ptr + ip_indices, mask=current_mask, other=0.0)
-        
-        # Load current a values
-        a_values = tl.load(a_ptr + current_offsets, mask=current_mask, other=0.0)
-        
-        # Compute saxpy: a[i] += alpha * b[ip[i]]
-        result = a_values + alpha * b_values
-        
-        # Store back to a
-        tl.store(a_ptr + current_offsets, result, mask=current_mask)
+    # Load indices for gather operation
+    ip_vals = tl.load(ip_ptr + offsets, mask=mask)
+    
+    # Load values from a
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    
+    # Gather from b using ip indices
+    b_vals = tl.load(b_ptr + ip_vals, mask=mask)
+    
+    # Perform saxpy operation: a[i] += alpha * b[ip[i]]
+    result = a_vals + alpha * b_vals
+    
+    # Store result back to a
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s353_triton(a, b, c, ip):
     n_elements = a.shape[0]
-    alpha = c[0]
+    alpha = c[0].item()
     
-    # Calculate grid size for unrolled loop (process groups of 5)
     BLOCK_SIZE = 256
-    grid_size = triton.cdiv(triton.cdiv(n_elements, 5), BLOCK_SIZE)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s353_kernel[(grid_size,)](
-        a, b, ip, alpha, n_elements, BLOCK_SIZE
+    s353_kernel[grid](
+        a, b, ip, alpha, n_elements, BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return a

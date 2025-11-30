@@ -19,7 +19,7 @@ def s1221_kernel(
     b_prev_vals = tl.load(b_copy_ptr + b_prev_offsets, mask=mask)
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     
-    # Compute b[i] = b[i-4] + a[i]
+    # Compute result
     result = b_prev_vals + a_vals
     
     # Store to original b array
@@ -31,15 +31,11 @@ def s1221_triton(a, b):
     # Create read-only copy for WAR dependency handling
     b_copy = b.clone()
     
-    # Calculate grid size (excluding first 4 elements)
-    effective_elements = n_elements - 4
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(effective_elements, BLOCK_SIZE),)
+    grid = lambda meta: (triton.cdiv(n_elements - 4, meta['BLOCK_SIZE']),)
     
     s1221_kernel[grid](
-        b,
-        b_copy,
-        a,
+        b, b_copy, a,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )

@@ -8,55 +8,46 @@ def s235_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr
 ):
-    # Get block ID for i dimension
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     
-    # Create offsets for this block
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < LEN_2D
     
-    # Load values for a[i] += b[i] * c[i]
+    # Load 1D arrays
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
     
-    # Compute a[i] += b[i] * c[i]
+    # Update a[i] += b[i] * c[i]
     a_vals = a_vals + b_vals * c_vals
-    
-    # Store updated a values
     tl.store(a_ptr + offsets, a_vals, mask=mask)
     
-    # Inner j loop: aa[j][i] = aa[j-1][i] + bb[j][i] * a[i]
-    # This must be done sequentially for each i in this block
-    for block_idx in range(BLOCK_SIZE):
-        if block_start + block_idx >= LEN_2D:
-            break
-            
-        i = block_start + block_idx
-        a_val = tl.load(a_ptr + i)  # Get updated a[i] value
+    # Inner loop: for j = 1 to LEN_2D-1
+    for j in range(1, LEN_2D):
+        j_prev = j - 1
         
-        # Sequential loop over j from 1 to LEN_2D-1
-        for j in range(1, LEN_2D):
-            # aa[j][i] = aa[j-1][i] + bb[j][i] * a[i]
-            prev_offset = (j - 1) * LEN_2D + i
-            curr_offset = j * LEN_2D + i
-            bb_offset = j * LEN_2D + i
-            
-            aa_prev = tl.load(aa_copy_ptr + prev_offset)
-            bb_val = tl.load(bb_ptr + bb_offset)
-            
-            result = aa_prev + bb_val * a_val
-            tl.store(aa_ptr + curr_offset, result)
+        # Load aa[j-1][i] from copy (read-only)
+        aa_prev_offsets = j_prev * LEN_2D + offsets
+        aa_prev_vals = tl.load(aa_copy_ptr + aa_prev_offsets, mask=mask)
+        
+        # Load bb[j][i]
+        bb_offsets = j * LEN_2D + offsets
+        bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask)
+        
+        # Compute aa[j][i] = aa[j-1][i] + bb[j][i] * a[i]
+        aa_vals = aa_prev_vals + bb_vals * a_vals
+        
+        # Store to original aa array
+        aa_write_offsets = j * LEN_2D + offsets
+        tl.store(aa_ptr + aa_write_offsets, aa_vals, mask=mask)
 
 def s235_triton(a, b, c, aa, bb):
-    LEN_2D = a.shape[0]
-    
-    # Create read-only copy of aa to handle WAR dependencies
-    aa_copy = aa.clone()
-    
-    # Choose block size
+    LEN_2D = aa.shape[0]
     BLOCK_SIZE = 64
+    
+    # Create read-only copy for WAR dependency handling
+    aa_copy = aa.clone()
     
     # Calculate grid size
     grid_size = triton.cdiv(LEN_2D, BLOCK_SIZE)

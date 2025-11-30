@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s253
-# Generated: 2025-11-28 19:04:06
+# Generated: 2025-11-29 18:11:25
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 936
-# Output Tokens: 421
+# Output Tokens: 434
 
 ================================================================================
 PROMPT:
@@ -122,7 +122,7 @@ def s253_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     
     condition = a_vals > b_vals
-    s = a_vals - b_vals * d_vals
+    s = tl.where(condition, a_vals - b_vals * d_vals, 0.0)
     
     new_c = tl.where(condition, c_vals + s, c_vals)
     new_a = tl.where(condition, s, a_vals)

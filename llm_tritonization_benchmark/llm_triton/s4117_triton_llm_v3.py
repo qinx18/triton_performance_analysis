@@ -14,8 +14,8 @@ def s4117_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexp
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     
     # Calculate c[i/2] indices
-    c_indices = offsets // 2
-    c_vals = tl.load(c_ptr + c_indices, mask=mask)
+    c_offsets = offsets // 2
+    c_vals = tl.load(c_ptr + c_offsets, mask=mask)
     
     # Compute a[i] = b[i] + c[i/2] * d[i]
     result = b_vals + c_vals * d_vals
@@ -24,7 +24,7 @@ def s4117_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexp
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s4117_triton(a, b, c, d):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     

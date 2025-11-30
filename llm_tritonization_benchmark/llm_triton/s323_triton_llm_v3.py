@@ -4,21 +4,16 @@ import torch
 
 @triton.jit
 def s323_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel handles the coupled recurrence sequentially
-    # Each block processes a contiguous range of elements
+    # This kernel handles coupled recurrence sequentially
+    # Each block processes a contiguous segment sequentially
     block_start = tl.program_id(0) * BLOCK_SIZE
     
-    # Load initial values for this block
-    if block_start == 0:
-        # First block starts from index 1
-        start_idx = 1
-    else:
-        start_idx = block_start
-    
-    # Process elements sequentially within this block
-    for i in range(start_idx, min(block_start + BLOCK_SIZE, n_elements)):
+    # Process elements sequentially within each block
+    for offset in range(BLOCK_SIZE):
+        i = block_start + offset + 1  # Start from index 1
+        
         if i < n_elements:
-            # Load values
+            # Load required values
             b_prev = tl.load(b_ptr + i - 1)
             c_val = tl.load(c_ptr + i)
             d_val = tl.load(d_ptr + i)
@@ -35,14 +30,12 @@ def s323_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.co
 def s323_triton(a, b, c, d, e):
     n_elements = a.shape[0]
     
-    # Use a single thread block to maintain sequential dependency
-    BLOCK_SIZE = n_elements - 1  # Process from index 1 to n_elements-1
-    grid = (1,)
+    # Use single thread for sequential processing due to dependencies
+    BLOCK_SIZE = 1
+    grid = (n_elements - 1,)  # Process from index 1 to n_elements-1
     
     s323_kernel[grid](
         a, b, c, d, e,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return a, b

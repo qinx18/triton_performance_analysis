@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s278_kernel(
@@ -20,16 +20,16 @@ def s278_kernel(
     d = tl.load(d_ptr + offsets, mask=mask)
     e = tl.load(e_ptr + offsets, mask=mask)
     
-    # Implement the conditional logic
+    # Condition: if a[i] > 0
     condition = a > 0.0
     
-    # When a[i] <= 0: b[i] = -b[i] + d[i] * e[i]
+    # Branch 1: a[i] <= 0 -> b[i] = -b[i] + d[i] * e[i]
     b_new = tl.where(condition, b, -b + d * e)
     
-    # When a[i] > 0: c[i] = -c[i] + d[i] * e[i]
+    # Branch 2: a[i] > 0 -> c[i] = -c[i] + d[i] * e[i]
     c_new = tl.where(condition, -c + d * e, c)
     
-    # Always: a[i] = b[i] + c[i] * d[i]
+    # Final computation: a[i] = b[i] + c[i] * d[i]
     a_new = b_new + c_new * d
     
     # Store results
@@ -48,5 +48,3 @@ def s278_triton(a, b, c, d, e):
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a, b, c

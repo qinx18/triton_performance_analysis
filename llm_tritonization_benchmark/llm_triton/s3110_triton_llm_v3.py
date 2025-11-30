@@ -1,105 +1,55 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s3110_kernel(aa_ptr, max_ptr, xindex_ptr, yindex_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # This kernel finds the maximum element and its indices in a 2D array
-    # Each program handles one block of elements
+def s3110_kernel(aa_ptr, max_ptr, xindex_ptr, yindex_ptr, LEN_2D: tl.constexpr):
+    # This is a reduction kernel that finds the maximum element and its indices
+    # We'll use a single block to handle the entire 2D array
     
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+    if pid != 0:
+        return
     
-    # Initialize local max and indices
-    local_max = tl.load(aa_ptr)  # aa[0][0]
-    local_xindex = 0
-    local_yindex = 0
+    # Initialize with first element
+    current_max = tl.load(aa_ptr)
+    current_xindex = 0
+    current_yindex = 0
     
-    # Process elements in this block
-    for idx in range(BLOCK_SIZE):
-        linear_idx = block_start + idx
-        if linear_idx >= LEN_2D * LEN_2D:
-            break
+    # Iterate through all elements
+    for i in range(LEN_2D):
+        for j in range(LEN_2D):
+            offset = i * LEN_2D + j
+            value = tl.load(aa_ptr + offset)
             
-        # Convert linear index to 2D coordinates
-        i = linear_idx // LEN_2D
-        j = linear_idx % LEN_2D
-        
-        # Load the element
-        element_ptr = aa_ptr + i * LEN_2D + j
-        element = tl.load(element_ptr)
-        
-        # Update max and indices if this element is larger
-        if element > local_max:
-            local_max = element
-            local_xindex = i
-            local_yindex = j
+            # Update max and indices if we found a larger value
+            if value > current_max:
+                current_max = value
+                current_xindex = i
+                current_yindex = j
     
-    # Store results for this block
-    result_idx = pid
-    tl.store(max_ptr + result_idx, local_max)
-    tl.store(xindex_ptr + result_idx, local_xindex)
-    tl.store(yindex_ptr + result_idx, local_yindex)
-
-@triton.jit  
-def s3110_reduce_kernel(max_ptr, xindex_ptr, yindex_ptr, final_max_ptr, final_xindex_ptr, final_yindex_ptr, 
-                        num_blocks: tl.constexpr):
-    # Reduce results from all blocks to find global maximum
-    global_max = tl.load(max_ptr)
-    global_xindex = tl.load(xindex_ptr)
-    global_yindex = tl.load(yindex_ptr)
-    
-    for i in range(1, num_blocks):
-        block_max = tl.load(max_ptr + i)
-        block_xindex = tl.load(xindex_ptr + i)
-        block_yindex = tl.load(yindex_ptr + i)
-        
-        if block_max > global_max:
-            global_max = block_max
-            global_xindex = block_xindex
-            global_yindex = block_yindex
-    
-    tl.store(final_max_ptr, global_max)
-    tl.store(final_xindex_ptr, global_xindex)
-    tl.store(final_yindex_ptr, global_yindex)
+    # Store results
+    tl.store(max_ptr, current_max)
+    tl.store(xindex_ptr, current_xindex)
+    tl.store(yindex_ptr, current_yindex)
 
 def s3110_triton(aa):
     LEN_2D = aa.shape[0]
-    total_elements = LEN_2D * LEN_2D
     
-    # Choose block size
-    BLOCK_SIZE = 256
-    num_blocks = triton.cdiv(total_elements, BLOCK_SIZE)
+    # Create output tensors
+    max_result = torch.zeros(1, dtype=aa.dtype, device=aa.device)
+    xindex_result = torch.zeros(1, dtype=torch.int32, device=aa.device)
+    yindex_result = torch.zeros(1, dtype=torch.int32, device=aa.device)
     
-    # Create temporary arrays to store partial results from each block
-    block_max = torch.zeros(num_blocks, dtype=aa.dtype, device=aa.device)
-    block_xindex = torch.zeros(num_blocks, dtype=torch.int32, device=aa.device)
-    block_yindex = torch.zeros(num_blocks, dtype=torch.int32, device=aa.device)
-    
-    # Launch first kernel to find local maxima
-    grid = (num_blocks,)
+    # Launch kernel with single block
+    grid = (1,)
     s3110_kernel[grid](
-        aa, block_max, block_xindex, block_yindex,
-        LEN_2D, BLOCK_SIZE
+        aa, max_result, xindex_result, yindex_result, LEN_2D
     )
     
-    # Create final result tensors
-    final_max = torch.zeros(1, dtype=aa.dtype, device=aa.device)
-    final_xindex = torch.zeros(1, dtype=torch.int32, device=aa.device)  
-    final_yindex = torch.zeros(1, dtype=torch.int32, device=aa.device)
-    
-    # Launch reduction kernel to find global maximum
-    s3110_reduce_kernel[(1,)](
-        block_max, block_xindex, block_yindex,
-        final_max, final_xindex, final_yindex,
-        num_blocks
-    )
-    
-    max_val = final_max.item()
-    xindex = final_xindex.item()
-    yindex = final_yindex.item()
-    
-    # Calculate chksum as in original code
+    max_val = max_result.item()
+    xindex = xindex_result.item()
+    yindex = yindex_result.item()
     chksum = max_val + float(xindex) + float(yindex)
     
-    return max_val, xindex, yindex, chksum
+    return max_val + xindex + 1 + yindex + 1

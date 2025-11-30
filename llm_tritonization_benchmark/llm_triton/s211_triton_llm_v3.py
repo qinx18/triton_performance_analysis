@@ -1,29 +1,26 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s211_kernel(
-    a_ptr,
-    b_ptr,
-    b_copy_ptr,
-    c_ptr,
-    d_ptr,
-    e_ptr,
+    a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr,
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_start = tl.program_id(axis=0) * BLOCK_SIZE
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE + 1  # Start from index 1
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Mask for valid indices (1 <= i < n_elements-1)
-    mask = (offsets >= 1) & (offsets < n_elements - 1)
+    mask = offsets < n_elements - 1  # Ensure we don't go beyond LEN_1D-1
     
-    # Load values - use copy for b reads to avoid WAR race condition
+    # Load values for a[i] = b[i-1] + c[i] * d[i]
     b_prev = tl.load(b_copy_ptr + offsets - 1, mask=mask)
-    b_next = tl.load(b_copy_ptr + offsets + 1, mask=mask)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
+    
+    # Load values for b[i] = b[i+1] - e[i] * d[i]
+    b_next = tl.load(b_copy_ptr + offsets + 1, mask=mask)
     e_vals = tl.load(e_ptr + offsets, mask=mask)
     
     # Compute results
@@ -41,15 +38,10 @@ def s211_triton(a, b, c, d, e):
     b_copy = b.clone()
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = ((n_elements - 2 + BLOCK_SIZE - 1) // BLOCK_SIZE,)
     
     s211_kernel[grid](
-        a,
-        b,
-        b_copy,
-        c,
-        d,
-        e,
+        a, b, b_copy, c, d, e,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE,
     )

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for vtvtv
-# Generated: 2025-11-28 21:06:09
+# Generated: 2025-11-29 18:22:50
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 857
-# Output Tokens: 307
+# Output Tokens: 312
 
 ================================================================================
 PROMPT:
@@ -116,5 +116,5 @@ def vtvtv_triton(a, b, c):
     BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vtvtv_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
+    vtvtv_kernel[grid](a, b, c, n_elements, BLOCK_SIZE=BLOCK_SIZE)
 ```

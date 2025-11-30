@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s322_kernel(
@@ -16,15 +17,15 @@ def s322_kernel(
     
     # Load from read-only copy for dependencies
     a_vals = tl.load(a_copy_ptr + offsets, mask=mask)
-    a_prev1 = tl.load(a_copy_ptr + offsets - 1, mask=mask)
-    a_prev2 = tl.load(a_copy_ptr + offsets - 2, mask=mask)
+    a_minus_1 = tl.load(a_copy_ptr + offsets - 1, mask=mask)
+    a_minus_2 = tl.load(a_copy_ptr + offsets - 2, mask=mask)
     
     # Load other arrays
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     
     # Compute result
-    result = a_vals + a_prev1 * b_vals + a_prev2 * c_vals
+    result = a_vals + a_minus_1 * b_vals + a_minus_2 * c_vals
     
     # Store to original array
     tl.store(a_ptr + offsets, result, mask=mask)
@@ -36,13 +37,13 @@ def s322_triton(a, b, c):
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
-    grid = lambda meta: (triton.cdiv(n_elements - 2, meta['BLOCK_SIZE']),)
+    grid_size = triton.cdiv(n_elements - 2, BLOCK_SIZE)
     
-    s322_kernel[grid](
+    s322_kernel[grid_size,](
         a,
         a_copy,
         b,
         c,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE,
     )

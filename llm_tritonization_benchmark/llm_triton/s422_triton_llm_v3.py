@@ -1,12 +1,12 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s422_kernel(
+    xx_ptr,
     flat_2d_array_ptr,
     a_ptr,
-    xx_ptr,
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
@@ -16,11 +16,12 @@ def s422_kernel(
     mask = offsets < n_elements
     
     # Load from flat_2d_array[i + 8] and a[i]
-    flat_vals = tl.load(flat_2d_array_ptr + offsets + 8, mask=mask)
+    flat_2d_offsets = offsets + 8
+    flat_2d_vals = tl.load(flat_2d_array_ptr + flat_2d_offsets, mask=mask)
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     
     # Compute xx[i] = flat_2d_array[i + 8] + a[i]
-    result = flat_vals + a_vals
+    result = flat_2d_vals + a_vals
     
     # Store to xx[i]
     tl.store(xx_ptr + offsets, result, mask=mask)
@@ -28,18 +29,16 @@ def s422_kernel(
 def s422_triton(flat_2d_array, a):
     n_elements = a.shape[0]
     
-    # Create xx array (equivalent to flat_2d_array + 4 offset)
-    xx = torch.zeros_like(a)
+    # Create xx as a view into flat_2d_array starting at offset 4
+    xx = flat_2d_array[4:4+n_elements]
     
-    # Calculate grid size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Launch kernel
     s422_kernel[grid](
+        xx,
         flat_2d_array,
         a,
-        xx,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )

@@ -8,31 +8,57 @@ def s233_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr
 ):
-    # Get column index (i dimension)
+    # Get the current column (i)
     i = tl.program_id(0) + 1
     
     if i >= LEN_2D:
         return
     
-    # Process j dimension sequentially for each column i
-    for j in range(1, LEN_2D):
-        # First loop: aa[j][i] = aa[j-1][i] + cc[j][i]
-        aa_offset = j * LEN_2D + i
-        aa_prev_offset = (j - 1) * LEN_2D + i
-        cc_offset = j * LEN_2D + i
+    # Process rows in blocks for the first loop: aa[j][i] = aa[j-1][i] + cc[j][i]
+    for j_start in range(1, LEN_2D, BLOCK_SIZE):
+        j_end = min(j_start + BLOCK_SIZE, LEN_2D)
+        block_size = j_end - j_start
         
-        aa_prev_val = tl.load(aa_copy_ptr + aa_prev_offset)
-        cc_val = tl.load(cc_ptr + cc_offset)
-        aa_result = aa_prev_val + cc_val
-        tl.store(aa_ptr + aa_offset, aa_result)
+        if block_size <= 0:
+            break
+            
+        j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
+        mask = j_offsets < LEN_2D
         
-        # Second loop: bb[j][i] = bb[j][i-1] + cc[j][i]
-        bb_offset = j * LEN_2D + i
-        bb_prev_offset = j * LEN_2D + (i - 1)
+        # Calculate offsets for current and previous rows
+        curr_offsets = j_offsets * LEN_2D + i
+        prev_offsets = (j_offsets - 1) * LEN_2D + i
         
-        bb_prev_val = tl.load(bb_copy_ptr + bb_prev_offset)
-        bb_result = bb_prev_val + cc_val
-        tl.store(bb_ptr + bb_offset, bb_result)
+        # Load from read-only copies
+        aa_prev_vals = tl.load(aa_copy_ptr + prev_offsets, mask=mask)
+        cc_vals = tl.load(cc_ptr + curr_offsets, mask=mask)
+        
+        # Compute and store to original array
+        aa_result = aa_prev_vals + cc_vals
+        tl.store(aa_ptr + curr_offsets, aa_result, mask=mask)
+    
+    # Process rows in blocks for the second loop: bb[j][i] = bb[j][i-1] + cc[j][i]
+    for j_start in range(1, LEN_2D, BLOCK_SIZE):
+        j_end = min(j_start + BLOCK_SIZE, LEN_2D)
+        block_size = j_end - j_start
+        
+        if block_size <= 0:
+            break
+            
+        j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
+        mask = j_offsets < LEN_2D
+        
+        # Calculate offsets for current and previous columns
+        curr_offsets = j_offsets * LEN_2D + i
+        prev_offsets = j_offsets * LEN_2D + (i - 1)
+        
+        # Load from read-only copies
+        bb_prev_vals = tl.load(bb_copy_ptr + prev_offsets, mask=mask)
+        cc_vals = tl.load(cc_ptr + curr_offsets, mask=mask)
+        
+        # Compute and store to original array
+        bb_result = bb_prev_vals + cc_vals
+        tl.store(bb_ptr + curr_offsets, bb_result, mask=mask)
 
 def s233_triton(aa, bb, cc):
     LEN_2D = aa.shape[0]
@@ -41,18 +67,12 @@ def s233_triton(aa, bb, cc):
     aa_copy = aa.clone()
     bb_copy = bb.clone()
     
-    # Flatten 2D arrays for kernel access
-    aa_flat = aa.view(-1)
-    aa_copy_flat = aa_copy.view(-1)
-    bb_flat = bb.view(-1)
-    bb_copy_flat = bb_copy.view(-1)
-    cc_flat = cc.view(-1)
-    
-    # Launch kernel with one thread per column (i dimension)
+    # Launch kernel with one thread per column (excluding first column)
     grid = (LEN_2D - 1,)
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 32
     
     s233_kernel[grid](
-        aa_flat, aa_copy_flat, bb_flat, bb_copy_flat, cc_flat,
-        LEN_2D, BLOCK_SIZE
+        aa, aa_copy, bb, bb_copy, cc,
+        LEN_2D=LEN_2D,
+        BLOCK_SIZE=BLOCK_SIZE
     )

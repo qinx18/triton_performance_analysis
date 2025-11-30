@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s152
-# Generated: 2025-11-28 20:43:02
+# Generated: 2025-11-29 18:06:51
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 870
-# Output Tokens: 724
+# Output Tokens: 800
 
 ================================================================================
 PROMPT:
@@ -99,20 +99,22 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s152s_kernel(a_ptr, b_ptr, c_ptr, idx, BLOCK_SIZE: tl.constexpr):
-    # This is a placeholder for the s152s subroutine functionality
-    # Since the actual s152s implementation is not provided, we'll implement
-    # a simple operation that modifies array 'a' based on arrays 'b' and 'c'
+def s152s_kernel(a_ptr, b_ptr, c_ptr, i, BLOCK_SIZE: tl.constexpr):
+    # This is a placeholder for the s152s subroutine
+    # Since the actual implementation is not provided, we'll do a simple operation
+    # that modifies array 'a' based on arrays 'b' and 'c'
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < a_ptr.numel()
+    mask = offsets < 1  # Only process one element at index i
     
-    # Simple operation: a[i] = b[i] + c[i] (placeholder)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    result = b_vals + c_vals
-    tl.store(a_ptr + offsets, result, mask=mask)
+    # Simple operation: a[i] = b[i] + c[i]
+    if pid == 0:  # Only first block processes index i
+        if i < tl.load(a_ptr + i * 0 + i, mask=True, other=0.0):  # Bounds check
+            b_val = tl.load(b_ptr + i)
+            c_val = tl.load(c_ptr + i)
+            result = b_val + c_val
+            tl.store(a_ptr + i, result)
 
 @triton.jit
 def s152_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -121,26 +123,37 @@ def s152_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.co
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # b[i] = d[i] * e[i]
+    # Load values from d and e arrays
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     e_vals = tl.load(e_ptr + offsets, mask=mask)
+    
+    # Compute b[i] = d[i] * e[i]
     b_vals = d_vals * e_vals
+    
+    # Store results to b array
     tl.store(b_ptr + offsets, b_vals, mask=mask)
+    
+    # For each element, we need to call s152s
+    # Since we can't call another kernel from within a kernel easily,
+    # we'll implement the s152s functionality inline
+    # Assuming s152s does: a[i] = b[i] + c[i] (placeholder operation)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    a_vals = b_vals + c_vals
+    tl.store(a_ptr + offsets, a_vals, mask=mask)
 
 def s152_triton(a, b, c, d, e):
-    n_elements = d.numel()
+    n_elements = a.shape[0]
+    
+    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # First compute b[i] = d[i] * e[i] for all i
-    s152_kernel[grid](a, b, c, d, e, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    # Launch kernel
+    s152_kernel[grid](
+        a, b, c, d, e,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
     
-    # Since s152s is called sequentially for each i and may have dependencies,
-    # we need to call it sequentially on the CPU or implement the actual
-    # s152s functionality if known. For now, we'll implement a simple
-    # operation that processes the entire array at once.
-    
-    # Placeholder for s152s functionality - simple element-wise operation
-    # In practice, you would need to know what s152s actually does
-    a.copy_(b + c)  # Simple placeholder operation
+    return a
 ```

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s128
-# Generated: 2025-11-28 17:38:40
+# Generated: 2025-11-29 18:05:35
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 937
-# Output Tokens: 502
+# Output Tokens: 510
 
 ================================================================================
 PROMPT:
@@ -113,26 +113,26 @@ def s128_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Calculate k indices: k = 2*i for each i
+    # Calculate k values: k = 2*i for each i
     k_offsets = 2 * offsets
     k_mask = k_offsets < 2 * n_elements
     
     # Load values
     d_vals = tl.load(d_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + k_offsets, mask=k_mask)
-    c_vals = tl.load(c_ptr + k_offsets, mask=k_mask)
+    b_k_vals = tl.load(b_ptr + k_offsets, mask=k_mask)
+    c_k_vals = tl.load(c_ptr + k_offsets, mask=k_mask)
     
     # Compute a[i] = b[k] - d[i]
-    a_vals = b_vals - d_vals
+    a_vals = b_k_vals - d_vals
     
     # Store a[i]
     tl.store(a_ptr + offsets, a_vals, mask=mask)
     
     # Compute b[k] = a[i] + c[k]
-    b_new_vals = a_vals + c_vals
+    b_k_vals = a_vals + c_k_vals
     
     # Store b[k]
-    tl.store(b_ptr + k_offsets, b_new_vals, mask=k_mask)
+    tl.store(b_ptr + k_offsets, b_k_vals, mask=k_mask)
 
 def s128_triton(a, b, c, d):
     n_elements = a.shape[0] // 2

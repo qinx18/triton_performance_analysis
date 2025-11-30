@@ -19,21 +19,21 @@ def vbor_kernel(
     c1 = tl.load(c_ptr + offsets, mask=mask)
     d1 = tl.load(d_ptr + offsets, mask=mask)
     e1 = tl.load(e_ptr + offsets, mask=mask)
-    f1 = tl.load(aa_ptr + offsets, mask=mask)  # aa[0][i]
+    f1 = tl.load(aa_ptr + offsets, mask=mask)
     
-    # Compute a1 expression (10 terms)
+    # Compute a1 update
     a1_new = (a1 * b1 * c1 + a1 * b1 * d1 + a1 * b1 * e1 + a1 * b1 * f1 +
               a1 * c1 * d1 + a1 * c1 * e1 + a1 * c1 * f1 + a1 * d1 * e1 +
               a1 * d1 * f1 + a1 * e1 * f1)
     
-    # Compute b1 expression (6 terms)
+    # Compute b1 update
     b1_new = (b1 * c1 * d1 + b1 * c1 * e1 + b1 * c1 * f1 + b1 * d1 * e1 +
               b1 * d1 * f1 + b1 * e1 * f1)
     
-    # Compute c1 expression (3 terms)
+    # Compute c1 update
     c1_new = c1 * d1 * e1 + c1 * d1 * f1 + c1 * e1 * f1
     
-    # Compute d1 expression (1 term)
+    # Compute d1 update
     d1_new = d1 * e1 * f1
     
     # Final computation
@@ -45,15 +45,16 @@ def vbor_kernel(
 def vbor_triton(a, b, c, d, e, aa, x):
     n_elements = a.shape[0]
     
+    # Use aa[0] (first row of aa)
+    aa_row = aa[0]
+    
     # Choose block size
     BLOCK_SIZE = 256
-    
-    # Calculate grid size
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     # Launch kernel
     vbor_kernel[grid](
-        a, b, c, d, e, aa, x,
+        a, b, c, d, e, aa_row, x,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )

@@ -3,45 +3,40 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s316_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This is a reduction kernel to find minimum value
-    pid = tl.program_id(axis=0)
+def s316_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This is a reduction to find minimum value
+    # Each block will find local minimum, then we'll reduce across blocks
     
-    # Load block of data
-    block_start = pid * BLOCK_SIZE
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load values with large value for masked elements
-    values = tl.load(a_ptr + offsets, mask=mask, other=float('inf'))
+    # Load data with masking
+    vals = tl.load(a_ptr + offsets, mask=mask, other=float('inf'))
     
-    # Reduce within block to find minimum
-    block_min = tl.min(values, axis=0)
+    # Find minimum within this block
+    local_min = tl.min(vals)
     
-    # Store partial result
-    tl.store(result_ptr + pid, block_min)
+    # Store local minimum for this block
+    tl.store(output_ptr + tl.program_id(0), local_min)
 
 def s316_triton(a):
     n_elements = a.shape[0]
     
-    # Choose block size
+    # First pass: reduce within blocks
     BLOCK_SIZE = 1024
-    
-    # Calculate number of blocks needed
     num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Create temporary array to store partial results
-    partial_results = torch.empty(num_blocks, dtype=a.dtype, device=a.device)
+    # Temporary storage for block results
+    block_results = torch.empty(num_blocks, dtype=a.dtype, device=a.device)
     
-    # Launch kernel to compute partial minimums
+    # Launch kernel for first reduction
     grid = (num_blocks,)
     s316_kernel[grid](
-        a, partial_results, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, block_results, n_elements, BLOCK_SIZE
     )
     
-    # Final reduction on CPU for partial results
-    # This is efficient since partial_results is small
-    result = torch.min(partial_results).item()
+    # Final reduction on CPU for simplicity (small number of blocks)
+    final_min = torch.min(block_results)
     
-    return result
+    return final_min

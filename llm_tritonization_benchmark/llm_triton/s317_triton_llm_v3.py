@@ -6,43 +6,40 @@ import triton.language as tl
 def s317_kernel(
     q_ptr,
     q_copy_ptr,
-    LEN_1D: tl.constexpr,
+    n_elements: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < (LEN_1D // 2)
+    mask = offsets < n_elements
     
-    # Initialize q values to 1.0
-    q_vals = tl.full([BLOCK_SIZE], 1.0, dtype=tl.float32)
+    # Load initial q value from copy
+    q_val = tl.load(q_copy_ptr + offsets, mask=mask, other=1.0)
     
-    # Load from copy for initial values if needed
-    q_init = tl.load(q_copy_ptr + offsets, mask=mask, other=1.0)
+    # Perform the multiplication LEN_1D/2 times
+    factor = 0.99
+    for _ in range(n_elements):
+        q_val *= factor
     
-    # Multiply by 0.99 for each valid element
-    q_vals = tl.where(mask, q_vals * 0.99, q_vals)
-    
-    # Store result
-    tl.store(q_ptr + offsets, q_vals, mask=mask)
+    # Store result to original array
+    tl.store(q_ptr + offsets, q_val, mask=mask)
 
-def s317_triton():
-    LEN_1D = 32000
-    BLOCK_SIZE = 256
-    
-    # Create q tensor initialized to 1.0
-    q = torch.ones(LEN_1D // 2, dtype=torch.float32, device='cuda')
+def s317_triton(LEN_1D):
+    # Initialize q as a single element tensor
+    q = torch.ones(1, dtype=torch.float32, device='cuda')
     q_copy = q.clone()
     
-    grid = (triton.cdiv(LEN_1D // 2, BLOCK_SIZE),)
+    n_elements = LEN_1D // 2
     
+    BLOCK_SIZE = 256
+    grid = (1,)  # Single block since q is scalar
+    
+    # Launch kernel
     s317_kernel[grid](
         q,
         q_copy,
-        LEN_1D,
+        n_elements,
         BLOCK_SIZE,
     )
     
-    # Return the product of all elements (should be 0.99^(LEN_1D/2))
-    return torch.prod(q).item()
+    return q.item()

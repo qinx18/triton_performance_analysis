@@ -9,10 +9,10 @@ def s451_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
     
-    result = tl.sin(b_vals) + tl.cos(c_vals)
+    result = tl.sin(b) + tl.cos(c)
     
     tl.store(a_ptr + offsets, result, mask=mask)
 

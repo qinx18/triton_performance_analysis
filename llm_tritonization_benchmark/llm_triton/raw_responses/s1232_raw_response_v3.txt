@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1232
-# Generated: 2025-11-28 17:34:23
+# Generated: 2025-11-29 18:04:25
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 908
-# Output Tokens: 551
+# Output Tokens: 566
 
 ================================================================================
 PROMPT:
@@ -96,60 +96,55 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s1232_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get thread ID
-    pid = tl.program_id(0)
+    # Get the current j position (column)
+    j = tl.program_id(0)
     
-    # Calculate which (i, j) pair this thread handles
-    total_elements = (LEN_2D * (LEN_2D + 1)) // 2  # triangular matrix elements
-    
-    if pid >= total_elements:
+    if j >= LEN_2D:
         return
     
-    # Convert linear index to (i, j) coordinates for triangular access
-    # For triangular matrix where i >= j, we need to find j first
-    j = 0
-    remaining = pid
-    while remaining >= (LEN_2D - j):
-        remaining -= (LEN_2D - j)
-        j += 1
+    # Process elements from i=j to LEN_2D-1 for this column j
+    i_start = j
+    i_end = LEN_2D
     
-    i = j + remaining
-    
-    # Bounds check
-    if i >= LEN_2D or j >= LEN_2D or i < j:
-        return
-    
-    # Calculate linear index for 2D arrays stored in row-major order
-    idx = i * LEN_2D + j
-    
-    # Load values
-    bb_val = tl.load(bb_ptr + idx)
-    cc_val = tl.load(cc_ptr + idx)
-    
-    # Compute and store
-    result = bb_val + cc_val
-    tl.store(aa_ptr + idx, result)
+    # Process in blocks along the i dimension
+    for i_block_start in range(i_start, i_end, BLOCK_SIZE):
+        # Calculate the range of i indices for this block
+        i_offsets = tl.arange(0, BLOCK_SIZE) + i_block_start
+        
+        # Create mask to ensure we don't go beyond bounds
+        mask = (i_offsets < i_end) & (i_offsets >= i_start)
+        
+        # Calculate memory offsets (row-major: [i][j] = i * LEN_2D + j)
+        mem_offsets = i_offsets * LEN_2D + j
+        
+        # Load data with masking
+        bb_vals = tl.load(bb_ptr + mem_offsets, mask=mask, other=0.0)
+        cc_vals = tl.load(cc_ptr + mem_offsets, mask=mask, other=0.0)
+        
+        # Perform computation
+        aa_vals = bb_vals + cc_vals
+        
+        # Store result with masking
+        tl.store(aa_ptr + mem_offsets, aa_vals, mask=mask)
 
 def s1232_triton(aa, bb, cc):
     LEN_2D = aa.shape[0]
+    BLOCK_SIZE = 128
     
-    # Calculate total number of elements in triangular matrix
-    total_elements = (LEN_2D * (LEN_2D + 1)) // 2
-    
-    # Launch kernel
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(total_elements, BLOCK_SIZE),)
+    # Launch kernel with one thread block per column (j dimension)
+    grid = (LEN_2D,)
     
     s1232_kernel[grid](
         aa, bb, cc,
         LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE,
-        num_warps=4
+        BLOCK_SIZE=BLOCK_SIZE
     )
+    
+    return aa
 ```

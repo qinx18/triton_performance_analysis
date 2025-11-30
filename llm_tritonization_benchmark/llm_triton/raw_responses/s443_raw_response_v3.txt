@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s443
-# Generated: 2025-11-28 19:13:50
+# Generated: 2025-11-29 18:20:32
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 985
-# Output Tokens: 466
+# Output Tokens: 434
 
 ================================================================================
 PROMPT:
@@ -114,16 +114,12 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s443_kernel(
-    a_ptr, b_ptr, c_ptr, d_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
+def s443_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -135,26 +131,20 @@ def s443_kernel(
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     
-    # Conditional computation: if d[i] <= 0, use b[i] * c[i], else use b[i] * b[i]
+    # Conditional computation: if d[i] <= 0, use b[i]*c[i], else use b[i]*b[i]
     condition = d_vals <= 0.0
-    result = tl.where(condition, b_vals * c_vals, b_vals * b_vals)
+    increment = tl.where(condition, b_vals * c_vals, b_vals * b_vals)
     
     # Update a[i]
-    a_vals = a_vals + result
+    a_vals = a_vals + increment
     
     # Store result
     tl.store(a_ptr + offsets, a_vals, mask=mask)
 
 def s443_triton(a, b, c, d):
     n_elements = a.numel()
-    
-    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s443_kernel[grid](
-        a, b, c, d,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+    s443_kernel[grid](a, b, c, d, n_elements, BLOCK_SIZE)
 ```

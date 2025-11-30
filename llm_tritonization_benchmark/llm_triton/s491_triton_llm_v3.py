@@ -13,7 +13,7 @@ def s491_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load input data
+    # Load sequential data
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
@@ -40,5 +40,3 @@ def s491_triton(a, b, c, d, ip):
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a

@@ -4,16 +4,15 @@ import torch
 
 @triton.jit
 def s254_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel processes the sequential dependency pattern
-    # Each thread block handles a chunk of the array
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+    # This kernel handles the carry-around variable pattern
+    # Each block processes a contiguous chunk sequentially
+    block_start = tl.program_id(0) * BLOCK_SIZE
     
-    # Load the initial x value (carry-around variable)
-    if pid == 0:
-        x = tl.load(b_ptr + n_elements - 1)
+    # Load the carry value from the previous block or initial value
+    if tl.program_id(0) == 0:
+        x = tl.load(b_ptr + n_elements - 1)  # b[LEN_1D-1]
     else:
-        # For subsequent blocks, x starts as the last b value from previous block
+        # For blocks after the first, we need the last value from the previous block
         x = tl.load(b_ptr + block_start - 1)
     
     # Process elements in this block sequentially
@@ -26,70 +25,47 @@ def s254_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
             x = b_val
 
 def s254_triton(a, b):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
     
-    # For this sequential pattern, we need to process in order
-    # Use a single thread block to maintain sequential dependency
-    BLOCK_SIZE = 1024
+    # For this pattern with carry-around variable, we need to process sequentially
+    # We can't parallelize effectively due to the dependency chain
+    # Use a single block that processes all elements
+    BLOCK_SIZE = triton.next_power_of_2(min(n_elements, 1024))
     
-    # Since this has a sequential dependency (carry-around variable),
-    # we process sequentially or use multiple launches
-    if n_elements <= BLOCK_SIZE:
-        # Single block can handle everything
+    # If n_elements is larger than max block size, we need multiple blocks
+    # but they must coordinate the carry value
+    if n_elements <= 1024:
         grid = (1,)
-        s254_kernel[grid](a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+        s254_kernel[grid](a, b, n_elements, BLOCK_SIZE)
     else:
-        # Process in chunks, but need to handle dependency
-        # Simplified approach: use sequential processing
-        BLOCK_SIZE = min(1024, n_elements)
+        # For large arrays, we need a different approach
+        # Process in chunks where each chunk knows the carry from previous
+        BLOCK_SIZE = 1024
         grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
         
-        # Create a kernel that handles the dependency correctly
-        s254_sequential_kernel[grid](a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+        # Create a sequential kernel version for large arrays
+        s254_kernel_large[grid](a, b, n_elements, BLOCK_SIZE)
 
-@triton.jit
-def s254_sequential_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Handle the sequential nature by processing all elements in program_id order
+@triton.jit  
+def s254_kernel_large(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    
-    # Each program processes its elements sequentially
     block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
     
-    # Get initial x value
+    # Each block processes sequentially within its range
+    # The carry dependency means we can't easily parallelize across blocks
+    # So we'll use a simplified approach where each thread handles one element
+    # but we need to ensure proper ordering
+    
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # For the sequential dependency, we need to process one block at a time
+    # This is a limitation of this particular algorithm pattern
     if pid == 0:
         x = tl.load(b_ptr + n_elements - 1)
-    else:
-        # Wait for previous block to complete and get last value
-        # Since Triton doesn't have synchronization, we'll use a different approach
-        x = tl.load(b_ptr + block_start - 1)
-    
-    # Process elements one by one to maintain dependency
-    for i in range(BLOCK_SIZE):
-        idx = block_start + i
-        if idx < n_elements:
+        for i in range(min(BLOCK_SIZE, n_elements)):
+            idx = block_start + i
             b_val = tl.load(b_ptr + idx)
             result = (b_val + x) * 0.5
             tl.store(a_ptr + idx, result)
             x = b_val
-
-# Simpler implementation that handles the sequential nature correctly
-@triton.jit 
-def s254_simple_kernel(a_ptr, b_ptr, n_elements):
-    # Single threaded approach to handle sequential dependency
-    x = tl.load(b_ptr + n_elements - 1)
-    
-    for i in range(n_elements):
-        b_val = tl.load(b_ptr + i)
-        result = (b_val + x) * 0.5
-        tl.store(a_ptr + i, result)
-        x = b_val
-
-def s254_triton(a, b):
-    n_elements = a.shape[0]
-    
-    # Use simple sequential kernel due to carry-around dependency
-    grid = (1,)
-    s254_simple_kernel[grid](a, b, n_elements)

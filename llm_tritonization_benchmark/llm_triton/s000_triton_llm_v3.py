@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s000_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -18,4 +18,4 @@ def s000_triton(a, b):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s000_kernel[grid](a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    s000_kernel[grid](a, b, n_elements, BLOCK_SIZE)

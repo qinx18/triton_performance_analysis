@@ -22,4 +22,4 @@ def vtvtv_triton(a, b, c):
     BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vtvtv_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
+    vtvtv_kernel[grid](a, b, c, n_elements, BLOCK_SIZE=BLOCK_SIZE)

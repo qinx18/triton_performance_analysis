@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s172
-# Generated: 2025-11-28 18:59:56
+# Generated: 2025-11-29 18:07:26
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 917
-# Output Tokens: 476
+# Output Tokens: 445
 
 ================================================================================
 PROMPT:
@@ -106,44 +106,39 @@ import torch
 
 @triton.jit
 def s172_kernel(a_ptr, b_ptr, n1, n3, LEN_1D, BLOCK_SIZE: tl.constexpr):
-    # Calculate number of elements in the strided sequence
-    num_elements = (LEN_1D - (n1 - 1) + n3 - 1) // n3
+    # Calculate the starting index for this block
+    block_id = tl.program_id(0)
     
-    # Get program ID and calculate element index
-    pid = tl.program_id(axis=0)
+    # Calculate how many elements this thread block will process
+    # We need to map block_id to the actual indices in the strided pattern
+    base_idx = n1 - 1 + block_id * n3
     
-    # Calculate the actual array index using strided pattern
-    i = (n1 - 1) + pid * n3
+    # Check if this block's starting index is valid
+    if base_idx >= LEN_1D:
+        return
     
-    # Create mask to handle bounds
-    mask = (pid < num_elements) & (i < LEN_1D)
-    
-    # Load values with masking
-    a_val = tl.load(a_ptr + i, mask=mask)
-    b_val = tl.load(b_ptr + i, mask=mask)
-    
-    # Perform computation
-    result = a_val + b_val
-    
-    # Store result with masking
-    tl.store(a_ptr + i, result, mask=mask)
+    # Load and compute
+    mask = base_idx < LEN_1D
+    if mask:
+        a_val = tl.load(a_ptr + base_idx)
+        b_val = tl.load(b_ptr + base_idx)
+        result = a_val + b_val
+        tl.store(a_ptr + base_idx, result)
 
 def s172_triton(a, b, n1, n3):
     LEN_1D = a.shape[0]
     
-    # Calculate number of elements in the strided sequence
+    # Calculate the number of elements that will be processed
+    if n3 <= 0 or n1 - 1 >= LEN_1D:
+        return
+    
+    # Calculate number of iterations in the original loop
     num_elements = (LEN_1D - (n1 - 1) + n3 - 1) // n3
     
-    # Choose block size
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 1
+    grid = (num_elements,)
     
-    # Calculate grid size
-    grid = (triton.cdiv(num_elements, BLOCK_SIZE),)
-    
-    # Launch kernel
     s172_kernel[grid](
-        a, b,
-        n1, n3, LEN_1D,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, n1, n3, LEN_1D, BLOCK_SIZE
     )
 ```

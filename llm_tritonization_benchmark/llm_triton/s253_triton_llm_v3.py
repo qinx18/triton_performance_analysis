@@ -15,7 +15,7 @@ def s253_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     
     condition = a_vals > b_vals
-    s = a_vals - b_vals * d_vals
+    s = tl.where(condition, a_vals - b_vals * d_vals, 0.0)
     
     new_c = tl.where(condition, c_vals + s, c_vals)
     new_a = tl.where(condition, s, a_vals)

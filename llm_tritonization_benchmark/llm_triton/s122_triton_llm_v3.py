@@ -10,42 +10,47 @@ def s122_kernel(a_ptr, b_ptr, n1, n3, LEN_1D, BLOCK_SIZE: tl.constexpr):
     # Get program ID
     pid = tl.program_id(0)
     
-    # Calculate which iteration this thread handles
-    if pid >= num_iterations:
-        return
+    # Calculate which iteration this thread block handles
+    iter_idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     
-    # Calculate i, j, k for this iteration
-    i = n1 - 1 + pid * n3
-    j = 1
-    k = j * (pid + 1)  # k accumulates j for each iteration
+    # Mask for valid iterations
+    mask = iter_idx < num_iterations
     
-    # Bounds check
-    if i >= LEN_1D:
-        return
+    # Calculate i values: i = n1-1 + iter_idx * n3
+    i_vals = (n1 - 1) + iter_idx * n3
     
-    # Load values
-    a_val = tl.load(a_ptr + i)
-    b_idx = LEN_1D - k
+    # Calculate k values: k = 1 + iter_idx (since j=1 and k += j each iteration)
+    k_vals = 1 + iter_idx
     
-    # Bounds check for b array access
-    if b_idx >= 0 and b_idx < LEN_1D:
-        b_val = tl.load(b_ptr + b_idx)
-        result = a_val + b_val
-        tl.store(a_ptr + i, result)
+    # Calculate b indices: LEN_1D - k
+    b_indices = LEN_1D - k_vals
+    
+    # Load values with masking
+    a_vals = tl.load(a_ptr + i_vals, mask=mask)
+    b_vals = tl.load(b_ptr + b_indices, mask=mask)
+    
+    # Perform computation
+    result = a_vals + b_vals
+    
+    # Store result
+    tl.store(a_ptr + i_vals, result, mask=mask)
 
 def s122_triton(a, b, n1, n3):
     LEN_1D = a.shape[0]
     
     # Calculate the number of iterations
-    num_iterations = max(0, (LEN_1D - (n1 - 1) + n3 - 1) // n3)
+    num_iterations = (LEN_1D - (n1 - 1) + n3 - 1) // n3
     
-    if num_iterations == 0:
+    if num_iterations <= 0:
         return
     
-    # Launch kernel with one thread per iteration
+    # Choose block size
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(num_iterations, BLOCK_SIZE),)
     
-    s122_kernel[grid](
+    # Calculate grid size
+    grid_size = (triton.cdiv(num_iterations, BLOCK_SIZE),)
+    
+    # Launch kernel
+    s122_kernel[grid_size](
         a, b, n1, n3, LEN_1D, BLOCK_SIZE
     )

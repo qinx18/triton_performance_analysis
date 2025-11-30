@@ -8,35 +8,48 @@ def s2275_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr
 ):
-    i = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    i_mask = i < LEN_2D
+    i = tl.program_id(0)
     
-    # First inner loop: for j in range(LEN_2D)
-    for j in range(LEN_2D):
-        # Calculate linear indices for aa[j][i], bb[j][i], cc[j][i]
-        idx = j * LEN_2D + i
+    if i < LEN_2D:
+        # Inner loop over j - vectorized
+        j_offsets = tl.arange(0, BLOCK_SIZE)
         
-        aa_val = tl.load(aa_ptr + idx, mask=i_mask)
-        bb_val = tl.load(bb_ptr + idx, mask=i_mask)
-        cc_val = tl.load(cc_ptr + idx, mask=i_mask)
+        # Process in chunks of BLOCK_SIZE
+        for j_start in range(0, LEN_2D, BLOCK_SIZE):
+            j_indices = j_start + j_offsets
+            j_mask = j_indices < LEN_2D
+            
+            # Calculate 2D indices: aa[j][i] -> aa[j * LEN_2D + i]
+            aa_indices = j_indices * LEN_2D + i
+            bb_indices = j_indices * LEN_2D + i
+            cc_indices = j_indices * LEN_2D + i
+            
+            # Load values
+            aa_vals = tl.load(aa_ptr + aa_indices, mask=j_mask)
+            bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask)
+            cc_vals = tl.load(cc_ptr + cc_indices, mask=j_mask)
+            
+            # Compute: aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
+            result = aa_vals + bb_vals * cc_vals
+            
+            # Store result
+            tl.store(aa_ptr + aa_indices, result, mask=j_mask)
         
-        result = aa_val + bb_val * cc_val
-        tl.store(aa_ptr + idx, result, mask=i_mask)
-    
-    # Second computation: a[i] = b[i] + c[i] * d[i]
-    a_val = tl.load(a_ptr + i, mask=i_mask)
-    b_val = tl.load(b_ptr + i, mask=i_mask)
-    c_val = tl.load(c_ptr + i, mask=i_mask)
-    d_val = tl.load(d_ptr + i, mask=i_mask)
-    
-    result = b_val + c_val * d_val
-    tl.store(a_ptr + i, result, mask=i_mask)
+        # Compute: a[i] = b[i] + c[i] * d[i]
+        a_val = tl.load(a_ptr + i)
+        b_val = tl.load(b_ptr + i)
+        c_val = tl.load(c_ptr + i)
+        d_val = tl.load(d_ptr + i)
+        
+        result_1d = b_val + c_val * d_val
+        tl.store(a_ptr + i, result_1d)
 
 def s2275_triton(aa, bb, cc, a, b, c, d):
     LEN_2D = aa.shape[0]
     
+    # Launch kernel with one thread per i
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
+    grid = (LEN_2D,)
     
     s2275_kernel[grid](
         aa, bb, cc, a, b, c, d,

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s176
-# Generated: 2025-11-28 19:00:27
+# Generated: 2025-11-29 18:07:58
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['a']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1449
-# Output Tokens: 605
+# Output Tokens: 603
 
 ================================================================================
 PROMPT:
@@ -166,54 +166,53 @@ def s176_kernel(
     b_ptr,
     c_ptr,
     m: tl.constexpr,
+    len_1d: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Get program ID for j dimension
-    j = tl.program_id(0)
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     
-    # Load c[j] once for this program
-    c_val = tl.load(c_ptr + j)
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < m
     
-    # Process i dimension in blocks
-    i_block_start = tl.program_id(1) * BLOCK_SIZE
-    i_offsets = i_block_start + tl.arange(0, BLOCK_SIZE)
-    i_mask = i_offsets < m
+    # Load current values from the read-only copy
+    a_vals = tl.load(a_copy_ptr + offsets, mask=mask, other=0.0)
     
-    # Load a[i] values from the read-only copy
-    a_vals = tl.load(a_copy_ptr + i_offsets, mask=i_mask)
+    # Compute convolution for all j values
+    for j in range(m):  # m = LEN_1D/2
+        # Load c[j] (scalar, broadcast to all elements)
+        c_val = tl.load(c_ptr + j)
+        
+        # Compute b indices: i + m - j - 1
+        b_offsets = offsets + m - j - 1
+        b_mask = mask & (b_offsets >= 0) & (b_offsets < len_1d)
+        
+        # Load b values
+        b_vals = tl.load(b_ptr + b_offsets, mask=b_mask, other=0.0)
+        
+        # Accumulate: a[i] += b[i+m-j-1] * c[j]
+        a_vals += b_vals * c_val
     
-    # Calculate b indices: i + m - j - 1
-    b_offsets = i_offsets + m - j - 1
-    b_vals = tl.load(b_ptr + b_offsets, mask=i_mask)
-    
-    # Compute: a[i] += b[i+m-j-1] * c[j]
-    result = a_vals + b_vals * c_val
-    
-    # Store result back to original a array
-    tl.store(a_ptr + i_offsets, result, mask=i_mask)
+    # Store results back to original array
+    tl.store(a_ptr + offsets, a_vals, mask=mask)
 
 def s176_triton(a, b, c):
-    LEN_1D = a.shape[0]
-    m = LEN_1D // 2
+    len_1d = a.shape[0]
+    m = len_1d // 2
     
     # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
     
-    # Grid configuration
     BLOCK_SIZE = 256
-    grid = (
-        m,  # j dimension (0 to m-1)
-        triton.cdiv(m, BLOCK_SIZE),  # i dimension blocks
-    )
+    grid = lambda meta: (triton.cdiv(m, meta['BLOCK_SIZE']),)
     
-    # Launch kernel for each j value
-    for j in range(m):
-        s176_kernel[(1, triton.cdiv(m, BLOCK_SIZE))](
-            a,
-            a_copy,
-            b,
-            c,
-            m=m,
-            BLOCK_SIZE=BLOCK_SIZE,
-        )
+    s176_kernel[grid](
+        a,
+        a_copy,
+        b,
+        c,
+        m,
+        len_1d,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
 ```
