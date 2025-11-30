@@ -1,14 +1,56 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-11-29 (Latest Regeneration with Original Prompt)
-**Previous Tests:** 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-11-30 (PyTorch Baseline Comparison - auto_test_all_tsvc.py)
+**Previous Tests:** 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
-**Infrastructure:** C Ground Truth Comparison ✅
+**Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 C Ground Truth Testing (2025-11-29) - LATEST RUN
+## 🔬 PyTorch Baseline Testing (2025-11-30) - LATEST RUN
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 92 | 60.9% |
+| ❌ **FAILING** | 59 | 39.1% |
+
+### Non-Numerical Errors (13 functions - Compilation/Runtime Errors)
+
+| Function | Error Type | Description |
+|----------|------------|-------------|
+| **s114** | UnsupportedAST | `continue` statement not supported in Triton |
+| **s1213** | ValueError | @triton.jit usage error - _builder argument outside JIT |
+| **s1232** | UnsupportedAST | `break` statement not supported in Triton |
+| **s13110** | ValueError | Cannot call @triton.jit'd outside kernel scope |
+| **s275** | ValueError | @triton.jit usage error - _builder argument outside JIT |
+| **s312** | UnsupportedAST | `lambda` not supported in Triton |
+| **s3112** | ValueError | @triton.jit usage error - _builder argument outside JIT |
+| **s318** | MissingArgs | Missing 4 required positional arguments: 'b', 'c', 'd', 'e' |
+| **s332** | MissingArgs | Missing 1 required positional argument: 't_val' |
+| **s351** | MissingArgs | Missing 1 required positional argument: 'c' |
+| **s4113** | IncompatibleType | Type mismatch: pointer<fp32> vs triton.language.float32 |
+| **s4115** | IncompatibleType | Type mismatch: pointer<fp32> vs triton.language.float32 |
+| **s482** | UnsupportedAST | `break` statement not supported in Triton |
+
+### Non-Numerical Error Summary by Category
+| Category | Count | Functions |
+|----------|-------|-----------|
+| Unsupported AST (`break`/`continue`/`lambda`) | 5 | s114, s1232, s312, s482, s312 |
+| @triton.jit Usage Errors | 4 | s1213, s13110, s275, s3112 |
+| Missing Arguments | 3 | s318, s332, s351 |
+| Type/Pointer Errors | 2 | s4113, s4115 |
+
+### Passing Functions (92):
+s000, s111, s1111, s1112, s1113, s1115, s115, s116, s1161, s118, s121, s1221, s123, s124, s1244, s125, s1251, s127, s1279, s128, s1281, s131, s1351, s141, s152, s161, s171, s172, s175, s2101, s211, s212, s221, s222, s2251, s2275, s235, s241, s243, s251, s252, s253, s255, s261, s271, s2710, s2711, s2712, s272, s273, s274, s277, s278, s279, s291, s293, s311, s3110, s3111, s3113, s313, s314, s315, s316, s317, s319, s321, s3251, s331, s343, s352, s4117, s4121, s421, s441, s442, s443, s451, s452, s453, s481, va, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failing Functions (59):
+s1119, s112, s113, s114, s119, s1213, s122, s1232, s126, s13110, s132, s1421, s151, s162, s173, s174, s176, s2102, s2111, s2233, s2244, s231, s232, s233, s242, s244, s254, s256, s257, s258, s275, s276, s281, s292, s31111, s3112, s312, s318, s322, s323, s332, s341, s342, s351, s353, s4112, s4113, s4114, s4115, s4116, s422, s423, s424, s431, s471, s482, s491, vag, vas
+
+---
+
+## 🔬 C Ground Truth Testing (2025-11-29)
 
 ### Important Finding
 Previous testing compared LLM-generated Triton against LLM-generated PyTorch baselines. This creates a problem: **if both implementations have the same bug, the test passes incorrectly**.
@@ -77,7 +119,8 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 
 | Date | PASS | FAIL | Pass Rate | Notes |
 |------|------|------|-----------|-------|
-| **2025-11-29** | **97** | **54** | **64.2%** | Latest regeneration with original prompt |
+| **2025-11-30** | **92** | **59** | **60.9%** | PyTorch baseline (auto_test_all_tsvc.py) |
+| 2025-11-29 | 97 | 54 | 64.2% | C ground truth - original prompt |
 | 2025-11-28 | 94 | 57 | 62.3% | Previous C ground truth run |
 | 2025-11-18 | 99 | 52 | 65.6% | PyTorch baseline comparison |
 
