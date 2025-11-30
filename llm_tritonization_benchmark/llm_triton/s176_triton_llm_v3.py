@@ -1,60 +1,56 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s176_kernel(
-    a_ptr,
-    a_copy_ptr,
-    b_ptr,
-    c_ptr,
-    m: tl.constexpr,
-    len_1d: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr,
+    a_ptr, b_ptr, c_ptr,
+    LEN_1D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr
 ):
+    # Get program ID
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
     
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < m
+    # Calculate which j iteration this block handles
+    j = pid
     
-    # Load current values from the read-only copy
-    a_vals = tl.load(a_copy_ptr + offsets, mask=mask, other=0.0)
+    if j >= LEN_1D // 2:
+        return
     
-    # Compute convolution for all j values
-    for j in range(m):  # m = LEN_1D/2
-        # Load c[j] (scalar, broadcast to all elements)
-        c_val = tl.load(c_ptr + j)
+    # Load c[j] once for this j iteration
+    c_j = tl.load(c_ptr + j)
+    
+    # Calculate m = LEN_1D/2
+    m = LEN_1D // 2
+    
+    # Process all i values for this j
+    for i_start in range(0, m, BLOCK_SIZE):
+        # Calculate offsets for this block of i values
+        i_offsets = i_start + tl.arange(0, BLOCK_SIZE)
+        i_mask = i_offsets < m
         
-        # Compute b indices: i + m - j - 1
-        b_offsets = offsets + m - j - 1
-        b_mask = mask & (b_offsets >= 0) & (b_offsets < len_1d)
+        # Load a[i] values
+        a_vals = tl.load(a_ptr + i_offsets, mask=i_mask, other=0.0)
         
-        # Load b values
-        b_vals = tl.load(b_ptr + b_offsets, mask=b_mask, other=0.0)
+        # Calculate b indices: i + m - j - 1
+        b_indices = i_offsets + m - j - 1
+        b_vals = tl.load(b_ptr + b_indices, mask=i_mask, other=0.0)
         
-        # Accumulate: a[i] += b[i+m-j-1] * c[j]
-        a_vals += b_vals * c_val
-    
-    # Store results back to original array
-    tl.store(a_ptr + offsets, a_vals, mask=mask)
+        # Compute a[i] += b[i+m-j-1] * c[j]
+        result = a_vals + b_vals * c_j
+        
+        # Store back to a[i]
+        tl.store(a_ptr + i_offsets, result, mask=i_mask)
 
 def s176_triton(a, b, c):
-    len_1d = a.shape[0]
-    m = len_1d // 2
+    LEN_1D = a.shape[0]
     
-    # Create read-only copy to handle WAR dependencies
-    a_copy = a.clone()
-    
+    # Use j dimension for parallelization (LEN_1D/2 blocks)
+    grid = (LEN_1D // 2,)
     BLOCK_SIZE = 256
-    grid = lambda meta: (triton.cdiv(m, meta['BLOCK_SIZE']),)
     
     s176_kernel[grid](
-        a,
-        a_copy,
-        b,
-        c,
-        m,
-        len_1d,
-        BLOCK_SIZE=BLOCK_SIZE,
+        a, b, c,
+        LEN_1D=LEN_1D,
+        BLOCK_SIZE=BLOCK_SIZE
     )

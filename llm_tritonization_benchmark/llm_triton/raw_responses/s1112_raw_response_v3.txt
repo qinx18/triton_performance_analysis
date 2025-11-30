@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1112
-# Generated: 2025-11-29 18:01:43
+# Generated: 2025-11-30 10:50:42
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 859
-# Output Tokens: 334
+# Output Tokens: 331
 
 ================================================================================
 PROMPT:
@@ -103,14 +103,14 @@ def s1112_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Reverse the offsets to simulate reverse iteration
+    # Reverse the offsets to implement the reverse loop
     reversed_offsets = n_elements - 1 - offsets
     reversed_mask = reversed_offsets >= 0
     final_mask = mask & reversed_mask
     
     b_vals = tl.load(b_ptr + reversed_offsets, mask=final_mask)
-    a_vals = b_vals + 1.0
-    tl.store(a_ptr + reversed_offsets, a_vals, mask=final_mask)
+    result = b_vals + 1.0
+    tl.store(a_ptr + reversed_offsets, result, mask=final_mask)
 
 def s1112_triton(a, b):
     n_elements = a.numel()

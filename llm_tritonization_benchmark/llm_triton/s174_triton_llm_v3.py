@@ -3,13 +3,8 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s174_kernel(
-    a_ptr,
-    b_ptr,
-    M,
-    BLOCK_SIZE: tl.constexpr,
-):
-    pid = tl.program_id(axis=0)
+def s174_kernel(a_ptr, b_ptr, M, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < M
@@ -24,12 +19,13 @@ def s174_kernel(
     # Store to a[i+M]
     tl.store(a_ptr + offsets + M, result, mask=mask)
 
-def s174_triton(a, b, M):
+def s174_triton(a, b):
+    M = a.shape[0] // 2  # Assuming a has size 2*M based on access pattern a[i+M]
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(M, BLOCK_SIZE),)
     
     s174_kernel[grid](
-        a, b, M, BLOCK_SIZE
+        a, b, M,
+        BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return a

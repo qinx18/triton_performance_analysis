@@ -21,4 +21,4 @@ def vpv_triton(a, b):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vpv_kernel[grid](a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    vpv_kernel[grid](a, b, n_elements, BLOCK_SIZE)

@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s272_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, t, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -10,22 +10,21 @@ def s272_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, t, n_elements, BLOCK_SIZE: tl
     mask = offsets < n_elements
     
     e_vals = tl.load(e_ptr + offsets, mask=mask)
-    condition = e_vals >= t
-    
     c_vals = tl.load(c_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
-    
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     
-    a_update = c_vals * d_vals
-    b_update = c_vals * c_vals
+    condition = e_vals >= t
     
-    a_vals = tl.where(condition, a_vals + a_update, a_vals)
-    b_vals = tl.where(condition, b_vals + b_update, b_vals)
+    cd_product = c_vals * d_vals
+    cc_product = c_vals * c_vals
     
-    tl.store(a_ptr + offsets, a_vals, mask=mask)
-    tl.store(b_ptr + offsets, b_vals, mask=mask)
+    new_a = tl.where(condition, a_vals + cd_product, a_vals)
+    new_b = tl.where(condition, b_vals + cc_product, b_vals)
+    
+    tl.store(a_ptr + offsets, new_a, mask=mask)
+    tl.store(b_ptr + offsets, new_b, mask=mask)
 
 def s272_triton(a, b, c, d, e, t):
     n_elements = a.numel()

@@ -200,6 +200,11 @@ def generate_correctness_test(func_name, func_spec):
     array_names = [arr for arr, mode in sorted(arrays.items()) if mode in ['r', 'rw', 'w']]
     output_arrays = [arr for arr, mode in sorted(arrays.items()) if mode in ['rw', 'w']]
 
+    # If no output arrays are detected (database may be incorrect), use first array for comparison
+    # This handles cases where the database incorrectly marks rw arrays as r
+    if not output_arrays and array_names:
+        output_arrays = [array_names[0]]
+
     # Scalar params handling:
     # Include all scalars (including 'iterations') for backward compatibility
     # Dynamic signature detection will only pass what each function actually needs
@@ -224,11 +229,14 @@ def generate_correctness_test(func_name, func_spec):
     # Build comparison for output arrays
     if len(output_arrays) == 1:
         compare_str = f"            max_error = torch.max(torch.abs({output_arrays[0]}_pt - {output_arrays[0]}_tr)).item()"
+        passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({output_arrays[0]}_pt, {output_arrays[0]}_tr, rtol=1e-3, atol=1e-3)"
     elif len(output_arrays) > 1:
         compare_parts = [f"torch.max(torch.abs({arr}_pt - {arr}_tr)).item()" for arr in output_arrays]
         compare_str = f"            max_error = max([{', '.join(compare_parts)}])"
+        passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({output_arrays[0]}_pt, {output_arrays[0]}_tr, rtol=1e-3, atol=1e-3)"
     else:
         compare_str = "            max_error = 0.0  # No output arrays to compare"
+        passed_check_str = "passed = True  # No output arrays - function runs without error"
 
     # Build available params dict (what the test can provide)
     available_arrays = array_names
@@ -316,7 +324,7 @@ def test_correctness():
 {compare_str}
 
             # Use relative tolerance for numerically unstable algorithms
-            passed = torch.allclose({output_arrays[0] if output_arrays else 'a'}_pt, {output_arrays[0] if output_arrays else 'a'}_tr, rtol=1e-3, atol=1e-3)
+            {passed_check_str}
             if passed:
                 print(f"✓ PASS  (max_err={{max_error:.2e}})")
             else:

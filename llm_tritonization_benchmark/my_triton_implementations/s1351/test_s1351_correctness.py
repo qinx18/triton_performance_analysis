@@ -79,10 +79,11 @@ def test_correctness():
             s1351_triton(*tr_args)
 
             # Compare output arrays directly (in-place modification)
-            max_error = 0.0  # No output arrays to compare
+            max_error = torch.max(torch.abs(a_pt - a_tr)).item()
 
-            # Check if within tolerance
-            if max_error < 1e-3:  # Relaxed tolerance for complex functions
+            # Use relative tolerance for numerically unstable algorithms
+            passed = max_error < 1e-3 or torch.allclose(a_pt, a_tr, rtol=1e-3, atol=1e-3)
+            if passed:
                 print(f"✓ PASS  (max_err={max_error:.2e})")
             else:
                 print(f"✗ FAIL  (max_error={max_error:.2e})")

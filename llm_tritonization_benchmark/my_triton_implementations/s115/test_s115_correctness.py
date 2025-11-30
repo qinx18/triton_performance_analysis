@@ -78,7 +78,7 @@ def test_correctness():
             max_error = torch.max(torch.abs(a_pt - a_tr)).item()
 
             # Use relative tolerance for numerically unstable algorithms
-            passed = torch.allclose(a_pt, a_tr, rtol=1e-3, atol=1e-3)
+            passed = max_error < 1e-3 or torch.allclose(a_pt, a_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"✓ PASS  (max_err={max_error:.2e})")
             else:

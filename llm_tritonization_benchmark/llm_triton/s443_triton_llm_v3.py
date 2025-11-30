@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s443_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -10,24 +10,26 @@ def s443_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr
     mask = offsets < n_elements
     
     # Load data
-    d_vals = tl.load(d_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    a = tl.load(a_ptr + offsets, mask=mask)
+    b = tl.load(b_ptr + offsets, mask=mask)
+    c = tl.load(c_ptr + offsets, mask=mask)
+    d = tl.load(d_ptr + offsets, mask=mask)
     
-    # Conditional computation: if d[i] <= 0, use b[i]*c[i], else use b[i]*b[i]
-    condition = d_vals <= 0.0
-    increment = tl.where(condition, b_vals * c_vals, b_vals * b_vals)
-    
-    # Update a[i]
-    a_vals = a_vals + increment
+    # Conditional computation: if d[i] <= 0, use b[i] * c[i], else use b[i] * b[i]
+    condition = d <= 0.0
+    result = tl.where(condition, b * c, b * b)
+    a = a + result
     
     # Store result
-    tl.store(a_ptr + offsets, a_vals, mask=mask)
+    tl.store(a_ptr + offsets, a, mask=mask)
 
 def s443_triton(a, b, c, d):
     n_elements = a.numel()
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s443_kernel[grid](a, b, c, d, n_elements, BLOCK_SIZE)
+    s443_kernel[grid](
+        a, b, c, d, 
+        n_elements, 
+        BLOCK_SIZE=BLOCK_SIZE
+    )

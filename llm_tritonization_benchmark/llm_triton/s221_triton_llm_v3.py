@@ -1,55 +1,38 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s221_kernel(
-    a_ptr,
-    b_ptr,
-    b_copy_ptr,
-    c_ptr,
-    d_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    block_start = tl.program_id(0) * BLOCK_SIZE + 1
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+def s221_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This kernel must be executed with a single thread block due to WAR dependency
+    # b[i] = b[i-1] + a[i] + d[i] creates a sequential dependency
     
-    # Load values
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    b_prev_vals = tl.load(b_copy_ptr + offsets - 1, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    d_vals = tl.load(d_ptr + offsets, mask=mask)
-    
-    # Compute a[i] += c[i] * d[i]
-    new_a_vals = a_vals + c_vals * d_vals
-    
-    # Compute b[i] = b[i-1] + a[i] + d[i]
-    new_b_vals = b_prev_vals + new_a_vals + d_vals
-    
-    # Store results
-    tl.store(a_ptr + offsets, new_a_vals, mask=mask)
-    tl.store(b_ptr + offsets, new_b_vals, mask=mask)
+    # Only thread 0 performs the computation
+    if tl.program_id(0) == 0:
+        for i in range(1, n_elements):
+            # Load values
+            c_val = tl.load(c_ptr + i)
+            d_val = tl.load(d_ptr + i)
+            a_val = tl.load(a_ptr + i)
+            b_prev = tl.load(b_ptr + i - 1)
+            
+            # Compute a[i] += c[i] * d[i]
+            new_a = a_val + c_val * d_val
+            tl.store(a_ptr + i, new_a)
+            
+            # Compute b[i] = b[i-1] + a[i] + d[i]
+            new_b = b_prev + new_a + d_val
+            tl.store(b_ptr + i, new_b)
 
 def s221_triton(a, b, c, d):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    BLOCK_SIZE = 1024
     
-    # Create read-only copy for WAR dependency
-    b_copy = b.clone()
-    
-    # Process elements starting from index 1
-    elements_to_process = n_elements - 1
-    
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(elements_to_process, BLOCK_SIZE),)
+    # Launch with single program to handle sequential dependency
+    grid = (1,)
     
     s221_kernel[grid](
-        a,
-        b,
-        b_copy,
-        c,
-        d,
+        a, b, c, d,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE
     )

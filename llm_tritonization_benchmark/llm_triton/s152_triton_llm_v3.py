@@ -3,60 +3,64 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s152s_kernel(a_ptr, b_ptr, c_ptr, i, BLOCK_SIZE: tl.constexpr):
-    # This is a placeholder for the s152s subroutine
-    # Since the actual implementation is not provided, we'll do a simple operation
-    # that modifies array 'a' based on arrays 'b' and 'c'
+def s152s_kernel(a_ptr, b_ptr, c_ptr, i, BLOCK_SIZE: tl.constexpr, LEN_1D: tl.constexpr):
+    # This kernel implements the s152s subroutine call
+    # Since we don't have the actual s152s implementation, we'll assume it's a simple operation
+    # that uses arrays a, b, c and index i
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < 1  # Only process one element at index i
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offset < LEN_1D
     
-    # Simple operation: a[i] = b[i] + c[i]
-    if pid == 0:  # Only first block processes index i
-        if i < tl.load(a_ptr + i * 0 + i, mask=True, other=0.0):  # Bounds check
-            b_val = tl.load(b_ptr + i)
-            c_val = tl.load(c_ptr + i)
-            result = b_val + c_val
-            tl.store(a_ptr + i, result)
+    # Load values
+    a_val = tl.load(a_ptr + offset, mask=mask)
+    b_val = tl.load(b_ptr + offset, mask=mask)
+    c_val = tl.load(c_ptr + offset, mask=mask)
+    
+    # Placeholder operation for s152s - modify based on actual s152s implementation
+    # This is a simple example operation
+    result = a_val + b_val + c_val
+    
+    # Store result back to a (assuming s152s modifies array a)
+    tl.store(a_ptr + offset, result, mask=mask)
 
 @triton.jit
-def s152_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s152_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, BLOCK_SIZE: tl.constexpr, LEN_1D: tl.constexpr):
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offset < LEN_1D
     
-    # Load values from d and e arrays
-    d_vals = tl.load(d_ptr + offsets, mask=mask)
-    e_vals = tl.load(e_ptr + offsets, mask=mask)
+    # Load d and e values
+    d_val = tl.load(d_ptr + offset, mask=mask)
+    e_val = tl.load(e_ptr + offset, mask=mask)
     
     # Compute b[i] = d[i] * e[i]
-    b_vals = d_vals * e_vals
+    b_val = d_val * e_val
+    tl.store(b_ptr + offset, b_val, mask=mask)
     
-    # Store results to b array
-    tl.store(b_ptr + offsets, b_vals, mask=mask)
-    
-    # For each element, we need to call s152s
-    # Since we can't call another kernel from within a kernel easily,
-    # we'll implement the s152s functionality inline
-    # Assuming s152s does: a[i] = b[i] + c[i] (placeholder operation)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    a_vals = b_vals + c_vals
-    tl.store(a_ptr + offsets, a_vals, mask=mask)
+    # Note: The s152s subroutine call is problematic in parallel execution
+    # since it operates on individual indices. This would require sequential processing
+    # or a different approach depending on what s152s actually does.
 
 def s152_triton(a, b, c, d, e):
-    n_elements = a.shape[0]
-    
-    # Choose block size
+    LEN_1D = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(LEN_1D, BLOCK_SIZE),)
     
-    # Launch kernel
+    # First, compute b[i] = d[i] * e[i] for all i
     s152_kernel[grid](
         a, b, c, d, e,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=BLOCK_SIZE,
+        LEN_1D=LEN_1D
     )
     
-    return a
+    # For the s152s calls, we need to handle them sequentially
+    # since each call depends on the specific index i
+    for i in range(LEN_1D):
+        # Call s152s equivalent for each index
+        # This is a simplified version - actual implementation depends on s152s
+        grid_s152s = (triton.cdiv(LEN_1D, BLOCK_SIZE),)
+        s152s_kernel[grid_s152s](
+            a, b, c, i,
+            BLOCK_SIZE=BLOCK_SIZE,
+            LEN_1D=LEN_1D
+        )

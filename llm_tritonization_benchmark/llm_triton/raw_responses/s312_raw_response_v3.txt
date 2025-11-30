@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s312
-# Generated: 2025-11-29 18:15:37
+# Generated: 2025-11-30 11:03:48
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
-# WAR Dependencies: ['prod']
+# WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1373
-# Output Tokens: 342
+# Input Tokens: 859
+# Output Tokens: 600
 
 ================================================================================
 PROMPT:
@@ -50,60 +50,6 @@ real_t s312(struct args_t * func_args)
         for (int i = 0; i < LEN_1D; i++) {
             prod *= a[i];
         }
-```
-
-## CRITICAL: WAR Race Condition Handling Required
-
-This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
-**Arrays requiring read-only copy**: ['prod']
-
-### Problem
-In parallel execution across GPU blocks, if block B writes to a location before block A reads from it,
-block A reads the wrong (modified) value instead of the original value.
-
-### Required Solution: Read-Only Copy Pattern
-Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
-and store results to the original array.
-
-### Implementation Template
-```python
-# In wrapper function - create read-only copy BEFORE launching kernel:
-def s312_triton(...):
-    prod_copy = prod.clone()  # Read-only copy
-
-    # Pass BOTH original (for writes) AND copy (for reads) to kernel
-    s312_kernel[grid](
-        prod,        # Write destination (original)
-        prod_copy,   # Read source (immutable copy)
-        ...other_args...
-    )
-
-# In kernel - LOAD from copy, STORE to original:
-@triton.jit
-def {kernel_name}_kernel(
-    prod_ptr,        # Write destination
-    prod_copy_ptr,   # Read source
-    ...
-):
-    offsets = ...
-    prod_vals = tl.load(prod_copy_ptr + offsets, mask=mask)  # Read from COPY
-
-    result = ...  # Compute using loaded values
-
-    tl.store(prod_ptr + write_offsets, result, mask=mask)  # Write to ORIGINAL
-```
-
-**Why this works**: The copy preserves original values for all threads. Reads from immutable copy,
-writes to original - no conflict possible.
-
-**CRITICAL: Use forward iteration**
-ALWAYS use FORWARD iteration with ascending offsets:
-```python
-# CORRECT - Forward iteration
-offsets = block_start + tl.arange(0, BLOCK_SIZE)
-
-# INCORRECT - Reverse iteration (causes memory access issues in Triton)
-# offsets = block_start - tl.arange(0, BLOCK_SIZE)  # DO NOT USE
 ```
 
 
@@ -153,39 +99,54 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s312_kernel(a_ptr, prod_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    block_id = tl.program_id(0)
+def s312_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This is a reduction operation - compute product of all elements in array a
+    # Each block processes BLOCK_SIZE elements and computes partial product
+    block_start = tl.program_id(0) * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    if block_id == 0:
-        prod = 1.0
-        
-        for block_start in range(0, n_elements, BLOCK_SIZE):
-            offsets = block_start + tl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_elements
-            
-            a_vals = tl.load(a_ptr + offsets, mask=mask, other=1.0)
-            
-            for i in range(BLOCK_SIZE):
-                if block_start + i < n_elements:
-                    prod *= tl.load(a_ptr + block_start + i)
-        
-        tl.store(prod_ptr, prod)
+    # Load elements with mask, use 1.0 as default for out-of-bounds
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=1.0)
+    
+    # Compute partial product for this block
+    partial_prod = tl.reduce(a_vals, axis=0, combine_fn=lambda x, y: x * y)
+    
+    # Store partial result
+    tl.store(result_ptr + tl.program_id(0), partial_prod)
 
 def s312_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 1024
+    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    prod = torch.ones(1, dtype=a.dtype, device=a.device)
+    # Create temporary array to store partial products
+    partial_results = torch.ones(n_blocks, dtype=a.dtype, device=a.device)
     
-    grid = (1,)
+    # Launch kernel to compute partial products
+    grid = (n_blocks,)
     s312_kernel[grid](
-        a, prod, n_elements, BLOCK_SIZE
+        a, partial_results, n_elements, BLOCK_SIZE
     )
     
-    return prod.item()
+    # Compute final product by multiplying all partial results on CPU
+    # For numerical stability, we do this reduction on GPU as well if needed
+    while partial_results.shape[0] > 1:
+        n_partials = partial_results.shape[0]
+        n_blocks_next = triton.cdiv(n_partials, BLOCK_SIZE)
+        next_partials = torch.ones(n_blocks_next, dtype=a.dtype, device=a.device)
+        
+        grid = (n_blocks_next,)
+        s312_kernel[grid](
+            partial_results, next_partials, n_partials, BLOCK_SIZE
+        )
+        
+        partial_results = next_partials
+    
+    return partial_results[0]
 ```

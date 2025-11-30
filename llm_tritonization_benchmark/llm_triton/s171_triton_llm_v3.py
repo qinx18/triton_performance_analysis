@@ -10,11 +10,11 @@ def s171_kernel(a_ptr, b_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
     mask = offsets < n_elements
     
     b_vals = tl.load(b_ptr + offsets, mask=mask)
-    a_offsets = offsets * inc
-    a_vals = tl.load(a_ptr + a_offsets, mask=mask)
+    a_indices = offsets * inc
+    a_vals = tl.load(a_ptr + a_indices, mask=mask)
     
-    a_vals += b_vals
-    tl.store(a_ptr + a_offsets, a_vals, mask=mask)
+    result = a_vals + b_vals
+    tl.store(a_ptr + a_indices, result, mask=mask)
 
 def s171_triton(a, b, inc):
     n_elements = a.shape[0] // inc

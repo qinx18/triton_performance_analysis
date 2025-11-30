@@ -1,13 +1,9 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def vbor_kernel(
-    a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, aa_ptr, x_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
+def vbor_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, aa_ptr, x_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -21,19 +17,19 @@ def vbor_kernel(
     e1 = tl.load(e_ptr + offsets, mask=mask)
     f1 = tl.load(aa_ptr + offsets, mask=mask)
     
-    # Compute a1 update
+    # Compute a1
     a1_new = (a1 * b1 * c1 + a1 * b1 * d1 + a1 * b1 * e1 + a1 * b1 * f1 +
               a1 * c1 * d1 + a1 * c1 * e1 + a1 * c1 * f1 + a1 * d1 * e1 +
               a1 * d1 * f1 + a1 * e1 * f1)
     
-    # Compute b1 update
+    # Compute b1
     b1_new = (b1 * c1 * d1 + b1 * c1 * e1 + b1 * c1 * f1 + b1 * d1 * e1 +
               b1 * d1 * f1 + b1 * e1 * f1)
     
-    # Compute c1 update
+    # Compute c1
     c1_new = c1 * d1 * e1 + c1 * d1 * f1 + c1 * e1 * f1
     
-    # Compute d1 update
+    # Compute d1
     d1_new = d1 * e1 * f1
     
     # Final computation
@@ -44,19 +40,13 @@ def vbor_kernel(
 
 def vbor_triton(a, b, c, d, e, aa, x):
     n_elements = a.shape[0]
-    
-    # Use aa[0] (first row of aa)
-    aa_row = aa[0]
-    
-    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Launch kernel
     vbor_kernel[grid](
-        a, b, c, d, e, aa_row, x,
+        a, b, c, d, e, aa, x,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
     return x

@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def vif_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -12,7 +12,7 @@ def vif_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     condition = b_vals > 0.0
     
-    # Only update a[i] where b[i] > 0
+    # Only update a[i] where condition is true
     combined_mask = mask & condition
     tl.store(a_ptr + offsets, b_vals, mask=combined_mask)
 

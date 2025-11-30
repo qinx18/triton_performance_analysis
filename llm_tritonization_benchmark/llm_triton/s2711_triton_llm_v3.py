@@ -17,16 +17,22 @@ def s2711_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     b_nonzero = b_vals != 0.0
     
     # Compute b[i] * c[i] where b[i] != 0.0
-    bc_product = b_vals * c_vals
+    update = tl.where(b_nonzero, b_vals * c_vals, 0.0)
     
-    # Only update a[i] where b[i] != 0.0
-    a_updated = tl.where(b_nonzero, a_vals + bc_product, a_vals)
+    # Update a[i] only where b[i] != 0.0
+    new_a = a_vals + update
     
-    tl.store(a_ptr + offsets, a_updated, mask=mask)
+    tl.store(a_ptr + offsets, new_a, mask=mask)
 
 def s2711_triton(a, b, c):
     n_elements = a.numel()
+    
+    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s2711_kernel[grid](a, b, c, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    s2711_kernel[grid](
+        a, b, c,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

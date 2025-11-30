@@ -1,13 +1,9 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s4121_kernel(
-    a_ptr, b_ptr, c_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
+def s4121_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -21,18 +17,15 @@ def s4121_kernel(
     result = b_vals * c_vals
     
     # a[i] += f(b[i], c[i])
-    a_vals += result
+    a_vals = a_vals + result
     
     tl.store(a_ptr + offsets, a_vals, mask=mask)
 
 def s4121_triton(a, b, c):
     n_elements = a.numel()
-    
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s4121_kernel[grid](
-        a, b, c,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        a, b, c, n_elements, BLOCK_SIZE=BLOCK_SIZE
     )

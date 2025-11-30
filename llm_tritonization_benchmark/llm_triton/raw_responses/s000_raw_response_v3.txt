@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s000
-# Generated: 2025-11-29 18:01:21
+# Generated: 2025-11-30 10:50:20
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 862
-# Output Tokens: 251
+# Output Tokens: 254
 
 ================================================================================
 PROMPT:
@@ -104,12 +104,12 @@ def s000_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     mask = offsets < n_elements
     
     b_vals = tl.load(b_ptr + offsets, mask=mask)
-    result = b_vals + 1
+    result = b_vals + 1.0
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s000_triton(a, b):
     n_elements = a.numel()
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s000_kernel[grid](a, b, n_elements, BLOCK_SIZE)

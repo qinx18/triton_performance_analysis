@@ -1,51 +1,59 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s1232_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get the current j position (column)
-    j = tl.program_id(0)
+    # Get program ID
+    pid = tl.program_id(0)
     
-    if j >= LEN_2D:
+    # Calculate which (i, j) pair this program handles
+    total_elements = (LEN_2D * (LEN_2D + 1)) // 2
+    
+    if pid >= total_elements:
         return
     
-    # Process elements from i=j to LEN_2D-1 for this column j
-    i_start = j
-    i_end = LEN_2D
+    # Convert linear index to triangular (i, j) coordinates
+    # For triangular iteration where i >= j
+    j = 0
+    cumulative = 0
+    remaining = pid
     
-    # Process in blocks along the i dimension
-    for i_block_start in range(i_start, i_end, BLOCK_SIZE):
-        # Calculate the range of i indices for this block
-        i_offsets = tl.arange(0, BLOCK_SIZE) + i_block_start
-        
-        # Create mask to ensure we don't go beyond bounds
-        mask = (i_offsets < i_end) & (i_offsets >= i_start)
-        
-        # Calculate memory offsets (row-major: [i][j] = i * LEN_2D + j)
-        mem_offsets = i_offsets * LEN_2D + j
-        
-        # Load data with masking
-        bb_vals = tl.load(bb_ptr + mem_offsets, mask=mask, other=0.0)
-        cc_vals = tl.load(cc_ptr + mem_offsets, mask=mask, other=0.0)
-        
-        # Perform computation
-        aa_vals = bb_vals + cc_vals
-        
-        # Store result with masking
-        tl.store(aa_ptr + mem_offsets, aa_vals, mask=mask)
+    # Find the j value
+    for k in range(LEN_2D):
+        elements_in_col = LEN_2D - k
+        if remaining < elements_in_col:
+            j = k
+            i = j + remaining
+            break
+        remaining -= elements_in_col
+    
+    # Bounds check
+    if i >= LEN_2D or j >= LEN_2D or i < j:
+        return
+    
+    # Calculate flat index for 2D arrays
+    idx = i * LEN_2D + j
+    
+    # Load values
+    bb_val = tl.load(bb_ptr + idx)
+    cc_val = tl.load(cc_ptr + idx)
+    
+    # Compute and store
+    result = bb_val + cc_val
+    tl.store(aa_ptr + idx, result)
 
 def s1232_triton(aa, bb, cc):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 128
     
-    # Launch kernel with one thread block per column (j dimension)
-    grid = (LEN_2D,)
+    # Total number of elements in upper triangular matrix (including diagonal)
+    total_elements = (LEN_2D * (LEN_2D + 1)) // 2
     
-    s1232_kernel[grid](
+    BLOCK_SIZE = 256
+    grid_size = (triton.cdiv(total_elements, BLOCK_SIZE),)
+    
+    s1232_kernel[grid_size](
         aa, bb, cc,
         LEN_2D=LEN_2D,
         BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return aa

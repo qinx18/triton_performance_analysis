@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s233
-# Generated: 2025-11-29 18:10:14
+# Generated: 2025-11-30 10:58:39
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['bb', 'aa']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1647
-# Output Tokens: 932
+# Output Tokens: 594
 
 ================================================================================
 PROMPT:
@@ -173,57 +173,31 @@ def s233_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr
 ):
-    # Get the current column (i)
+    # Get column index (i dimension)
     i = tl.program_id(0) + 1
     
     if i >= LEN_2D:
         return
     
-    # Process rows in blocks for the first loop: aa[j][i] = aa[j-1][i] + cc[j][i]
-    for j_start in range(1, LEN_2D, BLOCK_SIZE):
-        j_end = min(j_start + BLOCK_SIZE, LEN_2D)
-        block_size = j_end - j_start
+    # Process j dimension sequentially to maintain dependencies
+    for j in range(1, LEN_2D):
+        # First loop: aa[j][i] = aa[j-1][i] + cc[j][i]
+        aa_offset = j * LEN_2D + i
+        aa_prev_offset = (j - 1) * LEN_2D + i
+        cc_offset = j * LEN_2D + i
         
-        if block_size <= 0:
-            break
-            
-        j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
-        mask = j_offsets < LEN_2D
+        aa_prev_val = tl.load(aa_copy_ptr + aa_prev_offset)
+        cc_val = tl.load(cc_ptr + cc_offset)
+        aa_result = aa_prev_val + cc_val
+        tl.store(aa_ptr + aa_offset, aa_result)
         
-        # Calculate offsets for current and previous rows
-        curr_offsets = j_offsets * LEN_2D + i
-        prev_offsets = (j_offsets - 1) * LEN_2D + i
+        # Second loop: bb[j][i] = bb[j][i-1] + cc[j][i]
+        bb_offset = j * LEN_2D + i
+        bb_prev_offset = j * LEN_2D + (i - 1)
         
-        # Load from read-only copies
-        aa_prev_vals = tl.load(aa_copy_ptr + prev_offsets, mask=mask)
-        cc_vals = tl.load(cc_ptr + curr_offsets, mask=mask)
-        
-        # Compute and store to original array
-        aa_result = aa_prev_vals + cc_vals
-        tl.store(aa_ptr + curr_offsets, aa_result, mask=mask)
-    
-    # Process rows in blocks for the second loop: bb[j][i] = bb[j][i-1] + cc[j][i]
-    for j_start in range(1, LEN_2D, BLOCK_SIZE):
-        j_end = min(j_start + BLOCK_SIZE, LEN_2D)
-        block_size = j_end - j_start
-        
-        if block_size <= 0:
-            break
-            
-        j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
-        mask = j_offsets < LEN_2D
-        
-        # Calculate offsets for current and previous columns
-        curr_offsets = j_offsets * LEN_2D + i
-        prev_offsets = j_offsets * LEN_2D + (i - 1)
-        
-        # Load from read-only copies
-        bb_prev_vals = tl.load(bb_copy_ptr + prev_offsets, mask=mask)
-        cc_vals = tl.load(cc_ptr + curr_offsets, mask=mask)
-        
-        # Compute and store to original array
-        bb_result = bb_prev_vals + cc_vals
-        tl.store(bb_ptr + curr_offsets, bb_result, mask=mask)
+        bb_prev_val = tl.load(bb_copy_ptr + bb_prev_offset)
+        bb_result = bb_prev_val + cc_val
+        tl.store(bb_ptr + bb_offset, bb_result)
 
 def s233_triton(aa, bb, cc):
     LEN_2D = aa.shape[0]
@@ -232,13 +206,12 @@ def s233_triton(aa, bb, cc):
     aa_copy = aa.clone()
     bb_copy = bb.clone()
     
-    # Launch kernel with one thread per column (excluding first column)
+    # Launch kernel for each column (i dimension)
     grid = (LEN_2D - 1,)
-    BLOCK_SIZE = 32
+    BLOCK_SIZE = 128
     
     s233_kernel[grid](
         aa, aa_copy, bb, bb_copy, cc,
-        LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
+        LEN_2D, BLOCK_SIZE
     )
 ```

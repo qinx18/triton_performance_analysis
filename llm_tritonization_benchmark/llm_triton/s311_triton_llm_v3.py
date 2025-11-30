@@ -1,55 +1,30 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s311_kernel(
-    a_ptr,
-    sum_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # Get program ID
+def s311_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     
-    # Calculate block start
     block_start = pid * BLOCK_SIZE
-    
-    # Create offsets for this block
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    
-    # Create mask for valid elements
     mask = offsets < n_elements
     
-    # Load values from array a
     a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    partial_sum = tl.sum(a_vals)
     
-    # Sum the values in this block
-    block_sum = tl.sum(a_vals)
-    
-    # Store the block sum (this will be accumulated later)
-    if pid == 0:
-        tl.store(sum_ptr, block_sum)
-    else:
-        # Atomic add for accumulation across blocks
-        tl.atomic_add(sum_ptr, block_sum)
+    tl.store(result_ptr + pid, partial_sum)
 
 def s311_triton(a):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    BLOCK_SIZE = 1024
+    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Initialize sum to zero
-    sum_result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    partial_sums = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
     
-    # Calculate grid size
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-    
-    # Launch kernel
-    s311_kernel[grid](
-        a,
-        sum_result,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+    s311_kernel[(n_blocks,)](
+        a, partial_sums, n_elements, BLOCK_SIZE
     )
     
-    return sum_result.item()
+    total_sum = torch.sum(partial_sums)
+    return total_sum

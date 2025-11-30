@@ -7,51 +7,43 @@ def s1119_kernel(
     aa_ptr,
     aa_copy_ptr,
     bb_ptr,
-    LEN_2D: tl.constexpr,
+    i_val,
+    LEN_2D,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Get program ID for j dimension (parallelized)
-    j_block_id = tl.program_id(0)
-    j_start = j_block_id * BLOCK_SIZE
-    j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
-    j_mask = j_offsets < LEN_2D
+    pid = tl.program_id(0)
+    j_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = j_offsets < LEN_2D
     
-    # Sequential loop over i dimension (1 to LEN_2D-1)
-    for i in range(1, LEN_2D):
-        # Calculate read offsets for aa[i-1][j] (from copy)
-        read_offsets = (i - 1) * LEN_2D + j_offsets
-        
-        # Calculate write offsets for aa[i][j] (to original)
-        write_offsets = i * LEN_2D + j_offsets
-        
-        # Calculate bb offsets for bb[i][j]
-        bb_offsets = i * LEN_2D + j_offsets
-        
-        # Load values
-        aa_prev_vals = tl.load(aa_copy_ptr + read_offsets, mask=j_mask, other=0.0)
-        bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
-        
-        # Compute result
-        result = aa_prev_vals + bb_vals
-        
-        # Store result
-        tl.store(aa_ptr + write_offsets, result, mask=j_mask)
+    # Calculate offsets for 2D arrays
+    write_offsets = i_val * LEN_2D + j_offsets
+    read_offsets = (i_val - 1) * LEN_2D + j_offsets
+    
+    # Load values from read-only copy and bb array
+    aa_prev = tl.load(aa_copy_ptr + read_offsets, mask=mask)
+    bb_vals = tl.load(bb_ptr + write_offsets, mask=mask)
+    
+    # Compute result
+    result = aa_prev + bb_vals
+    
+    # Store result to original aa array
+    tl.store(aa_ptr + write_offsets, result, mask=mask)
 
 def s1119_triton(aa, bb):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = min(256, triton.next_power_of_2(LEN_2D))
+    BLOCK_SIZE = 256
     
-    # Create read-only copy for WAR race condition handling
+    # Create read-only copy of aa array
     aa_copy = aa.clone()
     
-    # Calculate grid size for j dimension
-    grid_j = triton.cdiv(LEN_2D, BLOCK_SIZE)
-    grid = (grid_j,)
-    
-    s1119_kernel[grid](
-        aa,
-        aa_copy,
-        bb,
-        LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+    # Sequential loop over i dimension
+    for i_val in range(1, LEN_2D):
+        grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
+        s1119_kernel[grid](
+            aa,
+            aa_copy,
+            bb,
+            i_val,
+            LEN_2D,
+            BLOCK_SIZE,
+        )

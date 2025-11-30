@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s1115
-# Generated: 2025-11-29 18:01:58
+# Generated: 2025-11-30 10:50:56
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: Multiple valid
 # Triton Strategy: i-seq:SINGLE_KERNEL_INLOOP, j-seq:SINGLE_KERNEL_INLOOP
 # Stop Reason: end_turn
-# Input Tokens: 1206
-# Output Tokens: 533
+# Input Tokens: 1411
+# Output Tokens: 509
 
 ================================================================================
 PROMPT:
@@ -49,7 +49,7 @@ real_t s1115(struct args_t * func_args)
         }
 ```
 
-## CRITICAL: Parallelization Dimension Analysis
+## CRITICAL: Parallelization Strategy
 
 **Loop structure**: `for (int i = 0; i < LEN_2D; i++) {
             for (int j = 0; j < LEN_2D; j++) {
@@ -61,15 +61,34 @@ real_t s1115(struct args_t * func_args)
 **Data dependencies detected**:
 - Array `aa`: write to `[(i), (j)]`, read from `[(i), (j)]`
 
-### VALID Parallelization Strategies
-**Option 1**: i-sequential, j-parallel (independent)
-  **Triton Strategy**: `SINGLE_KERNEL_INLOOP`
-  - ✓ aa: Same location read/write [same_location]
-  - Same location read/write [(i), (j)]
-**Option 2**: j-sequential, i-parallel (independent)
-  **Triton Strategy**: `SINGLE_KERNEL_INLOOP`
-  - ✓ aa: Same location read/write [same_location]
-  - Same location read/write [(i), (j)]
+### Required Strategy: i-sequential, j-parallel
+
+**Implementation Pattern:**
+- Python wrapper: loop over `i` sequentially (one kernel launch per i value)
+- Triton kernel: parallelize ALL `j` values using VECTORIZED operations
+
+**CRITICAL: Use vectorized operations inside the kernel!**
+- Use `tl.arange(0, BLOCK_SIZE)` to create index vectors
+- Use vectorized `tl.load` and `tl.store` with masks
+- NEVER use Python-style `for` loops inside @triton.jit kernels - they run serially!
+
+**Correct example:**
+```python
+def kernel_triton(...):
+    for i_val in range(...):  # Sequential in Python - OK
+        grid = (triton.cdiv(N, BLOCK_SIZE),)
+        kernel[grid](..., i_val)
+
+@triton.jit
+def kernel(..., i_val, BLOCK_SIZE: tl.constexpr):
+    # Fully vectorized over j
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+    vals = tl.load(ptr + offsets, mask=mask)  # Vectorized load
+    result = vals * 2  # Vectorized compute
+    tl.store(out_ptr + offsets, result, mask=mask)  # Vectorized store
+```
 
 
 ## Array Information:
@@ -118,53 +137,40 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s1115_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    i = tl.program_id(0)
+def s1115_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D, i_val, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    j_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    j_mask = j_offsets < LEN_2D
     
-    if i >= LEN_2D:
-        return
+    # Calculate linear indices for aa[i_val][j] and bb[i_val][j]
+    aa_indices = i_val * LEN_2D + j_offsets
+    bb_indices = i_val * LEN_2D + j_offsets
     
-    for j in range(0, LEN_2D, BLOCK_SIZE):
-        j_offsets = j + tl.arange(0, BLOCK_SIZE)
-        mask = j_offsets < LEN_2D
-        
-        # Calculate flat indices
-        aa_indices = i * LEN_2D + j_offsets
-        bb_indices = i * LEN_2D + j_offsets
-        cc_indices = j_offsets * LEN_2D + i
-        
-        # Load data
-        aa_vals = tl.load(aa_ptr + aa_indices, mask=mask)
-        bb_vals = tl.load(bb_ptr + bb_indices, mask=mask)
-        cc_vals = tl.load(cc_ptr + cc_indices, mask=mask)
-        
-        # Compute: aa[i][j] = aa[i][j]*cc[j][i] + bb[i][j]
-        result = aa_vals * cc_vals + bb_vals
-        
-        # Store result
-        tl.store(aa_ptr + aa_indices, result, mask=mask)
+    # Calculate linear indices for cc[j][i_val]  
+    cc_indices = j_offsets * LEN_2D + i_val
+    
+    # Load values
+    aa_vals = tl.load(aa_ptr + aa_indices, mask=j_mask)
+    bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask)
+    cc_vals = tl.load(cc_ptr + cc_indices, mask=j_mask)
+    
+    # Compute: aa[i][j] = aa[i][j]*cc[j][i] + bb[i][j]
+    result = aa_vals * cc_vals + bb_vals
+    
+    # Store result
+    tl.store(aa_ptr + aa_indices, result, mask=j_mask)
 
 def s1115_triton(aa, bb, cc):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 64
+    BLOCK_SIZE = 256
     
-    # Flatten 2D arrays for kernel access
-    aa_flat = aa.flatten()
-    bb_flat = bb.flatten()
-    cc_flat = cc.flatten()
-    
-    grid = (LEN_2D,)
-    
-    s1115_kernel[grid](
-        aa_flat, bb_flat, cc_flat,
-        LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return aa
+    # Sequential loop over i, parallel over j
+    for i in range(LEN_2D):
+        grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
+        s1115_kernel[grid](aa, bb, cc, LEN_2D, i, BLOCK_SIZE)
 ```

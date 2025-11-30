@@ -9,14 +9,21 @@ def s276_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, mid, BLOCK_SIZE: tl.cons
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    a = tl.load(a_ptr + offsets, mask=mask)
-    b = tl.load(b_ptr + offsets, mask=mask)
-    c = tl.load(c_ptr + offsets, mask=mask)
-    d = tl.load(d_ptr + offsets, mask=mask)
+    # Load data
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    d_vals = tl.load(d_ptr + offsets, mask=mask)
     
+    # Compute condition: if (i+1 < mid)
     condition = (offsets + 1) < mid
-    result = tl.where(condition, a + b * c, a + b * d)
     
+    # Conditional computation
+    result = tl.where(condition, 
+                     a_vals + b_vals * c_vals,  # if branch
+                     a_vals + b_vals * d_vals)  # else branch
+    
+    # Store result
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s276_triton(a, b, c, d):
@@ -27,5 +34,3 @@ def s276_triton(a, b, c, d):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s276_kernel[grid](a, b, c, d, n_elements, mid, BLOCK_SIZE)
-    
-    return a

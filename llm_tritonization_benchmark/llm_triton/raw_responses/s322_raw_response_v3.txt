@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s322
-# Generated: 2025-11-29 18:16:56
+# Generated: 2025-11-30 11:05:03
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
-# WAR Dependencies: ['a']
+# WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1393
-# Output Tokens: 489
+# Input Tokens: 879
+# Output Tokens: 413
 
 ================================================================================
 PROMPT:
@@ -43,60 +43,6 @@ real_t s322(struct args_t * func_args)
         for (int i = 2; i < LEN_1D; i++) {
             a[i] = a[i] + a[i - 1] * b[i] + a[i - 2] * c[i];
         }
-```
-
-## CRITICAL: WAR Race Condition Handling Required
-
-This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
-**Arrays requiring read-only copy**: ['a']
-
-### Problem
-In parallel execution across GPU blocks, if block B writes to a location before block A reads from it,
-block A reads the wrong (modified) value instead of the original value.
-
-### Required Solution: Read-Only Copy Pattern
-Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
-and store results to the original array.
-
-### Implementation Template
-```python
-# In wrapper function - create read-only copy BEFORE launching kernel:
-def s322_triton(...):
-    a_copy = a.clone()  # Read-only copy
-
-    # Pass BOTH original (for writes) AND copy (for reads) to kernel
-    s322_kernel[grid](
-        a,        # Write destination (original)
-        a_copy,   # Read source (immutable copy)
-        ...other_args...
-    )
-
-# In kernel - LOAD from copy, STORE to original:
-@triton.jit
-def {kernel_name}_kernel(
-    a_ptr,        # Write destination
-    a_copy_ptr,   # Read source
-    ...
-):
-    offsets = ...
-    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)  # Read from COPY
-
-    result = ...  # Compute using loaded values
-
-    tl.store(a_ptr + write_offsets, result, mask=mask)  # Write to ORIGINAL
-```
-
-**Why this works**: The copy preserves original values for all threads. Reads from immutable copy,
-writes to original - no conflict possible.
-
-**CRITICAL: Use forward iteration**
-ALWAYS use FORWARD iteration with ascending offsets:
-```python
-# CORRECT - Forward iteration
-offsets = block_start + tl.arange(0, BLOCK_SIZE)
-
-# INCORRECT - Reverse iteration (causes memory access issues in Triton)
-# offsets = block_start - tl.arange(0, BLOCK_SIZE)  # DO NOT USE
 ```
 
 
@@ -151,48 +97,37 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s322_kernel(
-    a_ptr,
-    a_copy_ptr,
-    b_ptr,
-    c_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    block_start = tl.program_id(0) * BLOCK_SIZE + 2
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+def s322_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This kernel processes one iteration of the recurrence per launch
+    # since each element depends on previous elements in the same array
+    i = tl.program_id(0)
     
-    # Load from read-only copy for dependencies
-    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)
-    a_minus_1 = tl.load(a_copy_ptr + offsets - 1, mask=mask)
-    a_minus_2 = tl.load(a_copy_ptr + offsets - 2, mask=mask)
+    if i >= n_elements - 2:
+        return
     
-    # Load other arrays
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    # Calculate actual index (starting from 2)
+    idx = i + 2
     
-    # Compute result
-    result = a_vals + a_minus_1 * b_vals + a_minus_2 * c_vals
+    # Load current and previous values
+    a_curr = tl.load(a_ptr + idx)
+    a_prev1 = tl.load(a_ptr + idx - 1)
+    a_prev2 = tl.load(a_ptr + idx - 2)
+    b_curr = tl.load(b_ptr + idx)
+    c_curr = tl.load(c_ptr + idx)
     
-    # Store to original array
-    tl.store(a_ptr + offsets, result, mask=mask)
+    # Compute recurrence
+    result = a_curr + a_prev1 * b_curr + a_prev2 * c_curr
+    
+    # Store result
+    tl.store(a_ptr + idx, result)
 
 def s322_triton(a, b, c):
     n_elements = a.shape[0]
     
-    # Create read-only copy to handle WAR dependencies
-    a_copy = a.clone()
+    # Process elements sequentially due to recurrence dependency
+    for i in range(n_elements - 2):
+        idx = i + 2
+        a[idx] = a[idx] + a[idx - 1] * b[idx] + a[idx - 2] * c[idx]
     
-    BLOCK_SIZE = 256
-    grid_size = triton.cdiv(n_elements - 2, BLOCK_SIZE)
-    
-    s322_kernel[grid_size,](
-        a,
-        a_copy,
-        b,
-        c,
-        n_elements,
-        BLOCK_SIZE,
-    )
+    return a
 ```

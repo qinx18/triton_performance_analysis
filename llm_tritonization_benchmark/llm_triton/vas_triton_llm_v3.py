@@ -1,12 +1,10 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def vas_kernel(
-    a_ptr,
-    b_ptr,
-    ip_ptr,
+    a_ptr, b_ptr, ip_ptr,
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
@@ -15,19 +13,16 @@ def vas_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load b values
+    # Load b values and indices
     b_vals = tl.load(b_ptr + offsets, mask=mask)
+    indices = tl.load(ip_ptr + offsets, mask=mask)
     
-    # Load indices from ip
-    ip_vals = tl.load(ip_ptr + offsets, mask=mask)
-    
-    # Scatter: store b values at positions specified by ip
-    tl.store(a_ptr + ip_vals, b_vals, mask=mask)
+    # Scatter: store b[i] to a[ip[i]]
+    tl.store(a_ptr + indices, b_vals, mask=mask)
 
 def vas_triton(a, b, ip):
     n_elements = b.shape[0]
     
-    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
@@ -36,5 +31,3 @@ def vas_triton(a, b, ip):
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s2111
-# Generated: 2025-11-29 18:08:35
+# Generated: 2025-11-30 10:57:01
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['aa']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1446
-# Output Tokens: 739
+# Output Tokens: 696
 
 ================================================================================
 PROMPT:
@@ -149,9 +149,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s2111_kernel(
@@ -160,60 +160,56 @@ def s2111_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(axis=0)
+    # Get program ID
+    pid = tl.program_id(0)
     
-    # Calculate which j we're working on
-    j = (pid // ((LEN_2D - 1 + BLOCK_SIZE - 1) // BLOCK_SIZE)) + 1
+    # Calculate which (j, i) position this program handles
+    total_elements = (LEN_2D - 1) * (LEN_2D - 1)
     
-    # Calculate block index within this j
-    block_idx = pid % ((LEN_2D - 1 + BLOCK_SIZE - 1) // BLOCK_SIZE)
+    # Boundary check
+    if pid >= total_elements:
+        return
     
-    # Calculate i range for this block
-    i_start = block_idx * BLOCK_SIZE + 1
-    i_offsets = i_start + tl.arange(0, BLOCK_SIZE)
-    i_mask = (i_offsets < LEN_2D) & (j < LEN_2D)
+    # Convert linear index to 2D coordinates (j, i)
+    # We need j from 1 to LEN_2D-1, i from 1 to LEN_2D-1
+    linear_idx = pid
+    i = (linear_idx % (LEN_2D - 1)) + 1  # i ranges from 1 to LEN_2D-1
+    j = (linear_idx // (LEN_2D - 1)) + 1  # j ranges from 1 to LEN_2D-1
     
-    # Calculate memory offsets
-    current_offsets = j * LEN_2D + i_offsets
-    left_offsets = j * LEN_2D + (i_offsets - 1)
-    top_offsets = (j - 1) * LEN_2D + i_offsets
+    # Calculate offsets for current position aa[j][i]
+    curr_offset = j * LEN_2D + i
     
-    # Load values from the read-only copy
-    left_vals = tl.load(aa_copy_ptr + left_offsets, mask=i_mask)
-    top_vals = tl.load(aa_copy_ptr + top_offsets, mask=i_mask)
+    # Calculate offsets for dependencies: aa[j][i-1] and aa[j-1][i]
+    left_offset = j * LEN_2D + (i - 1)      # aa[j][i-1]
+    above_offset = (j - 1) * LEN_2D + i     # aa[j-1][i]
+    
+    # Load values from read-only copy
+    left_val = tl.load(aa_copy_ptr + left_offset)
+    above_val = tl.load(aa_copy_ptr + above_offset)
     
     # Compute result
-    result = (left_vals + top_vals) / 1.9
+    result = (left_val + above_val) / 1.9
     
-    # Store to original array
-    tl.store(aa_ptr + current_offsets, result, mask=i_mask)
+    # Store result to original array
+    tl.store(aa_ptr + curr_offset, result)
 
 def s2111_triton(aa):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 64
     
     # Create read-only copy to handle WAR dependencies
     aa_copy = aa.clone()
     
-    # Calculate grid size - need to process each j sequentially
-    blocks_per_j = (LEN_2D - 1 + BLOCK_SIZE - 1) // BLOCK_SIZE
+    # Calculate total number of elements to process
+    total_elements = (LEN_2D - 1) * (LEN_2D - 1)
     
-    # Process each j sequentially to maintain dependencies
-    for j in range(1, LEN_2D):
-        grid = (blocks_per_j,)
-        
-        # Create a temporary view for this j only
-        j_start = j
-        j_end = j + 1
-        
-        s2111_kernel[grid](
-            aa,
-            aa_copy,
-            LEN_2D,
-            BLOCK_SIZE,
-        )
-        
-        # Update the copy with the newly computed values for this j
-        # This ensures the next iteration sees the updated values
-        aa_copy[j:j+1] = aa[j:j+1]
+    # Launch kernel with one thread per element
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(total_elements, BLOCK_SIZE),)
+    
+    s2111_kernel[grid](
+        aa,
+        aa_copy,
+        LEN_2D,
+        BLOCK_SIZE,
+    )
 ```

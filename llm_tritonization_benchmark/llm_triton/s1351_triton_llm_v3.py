@@ -20,5 +20,4 @@ def s1351_triton(a, b, c):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s1351_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
-    
     return a

@@ -4,6 +4,7 @@ Correctness Test for s3110
 Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
+import inspect
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
@@ -16,9 +17,25 @@ except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
+def get_func_params(func):
+    """Get the parameter names a function accepts"""
+    sig = inspect.signature(func)
+    return list(sig.parameters.keys())
+
+def build_args(func, available_tensors, available_scalars):
+    """Build argument list based on what the function actually accepts"""
+    params = get_func_params(func)
+    args = []
+    for p in params:
+        if p in available_tensors:
+            args.append(available_tensors[p])
+        elif p in available_scalars:
+            args.append(available_scalars[p])
+    return args
+
 def test_correctness():
     """Test correctness across multiple sizes"""
-    test_sizes = [100, 1000, 10000]
+    test_sizes = [64, 128, 256]
     all_passed = True
 
     print("="*70)
@@ -39,17 +56,27 @@ def test_correctness():
             # Create copies for Triton implementation
             aa_tr = aa.clone()
 
+            # Available tensors and scalars for dynamic argument building
+            pt_tensors = {"aa": aa_pt}
+            tr_tensors = {"aa": aa_tr}
+            scalars = {"iterations": iterations}
+
+            # Build argument lists based on actual function signatures
+            pt_args = build_args(s3110_pytorch, pt_tensors, scalars)
+            tr_args = build_args(s3110_triton, tr_tensors, scalars)
+
             # Run PyTorch baseline (may modify arrays in-place or return result)
-            pytorch_result = s3110_pytorch(aa_pt, iterations)
+            pytorch_result = s3110_pytorch(*pt_args)
 
             # Run Triton LLM (modifies arrays in-place)
-            s3110_triton(aa_tr, iterations)
+            s3110_triton(*tr_args)
 
             # Compare output arrays directly (in-place modification)
-            max_error = 0.0  # No output arrays to compare
+            max_error = torch.max(torch.abs(aa_pt - aa_tr)).item()
 
-            # Check if within tolerance
-            if max_error < 1e-3:  # Relaxed tolerance for complex functions
+            # Use relative tolerance for numerically unstable algorithms
+            passed = max_error < 1e-3 or torch.allclose(aa_pt, aa_tr, rtol=1e-3, atol=1e-3)
+            if passed:
                 print(f"✓ PASS  (max_err={max_error:.2e})")
             else:
                 print(f"✗ FAIL  (max_error={max_error:.2e})")

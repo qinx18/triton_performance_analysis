@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s451_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -9,10 +9,12 @@ def s451_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    b = tl.load(b_ptr + offsets, mask=mask)
-    c = tl.load(c_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
     
-    result = tl.sin(b) + tl.cos(c)
+    sin_b = tl.sin(b_vals)
+    cos_c = tl.cos(c_vals)
+    result = sin_b + cos_c
     
     tl.store(a_ptr + offsets, result, mask=mask)
 

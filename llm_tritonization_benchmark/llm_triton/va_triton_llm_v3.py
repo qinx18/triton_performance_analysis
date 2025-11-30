@@ -18,3 +18,5 @@ def va_triton(a, b):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     va_kernel[grid](a, b, n_elements, BLOCK_SIZE)
+    
+    return a

@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s253_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -15,7 +15,7 @@ def s253_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     
     condition = a_vals > b_vals
-    s = tl.where(condition, a_vals - b_vals * d_vals, 0.0)
+    s = a_vals - b_vals * d_vals
     
     new_c = tl.where(condition, c_vals + s, c_vals)
     new_a = tl.where(condition, s, a_vals)
@@ -28,4 +28,8 @@ def s253_triton(a, b, c, d):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s253_kernel[grid](a, b, c, d, n_elements, BLOCK_SIZE)
+    s253_kernel[grid](
+        a, b, c, d,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s257
-# Generated: 2025-11-29 18:12:12
+# Generated: 2025-11-30 11:00:22
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['a']
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 1452
-# Output Tokens: 765
+# Output Tokens: 763
 
 ================================================================================
 PROMPT:
@@ -166,58 +166,61 @@ def s257_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     # Get program ID for i dimension (starting from 1)
-    pid_i = tl.program_id(0)
-    i = pid_i + 1  # Start from 1
+    i_block = tl.program_id(0)
+    i = i_block + 1
     
     if i >= LEN_2D:
         return
     
     # Process all j values for this i
     j_start = 0
-    j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_remaining = LEN_2D
     
-    for j_block_start in range(0, LEN_2D, BLOCK_SIZE):
-        j_vals = j_block_start + j_offsets
-        j_mask = j_vals < LEN_2D
+    while j_remaining > 0:
+        # Calculate block size for this iteration
+        current_block_size = min(BLOCK_SIZE, j_remaining)
+        j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
+        j_mask = j_offsets < (j_start + current_block_size)
         
-        # Calculate 2D array offsets for aa[j][i] and bb[j][i]
-        aa_offsets = j_vals * LEN_2D + i
-        bb_offsets = j_vals * LEN_2D + i
+        # Calculate offsets for 2D arrays (row-major: aa[j][i] = aa[j * LEN_2D + i])
+        aa_offsets = j_offsets * LEN_2D + i
         
-        # Load aa[j][i] and bb[j][i] values
+        # Load values
         aa_vals = tl.load(aa_ptr + aa_offsets, mask=j_mask)
-        bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask)
+        bb_vals = tl.load(bb_ptr + aa_offsets, mask=j_mask)
+        a_prev = tl.load(a_copy_ptr + (i - 1))  # a[i-1] from read-only copy
         
-        # Load a[i-1] from the copy (immutable)
-        a_prev = tl.load(a_copy_ptr + (i - 1))
-        
-        # Compute a[i] = aa[j][i] - a[i-1]
+        # Compute: a[i] = aa[j][i] - a[i-1]
         a_new = aa_vals - a_prev
         
-        # Store a[i] to original array (broadcast to all valid j positions)
-        tl.store(a_ptr + i, a_new, mask=j_mask)
-        
-        # Compute aa[j][i] = a[i] + bb[j][i]
+        # Compute: aa[j][i] = a[i] + bb[j][i]
         aa_new = a_new + bb_vals
         
-        # Store aa[j][i]
+        # Store results
         tl.store(aa_ptr + aa_offsets, aa_new, mask=j_mask)
+        
+        # Store a[i] (same value for all j, but we store it multiple times - last one wins)
+        if j_mask:
+            tl.store(a_ptr + i, a_new)
+        
+        j_start += current_block_size
+        j_remaining -= current_block_size
 
 def s257_triton(a, aa, bb):
     LEN_2D = aa.shape[0]
     
-    # Create read-only copy of array a to handle WAR dependencies
+    # Create read-only copy for WAR race condition handling
     a_copy = a.clone()
     
-    # Grid size: one block per i value (from 1 to LEN_2D-1)
+    # Grid size: process i from 1 to LEN_2D-1
     grid = (LEN_2D - 1,)
     
-    # Block size for processing j dimension
+    # Block size for j dimension processing
     BLOCK_SIZE = 256
     
     s257_kernel[grid](
-        a,              # Write destination
-        a_copy,         # Read source (immutable copy)
+        a,
+        a_copy,
         aa,
         bb,
         LEN_2D,

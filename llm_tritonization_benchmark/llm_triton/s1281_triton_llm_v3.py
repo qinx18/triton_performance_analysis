@@ -13,7 +13,7 @@ def s1281_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load arrays
+    # Load values
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     c_vals = tl.load(c_ptr + offsets, mask=mask)
@@ -32,6 +32,7 @@ def s1281_kernel(
 def s1281_triton(a, b, c, d, e):
     n_elements = a.numel()
     
+    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
@@ -40,5 +41,3 @@ def s1281_triton(a, b, c, d, e):
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a, b

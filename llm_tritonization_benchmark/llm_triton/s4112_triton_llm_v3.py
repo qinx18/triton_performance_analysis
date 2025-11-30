@@ -16,26 +16,30 @@ def s4112_kernel(
     # Load indices
     indices = tl.load(ip_ptr + offsets, mask=mask)
     
-    # Load from a array
+    # Load a values
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     
-    # Gather from b array using indices
+    # Gather b values using indices
     b_vals = tl.load(b_ptr + indices, mask=mask)
     
-    # Compute: a[i] += b[ip[i]] * s
+    # Compute a[i] += b[ip[i]] * s
     result = a_vals + b_vals * s
     
     # Store result
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s4112_triton(a, b, ip, s):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     
+    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
+    # Launch kernel
     s4112_kernel[grid](
         a, b, ip, s,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
+    
+    return a

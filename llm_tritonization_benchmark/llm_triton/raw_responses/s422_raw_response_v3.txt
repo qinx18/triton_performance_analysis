@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s422
-# Generated: 2025-11-29 18:19:46
+# Generated: 2025-11-30 11:07:50
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 882
-# Output Tokens: 468
+# Output Tokens: 458
 
 ================================================================================
 PROMPT:
@@ -95,9 +95,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s422_kernel(
@@ -126,7 +126,7 @@ def s422_kernel(
 def s422_triton(flat_2d_array, a):
     n_elements = a.shape[0]
     
-    # Create xx as a view into flat_2d_array starting at offset 4
+    # xx points to flat_2d_array + 4
     xx = flat_2d_array[4:4+n_elements]
     
     BLOCK_SIZE = 256
@@ -137,7 +137,7 @@ def s422_triton(flat_2d_array, a):
         flat_2d_array,
         a,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE,
     )
     
     return xx

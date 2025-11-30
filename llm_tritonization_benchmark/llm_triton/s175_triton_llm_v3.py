@@ -1,41 +1,43 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s175_kernel(a_ptr, b_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
+def s175_kernel(a_ptr, b_ptr, n_elements, inc, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Convert linear indices to strided indices
-    strided_indices = offsets * inc
-    mask = strided_indices < (n_elements - 1)
+    # Convert linear indices to strided indices (i = 0, inc, 2*inc, ...)
+    actual_indices = offsets * inc
+    mask = actual_indices < (n_elements - 1)
     
-    # Load b[i] values
-    b_vals = tl.load(b_ptr + strided_indices, mask=mask)
+    # Load a[i + inc] and b[i]
+    a_read_indices = actual_indices + inc
+    a_read_mask = mask & (a_read_indices < n_elements)
+    a_vals = tl.load(a_ptr + a_read_indices, mask=a_read_mask, other=0.0)
     
-    # Load a[i + inc] values
-    read_indices = strided_indices + inc
-    read_mask = mask & (read_indices < n_elements)
-    a_read_vals = tl.load(a_ptr + read_indices, mask=read_mask)
+    b_vals = tl.load(b_ptr + actual_indices, mask=mask, other=0.0)
     
-    # Compute result
-    result = a_read_vals + b_vals
+    # Compute a[i] = a[i + inc] + b[i]
+    result = a_vals + b_vals
     
-    # Store to a[i]
-    tl.store(a_ptr + strided_indices, result, mask=mask)
+    # Store result
+    tl.store(a_ptr + actual_indices, result, mask=mask)
 
 def s175_triton(a, b, inc):
     n_elements = a.shape[0]
     
-    # Calculate number of elements that will be processed
+    # Calculate number of iterations in the strided loop
     num_iterations = (n_elements - 1 + inc - 1) // inc
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(num_iterations, BLOCK_SIZE),)
     
     s175_kernel[grid](
-        a, b, inc, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        a, b,
+        n_elements, inc,
+        BLOCK_SIZE=BLOCK_SIZE
     )
+    
+    return a

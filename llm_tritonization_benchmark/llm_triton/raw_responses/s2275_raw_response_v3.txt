@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s2275
-# Generated: 2025-11-29 18:09:45
+# Generated: 2025-11-30 10:58:07
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 963
-# Output Tokens: 720
+# Output Tokens: 731
 
 ================================================================================
 PROMPT:
@@ -97,9 +97,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s2275_kernel(
@@ -107,47 +107,48 @@ def s2275_kernel(
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr
 ):
-    i = tl.program_id(0)
+    # Get program ID for the i dimension
+    pid_i = tl.program_id(0)
     
-    if i < LEN_2D:
-        # Inner loop over j - vectorized
-        j_offsets = tl.arange(0, BLOCK_SIZE)
+    # Check bounds for i
+    if pid_i >= LEN_2D:
+        return
+    
+    # Process the inner j loop for this i
+    for j_start in range(0, LEN_2D, BLOCK_SIZE):
+        # Calculate j indices
+        j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
+        j_mask = j_offsets < LEN_2D
         
-        # Process in chunks of BLOCK_SIZE
-        for j_start in range(0, LEN_2D, BLOCK_SIZE):
-            j_indices = j_start + j_offsets
-            j_mask = j_indices < LEN_2D
-            
-            # Calculate 2D indices: aa[j][i] -> aa[j * LEN_2D + i]
-            aa_indices = j_indices * LEN_2D + i
-            bb_indices = j_indices * LEN_2D + i
-            cc_indices = j_indices * LEN_2D + i
-            
-            # Load values
-            aa_vals = tl.load(aa_ptr + aa_indices, mask=j_mask)
-            bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask)
-            cc_vals = tl.load(cc_ptr + cc_indices, mask=j_mask)
-            
-            # Compute: aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
-            result = aa_vals + bb_vals * cc_vals
-            
-            # Store result
-            tl.store(aa_ptr + aa_indices, result, mask=j_mask)
+        # Calculate 2D array indices: aa[j][i] -> aa[j * LEN_2D + i]
+        aa_indices = j_offsets * LEN_2D + pid_i
+        bb_indices = j_offsets * LEN_2D + pid_i
+        cc_indices = j_offsets * LEN_2D + pid_i
         
-        # Compute: a[i] = b[i] + c[i] * d[i]
-        a_val = tl.load(a_ptr + i)
-        b_val = tl.load(b_ptr + i)
-        c_val = tl.load(c_ptr + i)
-        d_val = tl.load(d_ptr + i)
+        # Load values
+        aa_vals = tl.load(aa_ptr + aa_indices, mask=j_mask)
+        bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask)
+        cc_vals = tl.load(cc_ptr + cc_indices, mask=j_mask)
         
-        result_1d = b_val + c_val * d_val
-        tl.store(a_ptr + i, result_1d)
+        # Compute: aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
+        result = aa_vals + bb_vals * cc_vals
+        
+        # Store result
+        tl.store(aa_ptr + aa_indices, result, mask=j_mask)
+    
+    # Compute: a[i] = b[i] + c[i] * d[i]
+    b_val = tl.load(b_ptr + pid_i)
+    c_val = tl.load(c_ptr + pid_i)
+    d_val = tl.load(d_ptr + pid_i)
+    
+    a_result = b_val + c_val * d_val
+    tl.store(a_ptr + pid_i, a_result)
 
 def s2275_triton(aa, bb, cc, a, b, c, d):
     LEN_2D = aa.shape[0]
     
-    # Launch kernel with one thread per i
-    BLOCK_SIZE = 256
+    # Launch kernel with one thread per i value
+    BLOCK_SIZE = 64
     grid = (LEN_2D,)
     
     s2275_kernel[grid](

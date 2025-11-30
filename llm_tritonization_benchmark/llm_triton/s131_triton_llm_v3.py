@@ -14,18 +14,20 @@ def s131_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Read from copy and b
+    # Read from copy (original values) and b
     a_vals = tl.load(a_copy_ptr + offsets + 1, mask=mask)
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     
     # Compute result
     result = a_vals + b_vals
     
-    # Store to original a
+    # Store to original array
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s131_triton(a, b):
     n_elements = a.shape[0] - 1
+    
+    # Create read-only copy before launching kernel
     a_copy = a.clone()
     
     BLOCK_SIZE = 256

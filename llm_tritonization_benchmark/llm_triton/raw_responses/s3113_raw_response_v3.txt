@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s3113
-# Generated: 2025-11-29 18:15:30
+# Generated: 2025-11-30 11:03:38
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -7,7 +7,7 @@
 # Triton Strategy: N/A
 # Stop Reason: end_turn
 # Input Tokens: 907
-# Output Tokens: 454
+# Output Tokens: 427
 
 ================================================================================
 PROMPT:
@@ -103,54 +103,48 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s3113_kernel(
-    a_ptr,
-    output_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # Load block of elements
-    pid = tl.program_id(axis=0)
+def s3113_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    
+    # Calculate offsets for this block
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load elements and compute absolute values
+    # Load data
     a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    
+    # Compute absolute values
     abs_vals = tl.abs(a_vals)
     
-    # Find maximum within this block
+    # Find maximum in this block
     block_max = tl.max(abs_vals, axis=0)
     
     # Store block maximum
     tl.store(output_ptr + pid, block_max)
 
 def s3113_triton(a):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     BLOCK_SIZE = 1024
     
     # Calculate number of blocks needed
-    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Create output tensor for block maxima
-    block_maxima = torch.empty(n_blocks, dtype=a.dtype, device=a.device)
+    # Create output tensor for block maximums
+    block_maxs = torch.zeros(grid_size, device=a.device, dtype=a.dtype)
     
-    # Launch kernel to compute block maxima
-    grid = (n_blocks,)
-    s3113_kernel[grid](
-        a,
-        block_maxima,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+    # Launch kernel to find maximum in each block
+    s3113_kernel[(grid_size,)](
+        a, block_maxs, n_elements, BLOCK_SIZE
     )
     
-    # Find global maximum from block maxima on CPU for final reduction
-    max_val = torch.max(block_maxima).item()
+    # Find global maximum from block maximums
+    max_val = torch.max(block_maxs)
     
     return max_val
 ```

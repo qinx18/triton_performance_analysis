@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s132_kernel(
@@ -9,38 +9,40 @@ def s132_kernel(
     BLOCK_SIZE: tl.constexpr
 ):
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = (offsets >= 1) & (offsets < LEN_2D)
     
-    # j = 0, k = 1 (since m = 0)
-    j = 0
-    k = 1
+    # Calculate the range of indices this block will handle
+    start_idx = pid * BLOCK_SIZE + 1  # Start from 1
+    block_indices = start_idx + tl.arange(0, BLOCK_SIZE)
+    
+    # Mask to ensure we don't go beyond LEN_2D
+    mask = block_indices < LEN_2D
+    
+    # Load c[1] (scalar, broadcasted)
+    c1 = tl.load(c_ptr + 1)
     
     # Load b[i] values
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + block_indices, mask=mask)
     
-    # Load c[1] - broadcast to all elements
-    c1_val = tl.load(c_ptr + 1)
+    # Calculate aa[k][i-1] addresses (k=1, so row 1, columns i-1)
+    # aa[1][i-1] where i-1 ranges from 0 to LEN_2D-2
+    aa_k_addrs = LEN_2D + (block_indices - 1)  # row 1 * LEN_2D + (i-1)
+    aa_k_vals = tl.load(aa_ptr + aa_k_addrs, mask=mask)
     
-    # Load aa[k][i-1] = aa[1][i-1]
-    aa_k_offsets = k * LEN_2D + (offsets - 1)
-    aa_k_vals = tl.load(aa_ptr + aa_k_offsets, mask=mask)
+    # Compute the result
+    result = aa_k_vals + b_vals * c1
     
-    # Compute aa[j][i] = aa[k][i-1] + b[i] * c[1]
-    result = aa_k_vals + b_vals * c1_val
-    
-    # Store to aa[j][i] = aa[0][i]
-    aa_j_offsets = j * LEN_2D + offsets
-    tl.store(aa_ptr + aa_j_offsets, result, mask=mask)
+    # Store to aa[j][i] where j=0, so row 0
+    aa_j_addrs = block_indices  # row 0 * LEN_2D + i
+    tl.store(aa_ptr + aa_j_addrs, result, mask=mask)
 
 def s132_triton(aa, b, c):
     LEN_2D = aa.shape[0]
+    
+    # Launch kernel with appropriate block size
     BLOCK_SIZE = 256
+    num_blocks = triton.cdiv(LEN_2D - 1, BLOCK_SIZE)  # -1 because we start from index 1
     
-    grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
-    
-    s132_kernel[grid](
+    s132_kernel[(num_blocks,)](
         aa, b, c,
         LEN_2D=LEN_2D,
         BLOCK_SIZE=BLOCK_SIZE

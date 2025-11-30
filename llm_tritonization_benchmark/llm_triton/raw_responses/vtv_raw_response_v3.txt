@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for vtv
-# Generated: 2025-11-29 18:22:44
+# Generated: 2025-11-30 11:10:44
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
@@ -92,9 +92,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def vtv_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):

@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s422_kernel(
@@ -29,7 +29,7 @@ def s422_kernel(
 def s422_triton(flat_2d_array, a):
     n_elements = a.shape[0]
     
-    # Create xx as a view into flat_2d_array starting at offset 4
+    # xx points to flat_2d_array + 4
     xx = flat_2d_array[4:4+n_elements]
     
     BLOCK_SIZE = 256
@@ -40,7 +40,7 @@ def s422_triton(flat_2d_array, a):
         flat_2d_array,
         a,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE,
     )
     
     return xx
