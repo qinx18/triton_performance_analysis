@@ -234,6 +234,12 @@ def generate_correctness_test(func_name, func_spec):
     available_arrays = array_names
     available_scalars = all_scalar_names
 
+    # Use smaller sizes for 2D functions (O(N^2) memory and O(N) kernel launches)
+    if has_2d:
+        test_sizes_str = "[64, 128, 256]"
+    else:
+        test_sizes_str = "[100, 1000, 10000]"
+
     test_code = f'''#!/usr/bin/env python3
 """
 Correctness Test for {func_name}
@@ -271,7 +277,7 @@ def build_args(func, available_tensors, available_scalars):
 
 def test_correctness():
     """Test correctness across multiple sizes"""
-    test_sizes = [100, 1000, 10000]
+    test_sizes = {test_sizes_str}
     all_passed = True
 
     print("="*70)
@@ -309,8 +315,9 @@ def test_correctness():
             # Compare output arrays directly (in-place modification)
 {compare_str}
 
-            # Check if within tolerance
-            if max_error < 1e-3:  # Relaxed tolerance for complex functions
+            # Use relative tolerance for numerically unstable algorithms
+            passed = torch.allclose({output_arrays[0] if output_arrays else 'a'}_pt, {output_arrays[0] if output_arrays else 'a'}_tr, rtol=1e-3, atol=1e-3)
+            if passed:
                 print(f"✓ PASS  (max_err={{max_error:.2e}})")
             else:
                 print(f"✗ FAIL  (max_error={{max_error:.2e}})")

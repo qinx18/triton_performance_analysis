@@ -373,7 +373,7 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
 
     lines = []
     lines.append("")
-    lines.append("## CRITICAL: Parallelization Dimension Analysis")
+    lines.append("## CRITICAL: Parallelization Strategy")
     lines.append("")
     lines.append(f"**Loop structure**: `{analysis['c_code']}`")
     lines.append(f"**Dimensions**: {analysis['dims']}")
@@ -388,29 +388,52 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
             lines.append(f"- Array `{dep['array']}`: write to `[{dep['write_expr']}]`, read from `[{dep['read_expr']}]`")
         lines.append("")
 
-    if valid_options:
-        lines.append("### VALID Parallelization Strategies")
-        for i, opt in enumerate(valid_options, 1):
-            triton_strat = opt.get('triton_strategy', 'UNKNOWN')
-            lines.append(f"**Option {i}**: {opt['sequential_dim']}-sequential, {opt['parallel_dim']}-parallel ({opt['parallelism_type']})")
-            lines.append(f"  **Triton Strategy**: `{triton_strat}`")
-            for exp in opt.get('explanations', []):
-                lines.append(f"  - {exp}")
+    # Determine the recommended strategy
+    if len(valid_options) >= 1:
+        opt = valid_options[0]
+        seq_dim = opt['sequential_dim']
+        par_dim = opt['parallel_dim']
+        par_type = opt['parallelism_type']
+
+        lines.append(f"### Required Strategy: {seq_dim}-sequential, {par_dim}-parallel")
+        lines.append("")
+        lines.append("**Implementation Pattern:**")
+        lines.append(f"- Python wrapper: loop over `{seq_dim}` sequentially (one kernel launch per {seq_dim} value)")
+        lines.append(f"- Triton kernel: parallelize ALL `{par_dim}` values using VECTORIZED operations")
+        lines.append("")
+        lines.append("**CRITICAL: Use vectorized operations inside the kernel!**")
+        lines.append("- Use `tl.arange(0, BLOCK_SIZE)` to create index vectors")
+        lines.append("- Use vectorized `tl.load` and `tl.store` with masks")
+        lines.append("- NEVER use Python-style `for` loops inside @triton.jit kernels - they run serially!")
+        lines.append("")
+
+        if par_type == 'reduction':
+            lines.append(f"**Reduction pattern:** Use `tl.sum()` to reduce across {par_dim} dimension within each block")
+            lines.append("")
+
+        lines.append("**Correct example:**")
+        lines.append("```python")
+        lines.append("def kernel_triton(...):")
+        lines.append(f"    for {seq_dim}_val in range(...):  # Sequential in Python - OK")
+        lines.append(f"        grid = (triton.cdiv(N, BLOCK_SIZE),)")
+        lines.append(f"        kernel[grid](..., {seq_dim}_val)")
+        lines.append("")
+        lines.append("@triton.jit")
+        lines.append(f"def kernel(..., {seq_dim}_val, BLOCK_SIZE: tl.constexpr):")
+        lines.append(f"    # Fully vectorized over {par_dim}")
+        lines.append(f"    pid = tl.program_id(0)")
+        lines.append(f"    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)")
+        lines.append(f"    mask = offsets < N")
+        lines.append(f"    vals = tl.load(ptr + offsets, mask=mask)  # Vectorized load")
+        lines.append(f"    result = vals * 2  # Vectorized compute")
+        lines.append(f"    tl.store(out_ptr + offsets, result, mask=mask)  # Vectorized store")
+        lines.append("```")
         lines.append("")
 
     if invalid_options:
         lines.append("### INVALID Parallelization (DO NOT USE)")
         for opt in invalid_options:
-            lines.append(f"**{opt['sequential_dim']}-sequential, {opt['parallel_dim']}-parallel**: INCORRECT")
-            for issue in opt['issues']:
-                lines.append(f"  - {issue}")
-        lines.append("")
-
-    if len(valid_options) == 1:
-        opt = valid_options[0]
-        lines.append("### Required Implementation Strategy")
-        lines.append(f"**You MUST use**: {opt['sequential_dim']}-sequential, {opt['parallel_dim']}-parallel")
-        lines.append("This is the ONLY correct parallelization for this loop pattern.")
+            lines.append(f"**{opt['sequential_dim']}-sequential, {opt['parallel_dim']}-parallel**: INCORRECT - causes race conditions")
         lines.append("")
 
     return "\n".join(lines)

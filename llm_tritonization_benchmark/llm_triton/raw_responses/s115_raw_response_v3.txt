@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s115
-# Generated: 2025-11-29 18:02:42
+# Generated: 2025-11-30 10:35:47
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
-# WAR Dependencies: ['a']
+# WAR Dependencies: None
 # Parallelization: Multiple valid
 # Triton Strategy: j-seq:MULTI_KERNEL_LAUNCH, i-seq:MULTI_KERNEL_LAUNCH
 # Stop Reason: end_turn
-# Input Tokens: 1818
-# Output Tokens: 563
+# Input Tokens: 1404
+# Output Tokens: 583
 
 ================================================================================
 PROMPT:
@@ -49,61 +49,7 @@ real_t s115(struct args_t * func_args)
         }
 ```
 
-## CRITICAL: WAR Race Condition Handling Required
-
-This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
-**Arrays requiring read-only copy**: ['a']
-
-### Problem
-In parallel execution across GPU blocks, if block B writes to a location before block A reads from it,
-block A reads the wrong (modified) value instead of the original value.
-
-### Required Solution: Read-Only Copy Pattern
-Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
-and store results to the original array.
-
-### Implementation Template
-```python
-# In wrapper function - create read-only copy BEFORE launching kernel:
-def s115_triton(...):
-    a_copy = a.clone()  # Read-only copy
-
-    # Pass BOTH original (for writes) AND copy (for reads) to kernel
-    s115_kernel[grid](
-        a,        # Write destination (original)
-        a_copy,   # Read source (immutable copy)
-        ...other_args...
-    )
-
-# In kernel - LOAD from copy, STORE to original:
-@triton.jit
-def {kernel_name}_kernel(
-    a_ptr,        # Write destination
-    a_copy_ptr,   # Read source
-    ...
-):
-    offsets = ...
-    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)  # Read from COPY
-
-    result = ...  # Compute using loaded values
-
-    tl.store(a_ptr + write_offsets, result, mask=mask)  # Write to ORIGINAL
-```
-
-**Why this works**: The copy preserves original values for all threads. Reads from immutable copy,
-writes to original - no conflict possible.
-
-**CRITICAL: Use forward iteration**
-ALWAYS use FORWARD iteration with ascending offsets:
-```python
-# CORRECT - Forward iteration
-offsets = block_start + tl.arange(0, BLOCK_SIZE)
-
-# INCORRECT - Reverse iteration (causes memory access issues in Triton)
-# offsets = block_start - tl.arange(0, BLOCK_SIZE)  # DO NOT USE
-```
-
-## CRITICAL: Parallelization Dimension Analysis
+## CRITICAL: Parallelization Strategy
 
 **Loop structure**: `for (int j = 0; j < LEN_2D; j++) {
             for (int i = j+1; i < LEN_2D; i++) {
@@ -117,19 +63,34 @@ offsets = block_start + tl.arange(0, BLOCK_SIZE)
 - Array `a`: write to `[(i)]`, read from `[(i)]`
 - Array `a`: write to `[(i)]`, read from `[(j)]`
 
-### VALID Parallelization Strategies
-**Option 1**: j-sequential, i-parallel (independent)
-  **Triton Strategy**: `MULTI_KERNEL_LAUNCH`
-  - ✓ a: Same location read/write [same_location]
-  - ✗ a: 1D array cross-block: read [(j)] accesses values written by other blocks [cross_block_1d]
-  - Same location read/write [(i)]
-  - Broadcast read: [(j)] doesn't contain i
-**Option 2**: i-sequential, j-parallel (reduction)
-  **Triton Strategy**: `MULTI_KERNEL_LAUNCH`
-  - ✓ a: Same location read/write [same_location]
-  - ✗ a: 1D reduction: a[(i)] needs all blocks to sync per i iteration [reduction_needs_sync]
-  - Broadcast read: [(i)] doesn't contain j
-  - Reduction: write [(i)], read [(j)]. Check if any j value causes read to equal write.
+### Required Strategy: j-sequential, i-parallel
+
+**Implementation Pattern:**
+- Python wrapper: loop over `j` sequentially (one kernel launch per j value)
+- Triton kernel: parallelize ALL `i` values using VECTORIZED operations
+
+**CRITICAL: Use vectorized operations inside the kernel!**
+- Use `tl.arange(0, BLOCK_SIZE)` to create index vectors
+- Use vectorized `tl.load` and `tl.store` with masks
+- NEVER use Python-style `for` loops inside @triton.jit kernels - they run serially!
+
+**Correct example:**
+```python
+def kernel_triton(...):
+    for j_val in range(...):  # Sequential in Python - OK
+        grid = (triton.cdiv(N, BLOCK_SIZE),)
+        kernel[grid](..., j_val)
+
+@triton.jit
+def kernel(..., j_val, BLOCK_SIZE: tl.constexpr):
+    # Fully vectorized over i
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+    vals = tl.load(ptr + offsets, mask=mask)  # Vectorized load
+    result = vals * 2  # Vectorized compute
+    tl.store(out_ptr + offsets, result, mask=mask)  # Vectorized store
+```
 
 
 ## Array Information:
@@ -185,52 +146,52 @@ import torch
 @triton.jit
 def s115_kernel(
     a_ptr,
-    a_copy_ptr,
     aa_ptr,
-    j,
+    j_val,
     LEN_2D: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE + (j + 1)
+    pid = tl.program_id(0)
     
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < LEN_2D
+    # Calculate i indices starting from j+1
+    i_start = j_val + 1
+    i_base = i_start + pid * BLOCK_SIZE
+    i_offsets = i_base + tl.arange(0, BLOCK_SIZE)
     
-    # Load a[i] values from copy (read-only)
-    a_i = tl.load(a_copy_ptr + offsets, mask=mask, other=0.0)
+    # Mask for valid i indices
+    i_mask = i_offsets < LEN_2D
     
     # Load a[j] (scalar broadcast)
-    a_j = tl.load(a_copy_ptr + j)
+    a_j = tl.load(a_ptr + j_val)
     
     # Load aa[j][i] values
-    aa_offsets = j * LEN_2D + offsets
-    aa_ji = tl.load(aa_ptr + aa_offsets, mask=mask, other=0.0)
+    aa_offsets = j_val * LEN_2D + i_offsets
+    aa_vals = tl.load(aa_ptr + aa_offsets, mask=i_mask)
+    
+    # Load a[i] values
+    a_i_vals = tl.load(a_ptr + i_offsets, mask=i_mask)
     
     # Compute: a[i] -= aa[j][i] * a[j]
-    result = a_i - aa_ji * a_j
+    result = a_i_vals - aa_vals * a_j
     
-    # Store result to original array
-    tl.store(a_ptr + offsets, result, mask=mask)
+    # Store back to a[i]
+    tl.store(a_ptr + i_offsets, result, mask=i_mask)
 
 def s115_triton(a, aa):
     LEN_2D = aa.shape[0]
     BLOCK_SIZE = 256
     
-    # Create read-only copy for WAR dependency handling
-    a_copy = a.clone()
-    
-    # Sequential j loop, parallel i loop
+    # Sequential loop over j
     for j in range(LEN_2D):
-        num_elements = LEN_2D - (j + 1)
-        if num_elements <= 0:
+        # Number of i elements to process (from j+1 to LEN_2D-1)
+        num_i = LEN_2D - (j + 1)
+        if num_i <= 0:
             continue
             
-        grid_size = triton.cdiv(num_elements, BLOCK_SIZE)
-        
-        s115_kernel[(grid_size,)](
+        # Launch kernel for this j value
+        grid = (triton.cdiv(num_i, BLOCK_SIZE),)
+        s115_kernel[grid](
             a,
-            a_copy,
             aa,
             j,
             LEN_2D,
