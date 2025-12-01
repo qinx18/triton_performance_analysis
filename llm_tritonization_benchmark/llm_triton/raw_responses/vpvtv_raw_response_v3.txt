@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for vpvtv
-# Generated: 2025-12-01 14:09:15
+# Generated: 2025-12-01 15:20:00
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1030
-# Output Tokens: 307
+# Input Tokens: 1172
+# Output Tokens: 362
 
 ================================================================================
 PROMPT:
@@ -100,35 +100,56 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def vpvtv_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
     
-    b = tl.load(b_ptr + offsets, mask=mask)
-    c = tl.load(c_ptr + offsets, mask=mask)
-    a = tl.load(a_ptr + offsets, mask=mask)
+    mask = indices < n_elements
     
-    result = a + b * c
+    # Load data
+    a_vals = tl.load(a_ptr + indices, mask=mask)
+    b_vals = tl.load(b_ptr + indices, mask=mask)
+    c_vals = tl.load(c_ptr + indices, mask=mask)
     
-    tl.store(a_ptr + offsets, result, mask=mask)
+    # Compute: a[i] += b[i] * c[i]
+    result = a_vals + b_vals * c_vals
+    
+    # Store result
+    tl.store(a_ptr + indices, result, mask=mask)
 
 def vpvtv_triton(a, b, c):
     n_elements = a.numel()
-    BLOCK_SIZE = 1024
+    BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vpvtv_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
+    vpvtv_kernel[grid](
+        a, b, c,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```

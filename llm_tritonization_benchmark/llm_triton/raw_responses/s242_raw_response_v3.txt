@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s242
-# Generated: 2025-12-01 13:57:50
+# Generated: 2025-12-01 15:08:30
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1144
-# Output Tokens: 463
+# Input Tokens: 1286
+# Output Tokens: 340
 
 ================================================================================
 PROMPT:
@@ -108,52 +108,51 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s242_kernel(a_ptr, b_ptr, c_ptr, d_ptr, s1, s2, n, BLOCK_SIZE: tl.constexpr):
-    # This kernel processes the array sequentially due to WAR dependency
-    # Each program handles one block sequentially
-    program_id = tl.program_id(0)
-    
-    # Calculate the range this program will handle
-    block_start = program_id * BLOCK_SIZE
-    block_end = tl.minimum(block_start + BLOCK_SIZE, n)
-    
-    # Process elements sequentially within this block
-    for i in range(block_start, block_end):
-        if i >= 1 and i < n:
-            # Load current values
-            a_prev = tl.load(a_ptr + i - 1)
-            b_val = tl.load(b_ptr + i)
-            c_val = tl.load(c_ptr + i)
-            d_val = tl.load(d_ptr + i)
-            
-            # Compute new value
-            new_val = a_prev + s1 + s2 + b_val + c_val + d_val
-            
-            # Store result
-            tl.store(a_ptr + i, new_val)
+def s242_kernel(a_ptr, b_ptr, c_ptr, d_ptr, s1, s2, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This kernel handles recurrence sequentially
+    for i in range(1, n_elements):
+        # Load previous a value
+        prev_a = tl.load(a_ptr + i - 1)
+        
+        # Load current values
+        b_val = tl.load(b_ptr + i)
+        c_val = tl.load(c_ptr + i)
+        d_val = tl.load(d_ptr + i)
+        
+        # Compute and store new value
+        new_val = prev_a + s1 + s2 + b_val + c_val + d_val
+        tl.store(a_ptr + i, new_val)
 
 def s242_triton(a, b, c, d, s1, s2):
-    n = a.shape[0]
+    n_elements = a.shape[0]
+    BLOCK_SIZE = 1024
     
-    # Use small block size for sequential processing
-    BLOCK_SIZE = 64
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
-    
-    s242_kernel[grid](
-        a, b, c, d,
-        s1, s2, n,
-        BLOCK_SIZE=BLOCK_SIZE
+    # Launch single program since this is sequential
+    s242_kernel[(1,)](
+        a, b, c, d, s1, s2, n_elements, BLOCK_SIZE
     )
     
     return a

@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s175
-# Generated: 2025-12-01 13:55:11
+# Generated: 2025-12-01 15:05:50
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1073
-# Output Tokens: 367
+# Input Tokens: 1215
+# Output Tokens: 439
 
 ================================================================================
 PROMPT:
@@ -106,6 +106,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -117,33 +129,36 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s175_kernel(a_ptr, b_ptr, n, inc, BLOCK_SIZE: tl.constexpr):
+def s175_kernel(a_ptr, b_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    for block_start in range(0, n, BLOCK_SIZE):
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n
+        mask = current_offsets < n_elements
         
-        # Check if indices are valid (i + inc < array bounds)
-        read_mask = mask & ((current_offsets + inc) < (n + 1))
+        # Check if current indices are valid (i.e., satisfy i % inc == 0)
+        valid_indices = (current_offsets % inc) == 0
+        combined_mask = mask & valid_indices
         
-        # Load data
-        a_read = tl.load(a_ptr + current_offsets + inc, mask=read_mask, other=0.0)
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
+        # Load a[i + inc] and b[i]
+        read_offsets = current_offsets + inc
+        read_mask = combined_mask & (read_offsets < (n_elements + inc))
         
-        # Compute
-        result = a_read + b_vals
+        a_inc_vals = tl.load(a_ptr + read_offsets, mask=read_mask, other=0.0)
+        b_vals = tl.load(b_ptr + current_offsets, mask=combined_mask, other=0.0)
+        
+        # Compute a[i] = a[i + inc] + b[i]
+        result = a_inc_vals + b_vals
         
         # Store result
-        tl.store(a_ptr + current_offsets, result, mask=mask)
+        tl.store(a_ptr + current_offsets, result, mask=combined_mask)
 
 def s175_triton(a, b, inc):
-    n = a.shape[0] - 1  # Loop goes to LEN_1D-1
+    n_elements = a.shape[0] - 1
     
     BLOCK_SIZE = 256
     
     s175_kernel[(1,)](
-        a, b, n, inc,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, inc, n_elements, BLOCK_SIZE
     )
 ```

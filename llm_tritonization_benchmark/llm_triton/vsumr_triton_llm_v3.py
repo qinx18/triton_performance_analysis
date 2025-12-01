@@ -1,44 +1,47 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def vsumr_kernel(a_ptr, n, BLOCK_SIZE: tl.constexpr):
+def vsumr_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Define offsets once at kernel start
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize sum to zero
+    # Initialize sum
     sum_val = 0.0
     
-    # Process data in blocks
-    for block_start in range(0, n, BLOCK_SIZE):
+    # Process array in blocks
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n
+        mask = current_offsets < n_elements
         
-        # Load data with masking
-        a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        # Load block of data
+        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         
-        # Accumulate sum
-        sum_val += tl.sum(a_vals)
+        # Sum the block
+        block_sum = tl.sum(vals, axis=0)
+        sum_val += block_sum
     
-    # Store result (only one thread stores the final sum)
+    # Store result (only the first thread writes)
     if tl.program_id(0) == 0:
-        tl.store(a_ptr + n, sum_val)
+        tl.store(output_ptr, sum_val)
 
 def vsumr_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     
-    # Extend tensor to store result
-    extended_a = torch.cat([a, torch.zeros(1, device=a.device, dtype=a.dtype)])
+    # Output tensor for the sum
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single program
-    grid = (1,)
     BLOCK_SIZE = 1024
     
+    # Launch kernel with single block
+    grid = (1,)
+    
     vsumr_kernel[grid](
-        extended_a,
-        n,
+        a_ptr=a,
+        output_ptr=output,
+        n_elements=n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Return the sum
-    return extended_a[n].item()
+    return output.item()

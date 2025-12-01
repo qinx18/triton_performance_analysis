@@ -49,7 +49,7 @@ def test_correctness():
             # Initialize base arrays
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            ip = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            ip = torch.randint(0, N + 10, (N + 10,), device='cuda', dtype=torch.long)
             alpha = 1  # Scalar parameter (integer)
             iterations = 1  # Scalar parameter (integer)
 

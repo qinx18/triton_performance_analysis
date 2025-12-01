@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for vag
-# Generated: 2025-12-01 14:08:23
+# Generated: 2025-12-01 15:19:09
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1038
-# Output Tokens: 321
+# Input Tokens: 1180
+# Output Tokens: 332
 
 ================================================================================
 PROMPT:
@@ -103,6 +103,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -122,21 +134,22 @@ def vag_kernel(a_ptr, b_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     mask = (block_start + offsets) < n_elements
     
     # Load indices
-    ip_offsets = tl.load(ip_ptr + block_start + offsets, mask=mask)
+    ip_offsets = block_start + offsets
+    indices = tl.load(ip_ptr + ip_offsets, mask=mask, other=0)
     
-    # Gather from b using the indices
-    b_values = tl.load(b_ptr + ip_offsets, mask=mask)
+    # Gather from b using indices
+    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
     
     # Store to a
-    tl.store(a_ptr + block_start + offsets, b_values, mask=mask)
+    tl.store(a_ptr + ip_offsets, b_vals, mask=mask)
 
 def vag_triton(a, b, ip):
-    n_elements = a.numel()
-    
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
+    
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vag_kernel[grid](a, b, ip, n_elements, BLOCK_SIZE)
-    
-    return a
+    vag_kernel[grid](
+        a, b, ip, n_elements, BLOCK_SIZE
+    )
 ```

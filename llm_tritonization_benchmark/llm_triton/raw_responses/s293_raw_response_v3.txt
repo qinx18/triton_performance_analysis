@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s293
-# Generated: 2025-12-01 14:01:45
+# Generated: 2025-12-01 15:12:23
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['a']
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1539
-# Output Tokens: 329
+# Input Tokens: 1681
+# Output Tokens: 341
 
 ================================================================================
 PROMPT:
@@ -154,15 +154,27 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s293_kernel(
@@ -171,23 +183,25 @@ def s293_kernel(
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    block_start = tl.program_id(axis=0) * BLOCK_SIZE
+    offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
     
-    # Load a[0] from the read-only copy
+    mask = idx < n_elements
+    
+    # Load a[0] from the copy (all threads load the same value)
     a_0_val = tl.load(a_copy_ptr)
     
-    # Store a[0] to all elements a[i]
-    tl.store(a_ptr + offsets, a_0_val, mask=mask)
+    # Store a_0_val to all positions a[i]
+    tl.store(a_ptr + idx, a_0_val, mask=mask)
 
 def s293_triton(a):
     n_elements = a.shape[0]
     
-    # Create read-only copy to handle WAR dependencies
+    # Create read-only copy to handle WAR dependency
     a_copy = a.clone()
     
+    # Launch kernel
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     

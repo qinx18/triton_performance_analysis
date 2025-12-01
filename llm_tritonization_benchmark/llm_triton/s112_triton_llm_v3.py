@@ -7,31 +7,31 @@ def s112_kernel(
     a_ptr,
     a_copy_ptr,
     b_ptr,
-    n,
+    n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    for block_start in range(0, n, BLOCK_SIZE):
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n
+        mask = current_offsets < n_elements
         
-        # Load from copy for a[i] and b[i]
+        # Load from copy (immutable) and b array
         a_vals = tl.load(a_copy_ptr + current_offsets, mask=mask)
         b_vals = tl.load(b_ptr + current_offsets, mask=mask)
         
-        # Compute a[i] + b[i]
+        # Compute result
         result = a_vals + b_vals
         
-        # Store to a[i+1] (original array)
+        # Store to original array at i+1 positions
         write_offsets = current_offsets + 1
-        write_mask = write_offsets < (n + 1)
+        write_mask = (current_offsets < n_elements) & (write_offsets < n_elements)
         tl.store(a_ptr + write_offsets, result, mask=write_mask)
 
 def s112_triton(a, b):
-    n = a.shape[0] - 1  # Loop from LEN_1D - 2 down to 0
+    n_elements = len(a) - 1  # Loop runs from LEN_1D-2 to 0, so n_elements iterations
     
-    # Create read-only copy for WAR dependency handling
+    # Create read-only copy to handle WAR dependency
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
@@ -41,6 +41,6 @@ def s112_triton(a, b):
         a,
         a_copy,
         b,
-        n,
-        BLOCK_SIZE,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
     )

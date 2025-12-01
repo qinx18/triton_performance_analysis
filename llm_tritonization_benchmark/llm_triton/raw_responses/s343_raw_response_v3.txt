@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s343
-# Generated: 2025-12-01 14:04:52
+# Generated: 2025-12-01 15:15:43
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1172
-# Output Tokens: 335
+# Input Tokens: 1314
+# Output Tokens: 422
 
 ================================================================================
 PROMPT:
@@ -114,6 +114,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -125,31 +137,43 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s343_kernel(aa_ptr, bb_ptr, flat_2d_array_ptr, len_2d: tl.constexpr):
-    # This kernel processes the entire 2D array sequentially
-    # since the packing operation has inherent dependencies
+def s343_kernel(
+    aa_ptr, bb_ptr, flat_2d_array_ptr,
+    LEN_2D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr
+):
+    # This kernel implements stream compaction (packing)
+    # We need to process sequentially to maintain order
     
     k = -1
     
-    for i in range(len_2d):
-        for j in range(len_2d):
-            # Load bb[j][i]
-            bb_val = tl.load(bb_ptr + j * len_2d + i)
+    for i in range(LEN_2D):
+        for j in range(LEN_2D):
+            # Load bb[j][i] and aa[j][i]
+            bb_idx = j * LEN_2D + i
+            bb_val = tl.load(bb_ptr + bb_idx)
             
             if bb_val > 0.0:
                 k += 1
-                # Load aa[j][i] and store to flat_2d_array[k]
-                aa_val = tl.load(aa_ptr + j * len_2d + i)
+                aa_val = tl.load(aa_ptr + bb_idx)
                 tl.store(flat_2d_array_ptr + k, aa_val)
 
 def s343_triton(aa, bb, flat_2d_array):
-    len_2d = aa.shape[0]
+    LEN_2D = aa.shape[0]
+    
+    # Ensure arrays are contiguous
+    aa = aa.contiguous()
+    bb = bb.contiguous()
+    flat_2d_array = flat_2d_array.contiguous()
     
     # Launch single thread since this is inherently sequential
     grid = (1,)
     
     s343_kernel[grid](
         aa, bb, flat_2d_array,
-        len_2d
+        LEN_2D=LEN_2D,
+        BLOCK_SIZE=256
     )
+    
+    return flat_2d_array
 ```

@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for vpvts
-# Generated: 2025-12-01 14:09:09
+# Generated: 2025-12-01 15:19:54
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1067
-# Output Tokens: 291
+# Input Tokens: 1209
+# Output Tokens: 300
 
 ================================================================================
 PROMPT:
@@ -106,6 +106,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -117,11 +129,16 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def vpvts_kernel(a_ptr, b_ptr, s, n_elements, BLOCK_SIZE: tl.constexpr):
+def vpvts_kernel(
+    a_ptr,
+    b_ptr,
+    s,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
     pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
     b_vals = tl.load(b_ptr + offsets, mask=mask)
@@ -133,8 +150,11 @@ def vpvts_kernel(a_ptr, b_ptr, s, n_elements, BLOCK_SIZE: tl.constexpr):
 
 def vpvts_triton(a, b, s):
     n_elements = a.numel()
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vpvts_kernel[grid](a, b, s, n_elements, BLOCK_SIZE)
+    vpvts_kernel[grid](
+        a, b, s, n_elements, BLOCK_SIZE
+    )
 ```

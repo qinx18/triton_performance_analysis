@@ -3,45 +3,39 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s255_kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and calculate block start
+def s255_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get program ID and calculate offsets
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    
-    # Define offsets once at kernel start
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Load initial x and y values
-    x = tl.load(b_ptr + n - 1)
-    y = tl.load(b_ptr + n - 2)
+    # Initialize x and y with values from end of array b
+    x = tl.load(b_ptr + n_elements - 1)
+    y = tl.load(b_ptr + n_elements - 2)
     
-    # Process each block sequentially to maintain dependencies
-    for i in range(n):
-        # Load b[i]
+    # Process the array in sequential blocks
+    for i in range(n_elements):
+        # Load current b[i] value
         b_val = tl.load(b_ptr + i)
         
-        # Compute result for this iteration
+        # Calculate result: (b[i] + x + y) * 0.333
         result = (b_val + x + y) * 0.333
         
-        # Store to a[i] only if this thread should handle it
-        if block_start <= i < block_start + BLOCK_SIZE:
-            tl.store(a_ptr + i, result)
+        # Store result to a[i]
+        tl.store(a_ptr + i, result)
         
-        # Update x and y for next iteration
+        # Update carry-around variables
         y = x
         x = b_val
 
 def s255_triton(a, b):
-    n = a.shape[0]
-    BLOCK_SIZE = 256
+    n_elements = a.shape[0]
     
-    # Calculate grid size
-    grid_size = triton.cdiv(n, BLOCK_SIZE)
+    # Use block size of 1 since this is inherently sequential
+    BLOCK_SIZE = 1
+    grid = (1,)
     
-    # Launch kernel with single thread to maintain sequential dependencies
-    s255_kernel[(1,)](
-        a, b, n,
+    s255_kernel[grid](
+        a, b, n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return a

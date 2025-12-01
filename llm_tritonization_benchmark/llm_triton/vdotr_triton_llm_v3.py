@@ -4,10 +4,9 @@ import torch
 
 @triton.jit
 def vdotr_kernel(a_ptr, b_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    
     offsets = tl.arange(0, BLOCK_SIZE)
-    dot_acc = 0.0
+    
+    dot_sum = 0.0
     
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
@@ -16,12 +15,14 @@ def vdotr_kernel(a_ptr, b_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
         a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
         
-        dot_acc += tl.sum(a_vals * b_vals)
+        products = a_vals * b_vals
+        dot_sum += tl.sum(products, axis=0)
     
-    tl.store(output_ptr, dot_acc)
+    tl.store(output_ptr, dot_sum)
 
 def vdotr_triton(a, b):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    
     output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
     BLOCK_SIZE = 1024

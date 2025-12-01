@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s271
-# Generated: 2025-12-01 13:59:34
+# Generated: 2025-12-01 15:10:19
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1061
-# Output Tokens: 341
+# Input Tokens: 1203
+# Output Tokens: 438
 
 ================================================================================
 PROMPT:
@@ -104,6 +104,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -118,23 +130,34 @@ import torch
 def s271_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-    condition = b_vals > 0.0
+    mask = (block_start + offsets) < n_elements
     
-    # Only load and store if condition is met
-    a_vals = tl.load(a_ptr + offsets, mask=mask & condition)
-    c_vals = tl.load(c_ptr + offsets, mask=mask & condition)
+    # Load values
+    b_vals = tl.load(b_ptr + block_start + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + block_start + offsets, mask=mask)
+    a_vals = tl.load(a_ptr + block_start + offsets, mask=mask)
     
-    result = a_vals + b_vals * c_vals
-    tl.store(a_ptr + offsets, result, mask=mask & condition)
+    # Apply condition: if b[i] > 0.0
+    condition_mask = b_vals > 0.0
+    combined_mask = mask & condition_mask
+    
+    # Compute: a[i] += b[i] * c[i] where condition is true
+    result = tl.where(condition_mask, a_vals + b_vals * c_vals, a_vals)
+    
+    # Store result
+    tl.store(a_ptr + block_start + offsets, result, mask=mask)
 
 def s271_triton(a, b, c):
     n_elements = a.numel()
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s271_kernel[grid](a, b, c, n_elements, BLOCK_SIZE)
+    s271_kernel[grid](
+        a, b, c,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```

@@ -1,40 +1,38 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s2111_kernel(aa_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Sequential wavefront computation - cannot be parallelized due to dependencies
-    for j in range(1, LEN_2D):
-        block_start = 0
-        offsets = tl.arange(0, BLOCK_SIZE)
+    # This kernel processes one j value (row) at a time
+    j = tl.program_id(0) + 1
+    
+    if j >= LEN_2D:
+        return
+    
+    # Sequential computation within each row
+    for i in range(1, LEN_2D):
+        # Load aa[j][i-1] (left neighbor)
+        left_val = tl.load(aa_ptr + j * LEN_2D + (i - 1))
         
-        for block_start in range(1, LEN_2D, BLOCK_SIZE):
-            current_offsets = block_start + offsets
-            mask = current_offsets < LEN_2D
-            
-            # Load aa[j][i-1]
-            left_ptrs = aa_ptr + j * LEN_2D + (current_offsets - 1)
-            left_vals = tl.load(left_ptrs, mask=mask)
-            
-            # Load aa[j-1][i]
-            top_ptrs = aa_ptr + (j - 1) * LEN_2D + current_offsets
-            top_vals = tl.load(top_ptrs, mask=mask)
-            
-            # Compute new values
-            new_vals = (left_vals + top_vals) / 1.9
-            
-            # Store aa[j][i]
-            out_ptrs = aa_ptr + j * LEN_2D + current_offsets
-            tl.store(out_ptrs, new_vals, mask=mask)
+        # Load aa[j-1][i] (top neighbor)
+        top_val = tl.load(aa_ptr + (j - 1) * LEN_2D + i)
+        
+        # Compute new value
+        new_val = (left_val + top_val) / 1.9
+        
+        # Store result
+        tl.store(aa_ptr + j * LEN_2D + i, new_val)
 
 def s2111_triton(aa):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = min(256, triton.next_power_of_2(LEN_2D))
     
-    grid = (1,)
+    # Launch kernel with one thread block per row (j dimension)
+    # Each thread block handles one row sequentially
+    grid = (LEN_2D - 1,)  # j from 1 to LEN_2D-1
+    
     s2111_kernel[grid](
         aa,
         LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=256
     )

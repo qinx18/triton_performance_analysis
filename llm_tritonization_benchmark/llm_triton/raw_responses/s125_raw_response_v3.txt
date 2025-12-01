@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s125
-# Generated: 2025-12-01 13:52:26
+# Generated: 2025-12-01 15:02:54
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1141
-# Output Tokens: 589
+# Input Tokens: 1283
+# Output Tokens: 429
 
 ================================================================================
 PROMPT:
@@ -109,6 +109,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -120,46 +132,39 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s125_kernel(flat_2d_array_ptr, aa_ptr, bb_ptr, cc_ptr, 
-                len_2d: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s125_kernel(flat_2d_array_ptr, aa_ptr, bb_ptr, cc_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    
-    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    k_offsets = block_start + offsets
+    block_start = pid * BLOCK_SIZE
+    idx = block_start + offsets
     
-    mask = k_offsets < (len_2d * len_2d)
+    mask = idx < n_elements
     
-    # Convert flat index k to 2D indices (i, j)
-    i_indices = k_offsets // len_2d
-    j_indices = k_offsets % len_2d
+    aa_vals = tl.load(aa_ptr + idx, mask=mask)
+    bb_vals = tl.load(bb_ptr + idx, mask=mask)
+    cc_vals = tl.load(cc_ptr + idx, mask=mask)
     
-    # Calculate 2D array offsets
-    aa_offsets = i_indices * len_2d + j_indices
-    bb_offsets = i_indices * len_2d + j_indices
-    cc_offsets = i_indices * len_2d + j_indices
-    
-    # Load values from 2D arrays
-    aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask)
-    bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask)
-    cc_vals = tl.load(cc_ptr + cc_offsets, mask=mask)
-    
-    # Compute: flat_2d_array[k] = aa[i][j] + bb[i][j] * cc[i][j]
     result = aa_vals + bb_vals * cc_vals
     
-    # Store result
-    tl.store(flat_2d_array_ptr + k_offsets, result, mask=mask)
+    tl.store(flat_2d_array_ptr + idx, result, mask=mask)
 
 def s125_triton(flat_2d_array, aa, bb, cc):
-    len_2d = aa.shape[0]
-    total_elements = len_2d * len_2d
+    flat_2d_array = flat_2d_array.contiguous()
+    aa = aa.contiguous().view(-1)
+    bb = bb.contiguous().view(-1)
+    cc = cc.contiguous().view(-1)
     
+    n_elements = aa.numel()
     BLOCK_SIZE = 256
-    grid_size = triton.cdiv(total_elements, BLOCK_SIZE)
+    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
     
     s125_kernel[(grid_size,)](
-        flat_2d_array, aa, bb, cc,
-        len_2d, BLOCK_SIZE
+        flat_2d_array,
+        aa,
+        bb,
+        cc,
+        n_elements,
+        BLOCK_SIZE
     )
     
     return flat_2d_array

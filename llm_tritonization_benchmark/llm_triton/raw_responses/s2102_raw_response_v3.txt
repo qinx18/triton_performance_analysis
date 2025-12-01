@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s2102
-# Generated: 2025-12-01 13:55:36
+# Generated: 2025-12-01 15:06:16
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1123
-# Output Tokens: 444
+# Input Tokens: 1265
+# Output Tokens: 430
 
 ================================================================================
 PROMPT:
@@ -106,6 +106,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -118,38 +130,42 @@ import triton.language as tl
 
 @triton.jit
 def s2102_kernel(aa_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for the outer loop (i dimension)
+    # Get program ID for the outer dimension (i)
     i = tl.program_id(0)
     
     if i >= LEN_2D:
         return
     
-    # Define offsets once at kernel start
-    j_offsets = tl.arange(0, BLOCK_SIZE)
+    # Define offsets once at the start
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Zero out the entire column aa[:][i] in blocks
-    for j_block_start in range(0, LEN_2D, BLOCK_SIZE):
-        j_indices = j_block_start + j_offsets
-        j_mask = j_indices < LEN_2D
+    # Zero out the entire column aa[*][i]
+    for block_start in range(0, LEN_2D, BLOCK_SIZE):
+        j_offsets = block_start + offsets
+        mask = j_offsets < LEN_2D
         
-        # Calculate memory addresses: aa[j][i] = aa_ptr[j * LEN_2D + i]
-        addr = j_indices * LEN_2D + i
-        tl.store(aa_ptr + addr, 0.0, mask=j_mask)
+        # Calculate pointer to aa[j][i] = aa_ptr[j * LEN_2D + i]
+        ptr = aa_ptr + j_offsets * LEN_2D + i
+        
+        # Store zeros
+        tl.store(ptr, 0.0, mask=mask)
     
     # Set diagonal element aa[i][i] = 1.0
-    diagonal_addr = i * LEN_2D + i
-    tl.store(aa_ptr + diagonal_addr, 1.0)
+    diagonal_ptr = aa_ptr + i * LEN_2D + i
+    tl.store(diagonal_ptr, 1.0)
 
 def s2102_triton(aa):
     LEN_2D = aa.shape[0]
     BLOCK_SIZE = 64
     
-    # Launch kernel with one thread block per row (i dimension)
+    # Launch kernel with one thread block per row
     grid = (LEN_2D,)
     
     s2102_kernel[grid](
         aa,
-        LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
+        LEN_2D,
+        BLOCK_SIZE
     )
+    
+    return aa
 ```

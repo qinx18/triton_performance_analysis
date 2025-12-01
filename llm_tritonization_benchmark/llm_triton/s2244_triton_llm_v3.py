@@ -1,42 +1,39 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s2244_kernel(a_ptr, b_ptr, c_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load b[i] + e[i] for a[i+1] = b[i] + e[i]
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
-        e_vals = tl.load(e_ptr + current_offsets, mask=mask, other=0.0)
-        result1 = b_vals + e_vals
-        
-        # Load b[i] + c[i] for a[i] = b[i] + c[i]
-        c_vals = tl.load(c_ptr + current_offsets, mask=mask, other=0.0)
-        result2 = b_vals + c_vals
-        
-        # Store a[i+1] = b[i] + e[i]
-        next_offsets = current_offsets + 1
-        next_mask = mask & (next_offsets < (n_elements + 1))
-        tl.store(a_ptr + next_offsets, result1, mask=next_mask)
-        
-        # Store a[i] = b[i] + c[i]
-        tl.store(a_ptr + current_offsets, result2, mask=mask)
+    mask = offsets < n_elements
+    
+    # Load data
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    e_vals = tl.load(e_ptr + offsets, mask=mask)
+    
+    # Compute values
+    val1 = b_vals + e_vals  # for a[i+1]
+    val2 = b_vals + c_vals  # for a[i]
+    
+    # Store a[i+1] = b[i] + e[i] (shifted by +1)
+    mask_plus1 = (offsets + 1) < n_elements + 1
+    tl.store(a_ptr + offsets + 1, val1, mask=mask_plus1 & mask)
+    
+    # Store a[i] = b[i] + c[i]
+    tl.store(a_ptr + offsets, val2, mask=mask)
 
 def s2244_triton(a, b, c, e):
-    n_elements = len(b) - 1  # LEN_1D - 1
-    BLOCK_SIZE = 256
+    n_elements = a.shape[0] - 1  # Loop runs to LEN_1D-1
     
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    BLOCK_SIZE = 256
+    grid = ((n_elements + BLOCK_SIZE - 1) // BLOCK_SIZE,)
     
     s2244_kernel[grid](
         a, b, c, e,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return a

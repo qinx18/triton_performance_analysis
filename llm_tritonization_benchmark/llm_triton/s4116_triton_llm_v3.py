@@ -1,57 +1,69 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s4116_kernel(a_ptr, aa_ptr, ip_ptr, sum_ptr, inc, j, n, LEN_2D, BLOCK_SIZE: tl.constexpr):
+def s4116_kernel(
+    a_ptr, aa_ptr, ip_ptr,
+    inc, j_minus_1, len_2d_minus_1, len_2d,
+    output_ptr,
+    BLOCK_SIZE: tl.constexpr,
+):
     # Get program ID
     pid = tl.program_id(0)
     
-    # Calculate block start and offsets
-    block_start = pid * BLOCK_SIZE
+    # Calculate the range of iterations this program handles
+    start_i = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    i_offsets = block_start + offsets
+    i_offsets = start_i + offsets
+    mask = i_offsets < len_2d_minus_1
     
-    # Mask for valid indices
-    mask = i_offsets < n
+    # Calculate off = inc + i for each element
+    off_offsets = inc + i_offsets
     
-    # Initialize local sum
-    local_sum = 0.0
-    
-    # Compute off = inc + i
-    off_indices = inc + i_offsets
-    
-    # Load a[off] values
-    a_vals = tl.load(a_ptr + off_indices, mask=mask, other=0.0)
-    
-    # Load ip[i] values for indirect addressing
+    # Load ip[i] values
     ip_vals = tl.load(ip_ptr + i_offsets, mask=mask, other=0)
     
-    # Compute aa indices: (j-1) * LEN_2D + ip[i]
-    aa_indices = (j - 1) * LEN_2D + ip_vals
+    # Load a[off] values
+    a_vals = tl.load(a_ptr + off_offsets, mask=mask, other=0.0)
+    
+    # Calculate aa[j-1][ip[i]] indices
+    aa_indices = j_minus_1 * len_2d + ip_vals
     
     # Load aa[j-1][ip[i]] values
     aa_vals = tl.load(aa_ptr + aa_indices, mask=mask, other=0.0)
     
-    # Compute products and sum
+    # Calculate products
     products = a_vals * aa_vals
-    local_sum = tl.sum(tl.where(mask, products, 0.0))
     
-    # Atomic add to global sum
-    tl.atomic_add(sum_ptr, local_sum)
+    # Apply mask to zero out invalid elements
+    products = tl.where(mask, products, 0.0)
+    
+    # Sum the products for this block
+    block_sum = tl.sum(products, axis=0)
+    
+    # Store the partial sum
+    tl.store(output_ptr + pid, block_sum)
 
-def s4116_triton(a, aa, ip, inc, j, LEN_2D):
-    n = LEN_2D - 1
+def s4116_triton(a, aa, ip, inc, j):
+    len_2d = aa.shape[1]
+    len_2d_minus_1 = len_2d - 1
+    j_minus_1 = j - 1
     
-    # Initialize sum tensor
-    sum_tensor = torch.zeros(1, device=a.device, dtype=a.dtype)
+    BLOCK_SIZE = 256
+    num_blocks = triton.cdiv(len_2d_minus_1, BLOCK_SIZE)
+    
+    # Create output tensor for partial sums
+    partial_sums = torch.zeros(num_blocks, dtype=torch.float32, device=a.device)
     
     # Launch kernel
-    BLOCK_SIZE = 256
-    num_blocks = triton.cdiv(n, BLOCK_SIZE)
-    
     s4116_kernel[(num_blocks,)](
-        a, aa, ip, sum_tensor, inc, j, n, LEN_2D, BLOCK_SIZE
+        a, aa, ip,
+        inc, j_minus_1, len_2d_minus_1, len_2d,
+        partial_sums,
+        BLOCK_SIZE=BLOCK_SIZE,
     )
     
-    return sum_tensor.item()
+    # Sum all partial results
+    result = torch.sum(partial_sums)
+    return result

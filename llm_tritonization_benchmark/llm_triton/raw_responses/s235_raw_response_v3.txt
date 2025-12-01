@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s235
-# Generated: 2025-12-01 13:57:31
+# Generated: 2025-12-01 15:08:13
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1135
-# Output Tokens: 448
+# Input Tokens: 1277
+# Output Tokens: 609
 
 ================================================================================
 PROMPT:
@@ -106,46 +106,63 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s235_kernel(a_ptr, b_ptr, c_ptr, aa_ptr, bb_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    i = tl.program_id(0)
+def s235_kernel(
+    a_ptr, b_ptr, c_ptr, aa_ptr, bb_ptr,
+    LEN_2D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    i_offsets = tl.arange(0, BLOCK_SIZE)
     
-    if i >= LEN_2D:
-        return
-    
-    # Load and update a[i]
-    a_val = tl.load(a_ptr + i)
-    b_val = tl.load(b_ptr + i)
-    c_val = tl.load(c_ptr + i)
-    a_val = a_val + b_val * c_val
-    tl.store(a_ptr + i, a_val)
-    
-    # Inner loop: sequential dependency on j-1
-    for j in range(1, LEN_2D):
-        aa_prev = tl.load(aa_ptr + (j-1) * LEN_2D + i)
-        bb_val = tl.load(bb_ptr + j * LEN_2D + i)
-        aa_new = aa_prev + bb_val * a_val
-        tl.store(aa_ptr + j * LEN_2D + i, aa_new)
+    for i_block in range(0, LEN_2D, BLOCK_SIZE):
+        current_i_offsets = i_block + i_offsets
+        i_mask = current_i_offsets < LEN_2D
+        
+        # a[i] += b[i] * c[i]
+        a_vals = tl.load(a_ptr + current_i_offsets, mask=i_mask)
+        b_vals = tl.load(b_ptr + current_i_offsets, mask=i_mask)
+        c_vals = tl.load(c_ptr + current_i_offsets, mask=i_mask)
+        a_vals = a_vals + b_vals * c_vals
+        tl.store(a_ptr + current_i_offsets, a_vals, mask=i_mask)
+        
+        # Sequential loop over j
+        for j in range(1, LEN_2D):
+            # aa[j][i] = aa[j-1][i] + bb[j][i] * a[i]
+            aa_prev_vals = tl.load(aa_ptr + (j-1) * LEN_2D + current_i_offsets, mask=i_mask)
+            bb_vals = tl.load(bb_ptr + j * LEN_2D + current_i_offsets, mask=i_mask)
+            aa_new_vals = aa_prev_vals + bb_vals * a_vals
+            tl.store(aa_ptr + j * LEN_2D + current_i_offsets, aa_new_vals, mask=i_mask)
 
 def s235_triton(a, b, c, aa, bb):
     LEN_2D = a.shape[0]
     BLOCK_SIZE = 256
     
-    grid = (triton.cdiv(LEN_2D, 1),)
-    
+    grid = (1,)
     s235_kernel[grid](
         a, b, c, aa, bb,
         LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=BLOCK_SIZE,
     )
 ```

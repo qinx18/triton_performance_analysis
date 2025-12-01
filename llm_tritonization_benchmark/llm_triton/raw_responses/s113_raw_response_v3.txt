@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s113
-# Generated: 2025-12-01 13:50:13
+# Generated: 2025-12-01 15:00:47
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1032
-# Output Tokens: 313
+# Input Tokens: 1174
+# Output Tokens: 457
 
 ================================================================================
 PROMPT:
@@ -100,6 +100,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -111,31 +123,42 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s113_kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
+def s113_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get block start position
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE + 1  # Start from index 1
     
-    # Load a[0] (broadcast to all threads)
+    # Define offsets once at kernel start
+    offsets = tl.arange(0, BLOCK_SIZE)
+    current_offsets = block_start + offsets
+    
+    # Create mask for valid elements (i < n_elements and i >= 1)
+    mask = (current_offsets < n_elements) & (current_offsets >= 1)
+    
+    # Load a[0] (scalar broadcast)
     a0 = tl.load(a_ptr)
     
-    for block_start in range(1, n, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n
-        
-        # Load b[i]
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask)
-        
-        # Compute a[i] = a[0] + b[i]
-        result = a0 + b_vals
-        
-        # Store result
-        tl.store(a_ptr + current_offsets, result, mask=mask)
+    # Load b[i] values
+    b_vals = tl.load(b_ptr + current_offsets, mask=mask)
+    
+    # Compute a[i] = a[0] + b[i]
+    result = a0 + b_vals
+    
+    # Store result back to a[i]
+    tl.store(a_ptr + current_offsets, result, mask=mask)
 
 def s113_triton(a, b):
-    n = a.shape[0]
+    n_elements = a.shape[0]
+    
+    # Block size for efficient memory access
     BLOCK_SIZE = 256
     
-    grid = (1,)
-    s113_kernel[grid](a, b, n, BLOCK_SIZE)
+    # Calculate grid size (exclude index 0 since we start from 1)
+    grid_size = triton.cdiv(n_elements - 1, BLOCK_SIZE)
     
-    return a
+    # Launch kernel
+    s113_kernel[(grid_size,)](
+        a, b, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```

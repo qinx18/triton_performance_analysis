@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s162
-# Generated: 2025-12-01 13:54:37
+# Generated: 2025-12-01 15:05:13
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1076
-# Output Tokens: 511
+# Input Tokens: 1218
+# Output Tokens: 421
 
 ================================================================================
 PROMPT:
@@ -105,54 +105,61 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s162_kernel(a_ptr, a_out_ptr, b_ptr, c_ptr, k, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
+def s162_kernel(a_ptr, b_ptr, c_ptr, n, k, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
+    
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
     
-    mask = indices < n_elements
+    mask = indices < n
     
     # Load b[i] and c[i]
-    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
-    c_vals = tl.load(c_ptr + indices, mask=mask, other=0.0)
+    b_vals = tl.load(b_ptr + indices, mask=mask)
+    c_vals = tl.load(c_ptr + indices, mask=mask)
     
     # Load a[i + k]
-    a_offset_indices = indices + k
-    a_offset_mask = mask & (a_offset_indices < (n_elements + k))
-    a_offset_vals = tl.load(a_ptr + a_offset_indices, mask=a_offset_mask, other=0.0)
+    read_indices = indices + k
+    read_mask = mask & (read_indices < (n + k))
+    a_read_vals = tl.load(a_ptr + read_indices, mask=read_mask)
     
     # Compute a[i] = a[i + k] + b[i] * c[i]
-    result = a_offset_vals + b_vals * c_vals
+    result = a_read_vals + b_vals * c_vals
     
     # Store result
-    tl.store(a_out_ptr + indices, result, mask=mask)
+    tl.store(a_ptr + indices, result, mask=mask)
 
 def s162_triton(a, b, c, k):
     if k <= 0:
         return
     
-    n_elements = len(a) - 1
-    a_out = torch.empty_like(a)
-    a_out.copy_(a)
+    n = a.shape[0] - 1
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(n, BLOCK_SIZE),)
     
-    s162_kernel[grid](
-        a, a_out, b, c, k, n_elements, BLOCK_SIZE
-    )
-    
-    a.copy_(a_out)
+    s162_kernel[grid](a, b, c, n, k, BLOCK_SIZE)
 ```

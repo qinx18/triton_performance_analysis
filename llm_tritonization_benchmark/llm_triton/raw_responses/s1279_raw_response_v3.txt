@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s1279
-# Generated: 2025-12-01 13:52:58
+# Generated: 2025-12-01 15:03:29
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1098
-# Output Tokens: 475
+# Input Tokens: 1240
+# Output Tokens: 497
 
 ================================================================================
 PROMPT:
@@ -108,6 +108,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -119,39 +131,45 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s1279_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE
+def s1279_kernel(
+    a_ptr, b_ptr, c_ptr, d_ptr, e_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets
     mask = idx < n_elements
     
-    a = tl.load(a_ptr + idx, mask=mask)
-    b = tl.load(b_ptr + idx, mask=mask)
-    c = tl.load(c_ptr + idx, mask=mask)
-    d = tl.load(d_ptr + idx, mask=mask)
-    e = tl.load(e_ptr + idx, mask=mask)
+    # Load arrays
+    a_vals = tl.load(a_ptr + idx, mask=mask)
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
+    d_vals = tl.load(d_ptr + idx, mask=mask)
+    e_vals = tl.load(e_ptr + idx, mask=mask)
     
-    # if (a[i] < 0.)
-    cond1 = a < 0.0
-    # if (b[i] > a[i])
-    cond2 = b > a
-    # Combined condition
+    # Compute conditions
+    cond1 = a_vals < 0.0
+    cond2 = b_vals > a_vals
     combined_cond = cond1 & cond2
     
-    # c[i] += d[i] * e[i]
-    result = tl.where(combined_cond, c + d * e, c)
+    # Update c where both conditions are true
+    update_vals = d_vals * e_vals
+    c_new = tl.where(combined_cond, c_vals + update_vals, c_vals)
     
-    tl.store(c_ptr + idx, result, mask=mask)
+    # Store result
+    tl.store(c_ptr + idx, c_new, mask=mask)
 
 def s1279_triton(a, b, c, d, e):
     n_elements = a.numel()
+    
+    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s1279_kernel[grid](
         a, b, c, d, e,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=BLOCK_SIZE,
     )
 ```

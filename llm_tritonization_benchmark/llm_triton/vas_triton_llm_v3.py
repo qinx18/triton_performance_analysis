@@ -1,39 +1,28 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def vas_kernel(
-    a_ptr, b_ptr, ip_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
+def vas_kernel(a_ptr, b_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
+    mask = idx < n_elements
     
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load b[i] and ip[i]
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask)
-        ip_vals = tl.load(ip_ptr + current_offsets, mask=mask)
-        
-        # Store to a[ip[i]] = b[i] (scatter operation)
-        # Need to handle each element individually for scatter
-        for i in range(BLOCK_SIZE):
-            if block_start + i < n_elements:
-                idx = tl.load(ip_ptr + block_start + i)
-                val = tl.load(b_ptr + block_start + i)
-                tl.store(a_ptr + idx, val)
+    # Load indices and values
+    indices = tl.load(ip_ptr + idx, mask=mask)
+    values = tl.load(b_ptr + idx, mask=mask)
+    
+    # Scatter operation: a[ip[i]] = b[i]
+    tl.store(a_ptr + indices, values, mask=mask)
 
 def vas_triton(a, b, ip):
-    n_elements = b.shape[0]
+    n_elements = a.shape[0]
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     vas_kernel[grid](
-        a, b, ip,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        a, b, ip, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )

@@ -1,35 +1,24 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s423_kernel(flat_2d_array_ptr, xx_ptr, a_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
     
-    # Read indices for xx and a
-    read_idx = block_start + offsets
-    read_mask = read_idx < n_elements
+    mask = indices < n_elements
     
-    # Write indices for flat_2d_array (offset by +1)
-    write_idx = read_idx + 1
-    
-    # Load data
-    xx_vals = tl.load(xx_ptr + read_idx, mask=read_mask, other=0.0)
-    a_vals = tl.load(a_ptr + read_idx, mask=read_mask, other=0.0)
-    
-    # Compute
+    xx_vals = tl.load(xx_ptr + indices, mask=mask)
+    a_vals = tl.load(a_ptr + indices, mask=mask)
     result = xx_vals + a_vals
     
-    # Store result
-    tl.store(flat_2d_array_ptr + write_idx, result, mask=read_mask)
+    tl.store(flat_2d_array_ptr + (indices + 1), result, mask=mask)
 
 def s423_triton(flat_2d_array, a):
-    LEN_1D = a.shape[0]
-    n_elements = LEN_1D - 1
-    
-    # Set up xx pointer (flat_2d_array + 64)
+    n_elements = len(a) - 1
     vl = 64
     xx = flat_2d_array[vl:]
     
@@ -37,8 +26,5 @@ def s423_triton(flat_2d_array, a):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s423_kernel[grid](
-        flat_2d_array, xx, a,
-        n_elements, BLOCK_SIZE
+        flat_2d_array, xx, a, n_elements, BLOCK_SIZE
     )
-    
-    return flat_2d_array

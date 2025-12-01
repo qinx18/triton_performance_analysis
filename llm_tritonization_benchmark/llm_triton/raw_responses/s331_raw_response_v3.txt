@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s331
-# Generated: 2025-12-01 14:04:24
+# Generated: 2025-12-01 15:15:10
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1107
-# Output Tokens: 422
+# Input Tokens: 1249
+# Output Tokens: 451
 
 ================================================================================
 PROMPT:
@@ -114,52 +114,64 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s331_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize j to -1
-    j = -1
+    last_negative_idx = -1
     
-    # Process all elements sequentially to maintain dependency
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
         
-        # Load array elements
         a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        negative_mask = a_vals < 0.0
         
-        # Check condition for each element in the block
+        # Find indices where condition is true
+        valid_indices = tl.where(negative_mask & mask, current_offsets, -1)
+        
+        # Update last_negative_idx for each element in the block
         for i in range(BLOCK_SIZE):
             if block_start + i < n_elements:
-                if a_vals[i] < 0.0:
-                    j = block_start + i
+                if valid_indices[i] >= 0:
+                    last_negative_idx = valid_indices[i]
     
-    # Store result (only first thread writes)
+    # Store the result (only thread 0 writes)
     if tl.program_id(0) == 0:
-        tl.store(result_ptr, j)
+        tl.store(result_ptr, last_negative_idx)
 
 def s331_triton(a):
     n_elements = a.shape[0]
     BLOCK_SIZE = 256
     
-    # Create result tensor
-    result = torch.zeros(1, dtype=torch.int32, device=a.device)
+    result = torch.tensor([-1], dtype=torch.int32, device=a.device)
     
-    # Launch kernel with single block to maintain sequential dependency
     grid = (1,)
     s331_kernel[grid](
-        a, result, n_elements,
+        a, result, 
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
     

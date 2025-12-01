@@ -8,35 +8,34 @@ def s4112_kernel(
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Define offsets once at kernel start
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    mask = (block_start + offsets) < n_elements
     
-    # Process elements in blocks
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        # Calculate current offsets
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load indices
-        indices = tl.load(ip_ptr + current_offsets, mask=mask, other=0)
-        
-        # Load values from a and b
-        a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
-        
-        # Compute and store result
-        result = a_vals + b_vals * s
-        tl.store(a_ptr + current_offsets, result, mask=mask)
+    # Load indices
+    ip_offsets = block_start + offsets
+    indices = tl.load(ip_ptr + ip_offsets, mask=mask, other=0)
+    
+    # Load current values of a
+    a_vals = tl.load(a_ptr + ip_offsets, mask=mask, other=0.0)
+    
+    # Gather from b using indices
+    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
+    
+    # Compute a[i] += b[ip[i]] * s
+    result = a_vals + b_vals * s
+    
+    # Store result
+    tl.store(a_ptr + ip_offsets, result, mask=mask)
 
 def s4112_triton(a, b, ip, s):
     n_elements = a.shape[0]
     BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Launch kernel with single program
-    s4112_kernel[(1,)](
+    s4112_kernel[grid](
         a, b, ip, s,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a

@@ -3,30 +3,30 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s111_kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
+def s111_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    for block_start in range(1, n, BLOCK_SIZE * 2):
-        current_offsets = block_start + offsets * 2
-        mask = current_offsets < n
-        
+    # Process elements sequentially due to read-after-write dependency
+    for i in range(1, n_elements, 2):
         # Load a[i-1] and b[i]
-        prev_offsets = current_offsets - 1
-        prev_mask = (current_offsets > 0) & mask
+        prev_val = tl.load(a_ptr + (i - 1))
+        b_val = tl.load(b_ptr + i)
         
-        a_prev = tl.load(a_ptr + prev_offsets, mask=prev_mask, other=0.0)
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
-        
-        # Compute a[i] = a[i-1] + b[i]
-        result = a_prev + b_vals
-        
-        # Store result
-        tl.store(a_ptr + current_offsets, result, mask=mask)
+        # Compute and store a[i] = a[i-1] + b[i]
+        result = prev_val + b_val
+        tl.store(a_ptr + i, result)
 
 def s111_triton(a, b):
-    n = a.shape[0]
-    BLOCK_SIZE = 128
+    n_elements = a.shape[0]
     
-    s111_kernel[(1,)](a, b, n, BLOCK_SIZE)
+    BLOCK_SIZE = 1024
+    
+    # Launch kernel with single block since we need sequential processing
+    grid = (1,)
+    
+    s111_kernel[grid](
+        a, b, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
     
     return a

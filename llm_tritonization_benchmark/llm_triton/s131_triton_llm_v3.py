@@ -10,27 +10,32 @@ def s131_kernel(
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
     
-    # Load from read-only copy and b array
-    a_vals = tl.load(a_copy_ptr + indices + 1, mask=mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    # Current indices for reading
+    read_offsets = block_start + offsets
     
-    # Compute result
+    # Indices for reading from a_copy (i + m where m = 1)
+    read_a_offsets = read_offsets + 1
+    
+    # Mask for valid elements (i < LEN_1D - 1)
+    mask = read_offsets < (n_elements - 1)
+    
+    # Load values
+    a_vals = tl.load(a_copy_ptr + read_a_offsets, mask=mask)
+    b_vals = tl.load(b_ptr + read_offsets, mask=mask)
+    
+    # Compute: a[i] = a[i + m] + b[i]
     result = a_vals + b_vals
     
-    # Store to original array
-    tl.store(a_ptr + indices, result, mask=mask)
+    # Store result
+    tl.store(a_ptr + read_offsets, result, mask=mask)
 
 def s131_triton(a, b):
-    n_elements = a.shape[0] - 1
+    n_elements = a.shape[0]
     
-    # Create read-only copy to handle WAR dependencies
+    # Create read-only copy to handle WAR race condition
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
@@ -41,5 +46,5 @@ def s131_triton(a, b):
         a_copy,
         b,
         n_elements,
-        BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE,
     )

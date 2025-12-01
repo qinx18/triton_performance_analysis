@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s118
-# Generated: 2025-12-01 13:51:05
+# Generated: 2025-12-01 15:01:29
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: REQUIRED: i-seq, j-par (reduction)
 # Triton Strategy: MULTI_KERNEL_LAUNCH
 # Stop Reason: end_turn
-# Input Tokens: 1649
-# Output Tokens: 1087
+# Input Tokens: 1791
+# Output Tokens: 542
 
 ================================================================================
 PROMPT:
@@ -152,6 +152,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -164,87 +176,39 @@ import torch
 
 @triton.jit
 def s118_kernel(a_ptr, bb_ptr, i_val, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and create offset vector once
     pid = tl.program_id(0)
-    offsets = tl.arange(0, BLOCK_SIZE)
-    j_offsets = pid * BLOCK_SIZE + offsets
     
-    # Mask for valid j values: j <= i_val - 1
-    mask = j_offsets <= i_val - 1
+    # Vectorized j indices for this block
+    j_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    j_mask = (j_offsets < i_val) & (j_offsets >= 0)
     
-    # Load bb[j][i_val] values
+    # Load bb[j][i] values
     bb_indices = j_offsets * LEN_2D + i_val
-    bb_vals = tl.load(bb_ptr + bb_indices, mask=mask, other=0.0)
+    bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask, other=0.0)
     
-    # Load a[i_val - j - 1] values
+    # Load a[i-j-1] values
     a_read_indices = i_val - j_offsets - 1
-    a_vals = tl.load(a_ptr + a_read_indices, mask=mask, other=0.0)
+    a_read_mask = j_mask & (a_read_indices >= 0) & (a_read_indices < LEN_2D)
+    a_vals = tl.load(a_ptr + a_read_indices, mask=a_read_mask, other=0.0)
     
-    # Compute products
+    # Compute products and sum
     products = bb_vals * a_vals
+    masked_products = tl.where(j_mask & a_read_mask, products, 0.0)
+    partial_sum = tl.sum(masked_products)
     
-    # Mask out invalid elements
-    products = tl.where(mask, products, 0.0)
-    
-    # Sum across the block
-    partial_sum = tl.sum(products)
-    
-    # Use atomic add to accumulate to a[i_val]
-    if pid == 0:  # Only first block does the atomic add to avoid duplicates
-        # Sum all valid products in this block and add to a[i_val]
-        tl.atomic_add(a_ptr + i_val, partial_sum)
-    else:
-        # For other blocks, we need to store partial results and sum them
-        # This is handled by launching the kernel appropriately
-        pass
-
-@triton.jit  
-def s118_reduction_kernel(a_ptr, bb_ptr, partial_sums_ptr, i_val, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    offsets = tl.arange(0, BLOCK_SIZE)
-    j_offsets = pid * BLOCK_SIZE + offsets
-    
-    mask = j_offsets <= i_val - 1
-    
-    bb_indices = j_offsets * LEN_2D + i_val
-    bb_vals = tl.load(bb_ptr + bb_indices, mask=mask, other=0.0)
-    
-    a_read_indices = i_val - j_offsets - 1
-    a_vals = tl.load(a_ptr + a_read_indices, mask=mask, other=0.0)
-    
-    products = bb_vals * a_vals
-    products = tl.where(mask, products, 0.0)
-    
-    partial_sum = tl.sum(products)
-    
-    # Store partial sum for this block
-    tl.store(partial_sums_ptr + pid, partial_sum)
+    # Atomic add to a[i]
+    tl.atomic_add(a_ptr + i_val, partial_sum)
 
 def s118_triton(a, bb):
     LEN_2D = bb.shape[0]
     BLOCK_SIZE = 256
     
-    # Sequential loop over i
-    for i_val in range(1, LEN_2D):
-        max_j = i_val  # j ranges from 0 to i-1, so i elements total
-        num_blocks = triton.cdiv(max_j, BLOCK_SIZE)
-        
-        if num_blocks == 1:
-            # Simple case - single block
-            grid = (1,)
+    for i in range(1, LEN_2D):
+        num_j = i
+        if num_j > 0:
+            grid = (triton.cdiv(num_j, BLOCK_SIZE),)
             s118_kernel[grid](
-                a, bb, i_val, LEN_2D, BLOCK_SIZE
+                a, bb,
+                i, LEN_2D, BLOCK_SIZE
             )
-        else:
-            # Multiple blocks - need reduction
-            partial_sums = torch.zeros(num_blocks, device=a.device, dtype=a.dtype)
-            
-            grid = (num_blocks,)
-            s118_reduction_kernel[grid](
-                a, bb, partial_sums, i_val, LEN_2D, BLOCK_SIZE
-            )
-            
-            # Sum partial results and add to a[i_val]
-            total_sum = partial_sums.sum()
-            a[i_val] += total_sum
 ```

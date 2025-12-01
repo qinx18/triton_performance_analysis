@@ -1,45 +1,46 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s241_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Get program id and compute offsets once
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
+    # Define offsets once at the start
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # First pass: compute a[i] = b[i] * c[i] * d[i]
-    current_offsets = block_start + offsets
-    mask = current_offsets < n_elements
-    
-    b_vals = tl.load(b_ptr + current_offsets, mask=mask)
-    c_vals = tl.load(c_ptr + current_offsets, mask=mask)
-    d_vals = tl.load(d_ptr + current_offsets, mask=mask)
-    
-    a_vals = b_vals * c_vals * d_vals
-    tl.store(a_ptr + current_offsets, a_vals, mask=mask)
-    
-    # Second pass: compute b[i] = a[i] * a[i+1] * d[i]
-    # Load a[i] values
-    a_i_vals = tl.load(a_ptr + current_offsets, mask=mask)
-    
-    # Load a[i+1] values
-    next_offsets = current_offsets + 1
-    next_mask = next_offsets < (n_elements + 1)  # Allow reading one past for a[i+1]
-    a_i_plus_1_vals = tl.load(a_ptr + next_offsets, mask=next_mask)
-    
-    # Compute b[i] = a[i] * a[i+1] * d[i]
-    b_new_vals = a_i_vals * a_i_plus_1_vals * d_vals
-    tl.store(b_ptr + current_offsets, b_new_vals, mask=mask)
+    # Process in blocks
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        # Load current values
+        b_vals = tl.load(b_ptr + current_offsets, mask=mask)
+        c_vals = tl.load(c_ptr + current_offsets, mask=mask)
+        d_vals = tl.load(d_ptr + current_offsets, mask=mask)
+        
+        # First statement: a[i] = b[i] * c[i] * d[i]
+        a_vals = b_vals * c_vals * d_vals
+        tl.store(a_ptr + current_offsets, a_vals, mask=mask)
+        
+        # For second statement, we need a[i+1] values
+        # Load a[i+1] with special handling for the last element
+        next_offsets = current_offsets + 1
+        next_mask = next_offsets < n_elements
+        
+        # Load a[i+1] values where valid
+        a_next_vals = tl.load(a_ptr + next_offsets, mask=next_mask)
+        
+        # Second statement: b[i] = a[i] * a[i+1] * d[i]
+        # Only compute where we have valid a[i+1] values
+        compute_mask = mask & next_mask
+        b_new_vals = tl.where(compute_mask, a_vals * a_next_vals * d_vals, b_vals)
+        tl.store(b_ptr + current_offsets, b_new_vals, mask=mask)
 
 def s241_triton(a, b, c, d):
-    n_elements = a.shape[0] - 1  # Loop runs from 0 to LEN_1D-2
+    n_elements = a.shape[0] - 1  # Process LEN_1D-1 elements
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s241_kernel[grid](
+    s241_kernel[(1,)](
         a, b, c, d,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE

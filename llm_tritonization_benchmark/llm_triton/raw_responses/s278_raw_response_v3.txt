@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s278
-# Generated: 2025-12-01 14:01:01
+# Generated: 2025-12-01 15:11:40
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1200
-# Output Tokens: 644
+# Input Tokens: 1342
+# Output Tokens: 598
 
 ================================================================================
 PROMPT:
@@ -116,6 +116,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -127,14 +139,13 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s278_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Get block start position
+def s278_kernel(
+    a_ptr, b_ptr, c_ptr, d_ptr, e_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
     block_start = tl.program_id(0) * BLOCK_SIZE
-    
-    # Define offsets once at kernel start
     offsets = tl.arange(0, BLOCK_SIZE)
-    
-    # Calculate actual indices for this block
     idx = block_start + offsets
     mask = idx < n_elements
     
@@ -145,35 +156,32 @@ def s278_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.co
     d = tl.load(d_ptr + idx, mask=mask)
     e = tl.load(e_ptr + idx, mask=mask)
     
-    # Implement the if-else logic using tl.where
+    # Condition: a[i] > 0
     condition = a > 0.0
     
-    # When a[i] <= 0: b[i] = -b[i] + d[i] * e[i], c[i] unchanged
-    # When a[i] > 0: c[i] = -c[i] + d[i] * e[i], b[i] unchanged
-    new_b = tl.where(condition, b, -b + d * e)
-    new_c = tl.where(condition, -c + d * e, c)
+    # For elements where a[i] <= 0: b[i] = -b[i] + d[i] * e[i]
+    b_new = tl.where(condition, b, -b + d * e)
+    
+    # For elements where a[i] > 0: c[i] = -c[i] + d[i] * e[i]
+    c_new = tl.where(condition, -c + d * e, c)
     
     # Final computation: a[i] = b[i] + c[i] * d[i]
-    new_a = new_b + new_c * d
+    a_new = b_new + c_new * d
     
     # Store results
-    tl.store(a_ptr + idx, new_a, mask=mask)
-    tl.store(b_ptr + idx, new_b, mask=mask)
-    tl.store(c_ptr + idx, new_c, mask=mask)
+    tl.store(a_ptr + idx, a_new, mask=mask)
+    tl.store(b_ptr + idx, b_new, mask=mask)
+    tl.store(c_ptr + idx, c_new, mask=mask)
 
 def s278_triton(a, b, c, d, e):
     n_elements = a.numel()
-    
-    # Choose block size
     BLOCK_SIZE = 256
     
-    # Calculate grid size
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Launch kernel
     s278_kernel[grid](
         a, b, c, d, e,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=BLOCK_SIZE,
     )
 ```

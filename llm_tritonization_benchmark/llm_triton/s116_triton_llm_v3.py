@@ -9,43 +9,30 @@ def s116_kernel(
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_start = tl.program_id(0) * BLOCK_SIZE * 5
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    for block_offset in range(0, BLOCK_SIZE, 1):
-        base_idx = block_start + block_offset * 5
-        
-        if base_idx + 5 < n_elements:
-            # Load values from read-only copy
-            a_val_0 = tl.load(a_copy_ptr + base_idx)
-            a_val_1 = tl.load(a_copy_ptr + base_idx + 1)
-            a_val_2 = tl.load(a_copy_ptr + base_idx + 2)
-            a_val_3 = tl.load(a_copy_ptr + base_idx + 3)
-            a_val_4 = tl.load(a_copy_ptr + base_idx + 4)
-            a_val_5 = tl.load(a_copy_ptr + base_idx + 5)
+    for block_start in range(0, n_elements - 5, BLOCK_SIZE * 5):
+        # Process 5 elements at a time
+        for j in range(5):
+            i_offset = block_start + j + offsets * 5
+            mask = i_offset < n_elements - 5
             
-            # Compute results
-            result_0 = a_val_1 * a_val_0
-            result_1 = a_val_2 * a_val_1
-            result_2 = a_val_3 * a_val_2
-            result_3 = a_val_4 * a_val_3
-            result_4 = a_val_5 * a_val_4
+            # Read from copy for both operands
+            a_i = tl.load(a_copy_ptr + i_offset, mask=mask)
+            a_i_plus_1 = tl.load(a_copy_ptr + i_offset + 1, mask=mask)
             
-            # Store results to original array
-            tl.store(a_ptr + base_idx, result_0)
-            tl.store(a_ptr + base_idx + 1, result_1)
-            tl.store(a_ptr + base_idx + 2, result_2)
-            tl.store(a_ptr + base_idx + 3, result_3)
-            tl.store(a_ptr + base_idx + 4, result_4)
+            # Compute and store to original
+            result = a_i_plus_1 * a_i
+            tl.store(a_ptr + i_offset, result, mask=mask)
 
 def s116_triton(a):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
     
-    # Create read-only copy to handle WAR dependencies
+    # Create read-only copy for WAR dependency handling
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements - 5, BLOCK_SIZE * 5),)
+    grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE * 5),)
     
     s116_kernel[grid](
         a,
@@ -53,5 +40,3 @@ def s116_triton(a):
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a

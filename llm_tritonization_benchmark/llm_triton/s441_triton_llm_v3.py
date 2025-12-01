@@ -6,33 +6,41 @@ import triton.language as tl
 def s441_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = (block_start + offsets) < n_elements
     
-    a = tl.load(a_ptr + offsets, mask=mask)
-    b = tl.load(b_ptr + offsets, mask=mask)
-    c = tl.load(c_ptr + offsets, mask=mask)
-    d = tl.load(d_ptr + offsets, mask=mask)
+    # Load data
+    a_vals = tl.load(a_ptr + block_start + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + block_start + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + block_start + offsets, mask=mask)
+    d_vals = tl.load(d_ptr + block_start + offsets, mask=mask)
     
-    # d[i] < 0: a[i] += b[i] * c[i]
-    cond1 = d < 0.0
-    result1 = a + b * c
+    # Conditional computation
+    neg_mask = d_vals < 0.0
+    zero_mask = d_vals == 0.0
+    pos_mask = ~(neg_mask | zero_mask)
     
-    # d[i] == 0: a[i] += b[i] * b[i]
-    cond2 = d == 0.0
-    result2 = a + b * b
+    # Compute updates for each condition
+    update_neg = b_vals * c_vals
+    update_zero = b_vals * b_vals
+    update_pos = c_vals * c_vals
     
-    # d[i] > 0: a[i] += c[i] * c[i]
-    result3 = a + c * c
+    # Apply conditional updates
+    update = tl.where(neg_mask, update_neg, 
+                     tl.where(zero_mask, update_zero, update_pos))
     
-    # Apply conditions
-    result = tl.where(cond1, result1, tl.where(cond2, result2, result3))
+    # Update a
+    result = a_vals + update
     
-    tl.store(a_ptr + offsets, result, mask=mask)
+    # Store result
+    tl.store(a_ptr + block_start + offsets, result, mask=mask)
 
 def s441_triton(a, b, c, d):
     n_elements = a.numel()
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s441_kernel[grid](a, b, c, d, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    s441_kernel[grid](
+        a, b, c, d, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

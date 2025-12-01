@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s451
-# Generated: 2025-12-01 14:07:28
+# Generated: 2025-12-01 15:18:10
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1031
-# Output Tokens: 290
+# Input Tokens: 1173
+# Output Tokens: 320
 
 ================================================================================
 PROMPT:
@@ -100,6 +100,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -113,16 +125,20 @@ import torch
 @triton.jit
 def s451_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
+    
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
+    mask = idx < n_elements
     
-    b = tl.load(b_ptr + offsets, mask=mask)
-    c = tl.load(c_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
     
-    result = tl.sin(b) + tl.cos(c)
+    sin_b = tl.sin(b_vals)
+    cos_c = tl.cos(c_vals)
+    result = sin_b + cos_c
     
-    tl.store(a_ptr + offsets, result, mask=mask)
+    tl.store(a_ptr + idx, result, mask=mask)
 
 def s451_triton(a, b, c):
     n_elements = a.numel()

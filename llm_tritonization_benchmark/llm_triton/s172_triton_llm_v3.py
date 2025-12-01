@@ -1,50 +1,49 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s172_kernel(a_ptr, b_ptr, n1, n3, len_1d, BLOCK_SIZE: tl.constexpr):
-    # Calculate number of iterations in the original loop
-    start_idx = n1 - 1
-    if start_idx >= len_1d:
-        return
+def s172_kernel(a_ptr, b_ptr, n1, n3, LEN_1D, BLOCK_SIZE: tl.constexpr):
+    # Calculate total number of iterations in the strided loop
+    total_iterations = (LEN_1D - (n1 - 1) + n3 - 1) // n3
     
-    num_iterations = (len_1d - start_idx + n3 - 1) // n3
-    
-    # Get program ID
+    # Get program ID and calculate block start
     pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     
-    # Calculate which iteration this block handles
-    if pid >= num_iterations:
-        return
+    # Create offsets for this block (in iteration space)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    iter_offsets = block_start + offsets
     
-    # Calculate the actual index in the original loop
-    i = start_idx + pid * n3
+    # Mask for valid iterations
+    mask = iter_offsets < total_iterations
     
-    # Load and compute
-    if i < len_1d:
-        a_val = tl.load(a_ptr + i)
-        b_val = tl.load(b_ptr + i)
-        result = a_val + b_val
-        tl.store(a_ptr + i, result)
+    # Convert iteration indices to actual array indices
+    array_indices = (n1 - 1) + iter_offsets * n3
+    
+    # Load values from arrays a and b
+    a_vals = tl.load(a_ptr + array_indices, mask=mask)
+    b_vals = tl.load(b_ptr + array_indices, mask=mask)
+    
+    # Perform the computation: a[i] += b[i]
+    result = a_vals + b_vals
+    
+    # Store back to array a
+    tl.store(a_ptr + array_indices, result, mask=mask)
 
 def s172_triton(a, b, n1, n3):
-    len_1d = a.shape[0]
+    LEN_1D = a.shape[0]
     
-    # Calculate number of iterations
-    start_idx = n1 - 1
-    if start_idx >= len_1d:
+    # Calculate total number of iterations
+    total_iterations = (LEN_1D - (n1 - 1) + n3 - 1) // n3
+    
+    if total_iterations <= 0:
         return
     
-    num_iterations = (len_1d - start_idx + n3 - 1) // n3
-    
-    if num_iterations <= 0:
-        return
-    
-    BLOCK_SIZE = 1
-    grid = (num_iterations,)
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(total_iterations, BLOCK_SIZE),)
     
     s172_kernel[grid](
-        a, b, n1, n3, len_1d,
+        a, b, n1, n3, LEN_1D,
         BLOCK_SIZE=BLOCK_SIZE
     )

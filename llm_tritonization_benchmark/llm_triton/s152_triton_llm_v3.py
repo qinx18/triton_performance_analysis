@@ -3,39 +3,52 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s152s_kernel(a_ptr, b_ptr, c_ptr, idx, BLOCK_SIZE: tl.constexpr):
-    # Simple subroutine simulation - copy c to a at position idx
+def s152s_kernel(a_ptr, b_ptr, c_ptr, idx, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
-    mask = offsets < 1
+    mask = offsets < n_elements
     
-    c_val = tl.load(c_ptr + idx, mask=mask)
-    tl.store(a_ptr + idx, c_val, mask=mask)
+    # Load values from arrays
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    b_vals = tl.load(b_ptr + offsets, mask=mask, other=0.0)
+    c_vals = tl.load(c_ptr + offsets, mask=mask, other=0.0)
+    
+    # Get b[idx] and c[idx] values
+    b_idx_val = tl.load(b_ptr + idx)
+    c_idx_val = tl.load(c_ptr + idx)
+    
+    # Compute: a[j] = (a[j] + b[idx]) * c[idx] for all j
+    result = (a_vals + b_idx_val) * c_idx_val
+    
+    # Store back to a
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 @triton.jit
 def s152_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    current_offsets = block_start + offsets
+    mask = current_offsets < n_elements
     
-    for i in range(block_start, min(block_start + BLOCK_SIZE, n_elements)):
-        if i < n_elements:
-            # b[i] = d[i] * e[i]
-            d_val = tl.load(d_ptr + i)
-            e_val = tl.load(e_ptr + i)
-            b_val = d_val * e_val
-            tl.store(b_ptr + i, b_val)
-            
-            # s152s(a, b, c, i) - simulate subroutine call
-            c_val = tl.load(c_ptr + i)
-            tl.store(a_ptr + i, c_val)
+    # b[i] = d[i] * e[i]
+    d_vals = tl.load(d_ptr + current_offsets, mask=mask, other=0.0)
+    e_vals = tl.load(e_ptr + current_offsets, mask=mask, other=0.0)
+    b_vals = d_vals * e_vals
+    tl.store(b_ptr + current_offsets, b_vals, mask=mask)
 
 def s152_triton(a, b, c, d, e):
     n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
+    # First pass: compute b[i] = d[i] * e[i] for all i
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     s152_kernel[grid](
-        a, b, c, d, e,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, c, d, e, n_elements, BLOCK_SIZE
     )
+    
+    # Second pass: call s152s for each i
+    for i in range(n_elements):
+        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+        s152s_kernel[grid](
+            a, b, c, i, n_elements, BLOCK_SIZE
+        )

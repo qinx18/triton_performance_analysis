@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for vpv
-# Generated: 2025-12-01 14:08:57
+# Generated: 2025-12-01 15:19:43
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1007
-# Output Tokens: 278
+# Input Tokens: 1149
+# Output Tokens: 281
 
 ================================================================================
 PROMPT:
@@ -100,6 +100,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -112,7 +124,7 @@ import torch
 
 @triton.jit
 def vpv_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
@@ -127,7 +139,7 @@ def vpv_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 
 def vpv_triton(a, b):
     n_elements = a.numel()
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     vpv_kernel[grid](a, b, n_elements, BLOCK_SIZE)

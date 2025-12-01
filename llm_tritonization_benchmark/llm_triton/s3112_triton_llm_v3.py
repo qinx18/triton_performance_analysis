@@ -5,44 +5,36 @@ import torch
 @triton.jit
 def s3112_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     # This is a cumulative sum operation that must be done sequentially
-    # We'll process the entire array in a single thread block
+    # We'll process one block at a time to maintain the running sum
     
-    pid = tl.program_id(0)
-    if pid > 0:
-        return
-    
-    # Process elements sequentially to maintain cumulative sum
-    sum_val = 0.0
-    
-    # Define offsets once at the start
     offsets = tl.arange(0, BLOCK_SIZE)
+    running_sum = 0.0
     
-    # Process in blocks
+    # Process all elements sequentially in blocks
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
         
-        # Load block of a values
+        # Load current block of a
         a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         
-        # Process each element in the block sequentially
+        # Compute cumulative sum for this block
+        b_vals = tl.zeros_like(a_vals)
+        
+        # Sequential accumulation within the block
         for i in range(BLOCK_SIZE):
             if block_start + i < n_elements:
-                sum_val += a_vals[i]
-                # Store the running sum
-                tl.store(b_ptr + block_start + i, sum_val)
+                current_a = tl.load(a_ptr + block_start + i)
+                running_sum += current_a
+                tl.store(b_ptr + block_start + i, running_sum)
 
 def s3112_triton(a, b):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
     BLOCK_SIZE = 1024
     
-    # Launch with single program to ensure sequential processing
+    # Launch kernel with single thread since this is inherently sequential
     grid = (1,)
+    s3112_kernel[grid](a, b, n_elements, BLOCK_SIZE)
     
-    s3112_kernel[grid](
-        a, b,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return b[-1].item()  # Return final sum value
+    # Return the final sum (last element of b)
+    return b[-1].item()

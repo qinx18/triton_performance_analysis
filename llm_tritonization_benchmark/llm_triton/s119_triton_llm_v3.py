@@ -1,41 +1,35 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s119_kernel(aa_ptr, bb_ptr, i_val, LEN_2D, BLOCK_SIZE: tl.constexpr):
+def s119_kernel(aa_ptr, bb_ptr, LEN_2D: tl.constexpr, i_val: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
+    j_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     
-    offsets = tl.arange(0, BLOCK_SIZE)
-    j_offsets = pid * BLOCK_SIZE + offsets + 1
-    j_mask = j_offsets < LEN_2D
+    mask = (j_offsets >= 1) & (j_offsets < LEN_2D)
     
-    # Current position: aa[i_val][j]
-    aa_current_idx = i_val * LEN_2D + j_offsets
+    # Load bb[i_val][j]
+    bb_offsets = i_val * LEN_2D + j_offsets
+    bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask)
     
-    # Previous position: aa[i_val-1][j-1]
-    aa_prev_idx = (i_val - 1) * LEN_2D + (j_offsets - 1)
+    # Load aa[i_val-1][j-1]
+    aa_read_offsets = (i_val - 1) * LEN_2D + (j_offsets - 1)
+    aa_vals = tl.load(aa_ptr + aa_read_offsets, mask=mask)
     
-    # bb position: bb[i_val][j]
-    bb_idx = i_val * LEN_2D + j_offsets
+    # Compute aa[i_val][j] = aa[i_val-1][j-1] + bb[i_val][j]
+    result = aa_vals + bb_vals
     
-    # Load data
-    aa_prev = tl.load(aa_ptr + aa_prev_idx, mask=j_mask, other=0.0)
-    bb_val = tl.load(bb_ptr + bb_idx, mask=j_mask, other=0.0)
-    
-    # Compute: aa[i][j] = aa[i-1][j-1] + bb[i][j]
-    result = aa_prev + bb_val
-    
-    # Store result
-    tl.store(aa_ptr + aa_current_idx, result, mask=j_mask)
+    # Store to aa[i_val][j]
+    aa_write_offsets = i_val * LEN_2D + j_offsets
+    tl.store(aa_ptr + aa_write_offsets, result, mask=mask)
 
 def s119_triton(aa, bb):
     LEN_2D = aa.shape[0]
     BLOCK_SIZE = 256
     
-    # Sequential over i, parallel over j
     for i_val in range(1, LEN_2D):
-        grid = (triton.cdiv(LEN_2D - 1, BLOCK_SIZE),)
+        grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
         s119_kernel[grid](
-            aa, bb, i_val, LEN_2D, BLOCK_SIZE
+            aa, bb, LEN_2D, i_val, BLOCK_SIZE
         )

@@ -3,36 +3,38 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s115_kernel(a_ptr, aa_ptr, j_val, LEN_2D, BLOCK_SIZE: tl.constexpr):
+def s115_kernel(a_ptr, aa_ptr, LEN_2D: tl.constexpr, j_val, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
+    
+    # Create offset vector once at the start
     base_offsets = tl.arange(0, BLOCK_SIZE)
     i_offsets = pid * BLOCK_SIZE + base_offsets
     
-    # Only process i values where i > j_val
-    valid_mask = (i_offsets < LEN_2D) & (i_offsets > j_val)
+    # Mask for valid i indices that are greater than j_val
+    i_mask = (i_offsets < LEN_2D) & (i_offsets > j_val)
     
     # Load a[i] values
-    a_i_vals = tl.load(a_ptr + i_offsets, mask=valid_mask, other=0.0)
+    a_i = tl.load(a_ptr + i_offsets, mask=i_mask, other=0.0)
     
-    # Load a[j_val] (scalar broadcast)
-    a_j_val = tl.load(a_ptr + j_val)
+    # Load a[j] (scalar broadcast)
+    a_j = tl.load(a_ptr + j_val)
     
-    # Load aa[j_val][i] values
-    aa_offsets = j_val * LEN_2D + i_offsets
-    aa_vals = tl.load(aa_ptr + aa_offsets, mask=valid_mask, other=0.0)
+    # Load aa[j][i] values
+    aa_ji_offsets = j_val * LEN_2D + i_offsets
+    aa_ji = tl.load(aa_ptr + aa_ji_offsets, mask=i_mask, other=0.0)
     
-    # Compute: a[i] -= aa[j_val][i] * a[j_val]
-    result = a_i_vals - aa_vals * a_j_val
+    # Compute a[i] -= aa[j][i] * a[j]
+    result = a_i - aa_ji * a_j
     
     # Store back to a[i]
-    tl.store(a_ptr + i_offsets, result, mask=valid_mask)
+    tl.store(a_ptr + i_offsets, result, mask=i_mask)
 
 def s115_triton(a, aa):
-    LEN_2D = aa.shape[0]
+    LEN_2D = aa.size(0)
     BLOCK_SIZE = 256
     
     for j in range(LEN_2D):
         grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
         s115_kernel[grid](
-            a, aa, j, LEN_2D, BLOCK_SIZE
+            a, aa, LEN_2D, j, BLOCK_SIZE
         )

@@ -51,7 +51,7 @@ def test_correctness():
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             d = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            ip = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            ip = torch.randint(0, N + 10, (N + 10,), device='cuda', dtype=torch.long)
             iterations = 1  # Scalar parameter (integer)
             n1 = 10  # Loop start offset
 

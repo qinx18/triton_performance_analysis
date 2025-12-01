@@ -4,31 +4,42 @@ import triton.language as tl
 
 @triton.jit
 def s443_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    block_start = tl.program_id(0) * BLOCK_SIZE
+    block_id = tl.program_id(0)
+    block_start = block_id * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    mask = (block_start + offsets) < n_elements
+    indices = block_start + offsets
     
-    a_ptrs = a_ptr + block_start + offsets
-    b_ptrs = b_ptr + block_start + offsets
-    c_ptrs = c_ptr + block_start + offsets
-    d_ptrs = d_ptr + block_start + offsets
+    mask = indices < n_elements
     
-    a_vals = tl.load(a_ptrs, mask=mask)
-    b_vals = tl.load(b_ptrs, mask=mask)
-    c_vals = tl.load(c_ptrs, mask=mask)
-    d_vals = tl.load(d_ptrs, mask=mask)
+    # Load data
+    d_vals = tl.load(d_ptr + indices, mask=mask, other=1.0)
+    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
+    c_vals = tl.load(c_ptr + indices, mask=mask, other=0.0)
+    a_vals = tl.load(a_ptr + indices, mask=mask, other=0.0)
     
-    # if (d[i] <= 0.0) then a[i] += b[i] * c[i] else a[i] += b[i] * b[i]
+    # Compute condition
     condition = d_vals <= 0.0
-    result = tl.where(condition, a_vals + b_vals * c_vals, a_vals + b_vals * b_vals)
     
-    tl.store(a_ptrs, result, mask=mask)
+    # Compute both branches
+    branch1 = b_vals * c_vals  # L20: b[i] * c[i]
+    branch2 = b_vals * b_vals  # L30: b[i] * b[i]
+    
+    # Select based on condition
+    result = tl.where(condition, branch1, branch2)
+    
+    # Update a[i] += result
+    a_vals = a_vals + result
+    
+    # Store result
+    tl.store(a_ptr + indices, a_vals, mask=mask)
 
 def s443_triton(a, b, c, d):
     n_elements = a.numel()
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s443_kernel[grid](a, b, c, d, n_elements, BLOCK_SIZE)
-    
-    return a
+    s443_kernel[grid](
+        a, b, c, d,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

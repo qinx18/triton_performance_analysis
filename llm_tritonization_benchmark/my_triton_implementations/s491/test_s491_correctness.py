@@ -51,7 +51,7 @@ def test_correctness():
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             c = torch.randn(N, device='cuda', dtype=torch.float32)
             d = torch.randn(N, device='cuda', dtype=torch.float32)
-            ip = torch.randn(N, device='cuda', dtype=torch.float32)
+            ip = torch.randint(0, N, (N,), device='cuda', dtype=torch.long)
             iterations = 1  # Scalar parameter (integer)
 
             # Create copies for PyTorch baseline

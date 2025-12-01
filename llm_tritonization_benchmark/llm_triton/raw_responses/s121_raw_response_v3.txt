@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s121
-# Generated: 2025-12-01 13:51:22
+# Generated: 2025-12-01 15:01:46
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1054
-# Output Tokens: 509
+# Input Tokens: 1196
+# Output Tokens: 435
 
 ================================================================================
 PROMPT:
@@ -103,6 +103,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -115,38 +127,33 @@ import torch
 
 @triton.jit
 def s121_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Read-only copy to avoid WAR dependency
-    a_temp = tl.zeros([n_elements], dtype=tl.float32)
-    
-    # Load entire array a into temporary storage
     offsets = tl.arange(0, BLOCK_SIZE)
+    
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
-        a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        tl.store(a_temp + current_offsets, a_vals, mask=mask)
-    
-    # Perform computation: a[i] = a[i+1] + b[i]
-    for block_start in range(0, n_elements - 1, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < (n_elements - 1)
         
-        # Load a[i+1] and b[i]
-        a_next = tl.load(a_temp + current_offsets + 1, mask=mask, other=0.0)
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
+        # Load a[j] where j = i + 1, so we need a[i+1]
+        a_j_offsets = current_offsets + 1
+        a_j_mask = a_j_offsets < (n_elements + 1)  # a has one more element than we're processing
+        a_j_vals = tl.load(a_ptr + a_j_offsets, mask=a_j_mask)
         
-        # Compute and store result
-        result = a_next + b_vals
+        # Load b[i]
+        b_vals = tl.load(b_ptr + current_offsets, mask=mask)
+        
+        # Compute a[i] = a[j] + b[i] = a[i+1] + b[i]
+        result = a_j_vals + b_vals
+        
+        # Store result to a[i]
         tl.store(a_ptr + current_offsets, result, mask=mask)
 
 def s121_triton(a, b):
-    n_elements = a.shape[0]
+    n_elements = len(a) - 1  # Process LEN_1D-1 elements
     BLOCK_SIZE = 256
     
-    # Launch kernel with single block
+    # Launch kernel
     s121_kernel[(1,)](
-        a, b, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, n_elements, BLOCK_SIZE
     )
     
     return a

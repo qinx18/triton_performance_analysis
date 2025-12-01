@@ -10,25 +10,23 @@ def s1113_kernel(
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE
-    
+    block_start = tl.program_id(axis=0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
+    idx = block_start + offsets
+    mask = idx < n_elements
     
-    # Load a[LEN_1D/2] once per block (scalar broadcast)
+    # Load a[LEN_1D/2] (scalar broadcast)
     mid_idx = n_elements // 2
     a_mid = tl.load(a_copy_ptr + mid_idx)
     
-    # Load b[i] for this block
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    # Load b[i] values
+    b_vals = tl.load(b_ptr + idx, mask=mask)
     
     # Compute a[i] = a[LEN_1D/2] + b[i]
     result = a_mid + b_vals
     
-    # Store to original array
-    tl.store(a_ptr + indices, result, mask=mask)
+    # Store to original a array
+    tl.store(a_ptr + idx, result, mask=mask)
 
 def s1113_triton(a, b):
     n_elements = a.shape[0]
@@ -44,5 +42,5 @@ def s1113_triton(a, b):
         a_copy,
         b,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE,
     )

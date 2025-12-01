@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s423
-# Generated: 2025-12-01 14:06:41
+# Generated: 2025-12-01 15:17:24
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1099
-# Output Tokens: 469
+# Input Tokens: 1241
+# Output Tokens: 339
 
 ================================================================================
 PROMPT:
@@ -108,44 +108,45 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s423_kernel(flat_2d_array_ptr, xx_ptr, a_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
     
-    # Read indices for xx and a
-    read_idx = block_start + offsets
-    read_mask = read_idx < n_elements
+    mask = indices < n_elements
     
-    # Write indices for flat_2d_array (offset by +1)
-    write_idx = read_idx + 1
-    
-    # Load data
-    xx_vals = tl.load(xx_ptr + read_idx, mask=read_mask, other=0.0)
-    a_vals = tl.load(a_ptr + read_idx, mask=read_mask, other=0.0)
-    
-    # Compute
+    xx_vals = tl.load(xx_ptr + indices, mask=mask)
+    a_vals = tl.load(a_ptr + indices, mask=mask)
     result = xx_vals + a_vals
     
-    # Store result
-    tl.store(flat_2d_array_ptr + write_idx, result, mask=read_mask)
+    tl.store(flat_2d_array_ptr + (indices + 1), result, mask=mask)
 
 def s423_triton(flat_2d_array, a):
-    LEN_1D = a.shape[0]
-    n_elements = LEN_1D - 1
-    
-    # Set up xx pointer (flat_2d_array + 64)
+    n_elements = len(a) - 1
     vl = 64
     xx = flat_2d_array[vl:]
     
@@ -153,9 +154,6 @@ def s423_triton(flat_2d_array, a):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s423_kernel[grid](
-        flat_2d_array, xx, a,
-        n_elements, BLOCK_SIZE
+        flat_2d_array, xx, a, n_elements, BLOCK_SIZE
     )
-    
-    return flat_2d_array
 ```

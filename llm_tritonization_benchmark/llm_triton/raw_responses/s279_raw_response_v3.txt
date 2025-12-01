@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s279
-# Generated: 2025-12-01 14:01:13
+# Generated: 2025-12-01 15:11:51
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1275
-# Output Tokens: 775
+# Input Tokens: 1417
+# Output Tokens: 693
 
 ================================================================================
 PROMPT:
@@ -124,57 +124,66 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s279_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    mask = (block_start + offsets) < n_elements
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    # Load data
-    a = tl.load(a_ptr + block_start + offsets, mask=mask)
-    b = tl.load(b_ptr + block_start + offsets, mask=mask)
-    c = tl.load(c_ptr + block_start + offsets, mask=mask)
-    d = tl.load(d_ptr + block_start + offsets, mask=mask)
-    e = tl.load(e_ptr + block_start + offsets, mask=mask)
+    # Load all arrays
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    d_vals = tl.load(d_ptr + offsets, mask=mask)
+    e_vals = tl.load(e_ptr + offsets, mask=mask)
     
-    # Control flow logic
-    cond1 = a > 0.0  # if (a[i] > 0.) goto L20
+    # Condition: a[i] > 0
+    cond1 = a_vals > 0.0
     
-    # Path when a[i] <= 0 (not goto L20)
-    b_new = -b + d * d
-    cond2 = b_new <= a  # if (b[i] <= a[i]) goto L30
+    # Path for a[i] <= 0
+    b_new = -b_vals + d_vals * d_vals
+    cond2 = b_new <= a_vals
+    c_update = d_vals * e_vals
+    c_path1 = tl.where(cond2, c_vals, c_vals + c_update)
     
-    # Update c based on conditions
-    # When a[i] > 0: c[i] = -c[i] + e[i] * e[i] (L20)
-    c_l20 = -c + e * e
+    # Path for a[i] > 0 (L20)
+    c_path2 = -c_vals + e_vals * e_vals
     
-    # When a[i] <= 0 and b[i] > a[i]: c[i] += d[i] * e[i]
-    c_middle = c + d * e
-    
-    # Select appropriate c value
-    c_final = tl.where(cond1, c_l20, tl.where(cond2, c, c_middle))
+    # Select final c value based on first condition
+    c_final = tl.where(cond1, c_path2, c_path1)
     
     # Update b only when a[i] <= 0
-    b_final = tl.where(cond1, b, b_new)
+    b_final = tl.where(cond1, b_vals, b_new)
     
-    # L30: a[i] = b[i] + c[i] * d[i]
-    a_final = b_final + c_final * d
+    # Final a update: a[i] = b[i] + c[i] * d[i]
+    a_final = b_final + c_final * d_vals
     
     # Store results
-    tl.store(a_ptr + block_start + offsets, a_final, mask=mask)
-    tl.store(b_ptr + block_start + offsets, b_final, mask=mask)
-    tl.store(c_ptr + block_start + offsets, c_final, mask=mask)
+    tl.store(a_ptr + offsets, a_final, mask=mask)
+    tl.store(b_ptr + offsets, b_final, mask=mask)
+    tl.store(c_ptr + offsets, c_final, mask=mask)
 
 def s279_triton(a, b, c, d, e):
     n_elements = a.numel()

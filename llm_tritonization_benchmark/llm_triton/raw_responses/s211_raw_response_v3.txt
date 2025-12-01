@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s211
-# Generated: 2025-12-01 13:55:46
+# Generated: 2025-12-01 15:06:25
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: ['b']
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1603
-# Output Tokens: 583
+# Input Tokens: 1745
+# Output Tokens: 538
 
 ================================================================================
 PROMPT:
@@ -156,6 +156,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -169,31 +181,31 @@ import torch
 @triton.jit
 def s211_kernel(
     a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr,
-    n_elements: tl.constexpr,
+    n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    idx = block_start + offsets + 1  # i ranges from 1 to LEN_1D-2
     
-    mask = idx < n_elements - 1
-    
-    # Load values for a[i] = b[i-1] + c[i] * d[i]
-    b_prev = tl.load(b_copy_ptr + idx - 1, mask=mask)
-    c_vals = tl.load(c_ptr + idx, mask=mask)
-    d_vals = tl.load(d_ptr + idx, mask=mask)
-    
-    # Load values for b[i] = b[i+1] - e[i] * d[i]
-    b_next = tl.load(b_copy_ptr + idx + 1, mask=mask)
-    e_vals = tl.load(e_ptr + idx, mask=mask)
-    
-    # Compute results
-    a_result = b_prev + c_vals * d_vals
-    b_result = b_next - e_vals * d_vals
-    
-    # Store results
-    tl.store(a_ptr + idx, a_result, mask=mask)
-    tl.store(b_ptr + idx, b_result, mask=mask)
+    for block_start in range(1, n_elements - 1, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < (n_elements - 1)
+        
+        # Load values for a[i] computation
+        b_prev = tl.load(b_copy_ptr + current_offsets - 1, mask=mask)
+        c_vals = tl.load(c_ptr + current_offsets, mask=mask)
+        d_vals = tl.load(d_ptr + current_offsets, mask=mask)
+        
+        # Load values for b[i] computation  
+        b_next = tl.load(b_copy_ptr + current_offsets + 1, mask=mask)
+        e_vals = tl.load(e_ptr + current_offsets, mask=mask)
+        
+        # Compute results
+        a_result = b_prev + c_vals * d_vals
+        b_result = b_next - e_vals * d_vals
+        
+        # Store results
+        tl.store(a_ptr + current_offsets, a_result, mask=mask)
+        tl.store(b_ptr + current_offsets, b_result, mask=mask)
 
 def s211_triton(a, b, c, d, e):
     n_elements = a.shape[0]
@@ -202,7 +214,7 @@ def s211_triton(a, b, c, d, e):
     b_copy = b.clone()
     
     BLOCK_SIZE = 256
-    grid = ((n_elements - 2 + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+    grid = (1,)
     
     s211_kernel[grid](
         a, b, b_copy, c, d, e,

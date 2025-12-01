@@ -164,8 +164,11 @@ def generate_correctness_test(func_name, func_spec):
     array_inits = []
     for arr, mode in sorted(arrays.items()):
         if mode in ['r', 'rw', 'w']:
+            # Index arrays (like ip) should be integer indices, not floats
+            if arr == 'ip':
+                array_inits.append(f"            {arr} = torch.randint(0, {size_expr}, ({size_expr},), device='cuda', dtype=torch.long)")
             # 2D arrays (like aa, bb, cc) get shape (N, N)
-            if has_2d and len(arr) == 2 and arr[0] == arr[1]:  # aa, bb, cc, etc.
+            elif has_2d and len(arr) == 2 and arr[0] == arr[1]:  # aa, bb, cc, etc.
                 array_inits.append(f"            {arr} = torch.randn({size_expr}, {size_expr}, device='cuda', dtype=torch.float32)")
             # flat_2d_array is a flattened 2D array with size N*N
             elif arr == 'flat_2d_array':

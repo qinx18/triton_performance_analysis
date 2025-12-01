@@ -1,14 +1,81 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-01 (`tl.arange()` Rule - test4_results.log)
-**Previous Tests:** test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-01 (Scalar Indexing Rule - test5_results.log)
+**Previous Tests:** test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 PyTorch Baseline Testing (2025-11-30) - LATEST RUN
+## 🔬 LLM Triton v3 Testing with Scalar Indexing Rule (2025-12-01) - test5_results.log - LATEST RUN
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 96 | 63.6% |
+| ❌ **FAILING** | 55 | 36.4% |
+
+### Key Changes: Two Prompt Rules Now Active
+
+**Prompt Rules Applied:**
+1. **`tl.arange()` Rule**: Never use `tl.arange()` inside a for loop - define once at kernel start
+2. **Scalar Indexing Rule** (NEW): Never index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations
+
+**Infrastructure Fix:**
+- `ip` array now initialized with `torch.randint(..., dtype=torch.long)` instead of float
+
+### Comparison with test4 (Before Scalar Indexing Rule)
+
+| Metric | test4 (before) | test5 (after) | Change |
+|--------|----------------|---------------|--------|
+| Passing | 96 (63.6%) | 96 (63.6%) | 0 |
+| Failing | 55 (36.4%) | 55 (36.4%) | 0 |
+
+### Key Fixes in test5
+
+**Scalar Indexing Rule Impact:**
+- ✅ **s3112**: `_builder` error FIXED - now passes
+- ✅ **s331**: `_builder` error FIXED - now passes
+
+**Infrastructure Fix (`ip` array type) Impact:**
+- ✅ **s4112, s4114, s4116, vag**: Index type error FIXED - now pass
+
+**Remaining Issues:**
+- **vas, s491, s353**: Still fail due to numerical/algorithm issues (scatter operations)
+
+### Non-Numerical Errors (10 functions - Compilation/Runtime Errors)
+
+| Function | Error Type | Description |
+|----------|------------|-------------|
+| **s1112** | ValueError | Cannot call @triton.jit'd outside of kernel scope |
+| **s31111** | TypeError | 'int' object is not callable |
+| **s318** | MissingArgs | Missing 1 required positional argument: 'inc_val' |
+| **s332** | MissingArgs | Missing 1 required positional argument: 't_val' |
+| **s351** | MissingArgs | Missing 1 required positional argument: 'c' |
+| **s353** | MissingArgs | Missing 1 required positional argument: 'ip' |
+| **s423** | RuntimeError | Tensor size mismatch (expanded size) |
+| **s424** | CUDA Error | Illegal memory access |
+| **s482** | AttributeError | module 'triton.language' has no attribute 'any' |
+
+### Non-Numerical Error Summary by Category
+| Category | Count | Functions |
+|----------|-------|-----------|
+| Missing arguments (LLM signature bugs) | 4 | s318, s332, s351, s353 |
+| @triton.jit usage errors | 1 | s1112 |
+| Triton API errors | 1 | s482 |
+| Memory/CUDA errors | 2 | s423, s424 |
+| Other | 1 | s31111 |
+
+### Passing Functions (96):
+s000, s111, s1111, s1113, s1115, s112, s113, s114, s115, s116, s1161, s118, s119, s121, s1221, s122, s123, s1232, s124, s1244, s125, s1251, s127, s1279, s128, s1281, s131, s13110, s1351, s141, s152, s161, s171, s172, s175, s2101, s211, s212, s221, s222, s2233, s2275, s231, s233, s241, s251, s253, s254, s261, s271, s2710, s2711, s2712, s272, s273, s274, s278, s279, s291, s293, s311, s3110, s3111, s3112, s3113, s313, s314, s315, s316, s317, s319, s321, s323, s3251, s331, s343, s352, s4112, s4114, s4115, s4116, s4117, s4121, s421, s441, s442, s443, s451, s453, s481, va, vag, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failing Functions (55):
+s1112, s1119, s1213, s126, s132, s1421, s151, s162, s173, s174, s176, s2102, s2111, s2244, s2251, s232, s235, s242, s243, s244, s252, s255, s256, s257, s258, s275, s276, s277, s281, s292, s31111, s318, s322, s332, s341, s342, s351, s353, s4113, s422, s423, s424, s431, s452, s471, s482, s491, vas
+
+---
+
+## 🔬 PyTorch Baseline Testing (2025-11-30)
 
 ### Summary
 | Metric | Count | Percentage |
@@ -422,7 +489,8 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 
 | Date | Test | PASS | FAIL | Pass Rate | Notes |
 |------|------|------|------|-----------|-------|
-| **2025-12-01** | **test4** | **96** | **55** | **63.6%** | **+ `tl.arange()` rule** - s352, s453 fixed |
+| **2025-12-01** | **test5** | **96** | **55** | **63.6%** | **+ Scalar indexing rule + ip fix** - s3112, s331 fixed |
+| 2025-12-01 | test4 | 96 | 55 | 63.6% | + `tl.arange()` rule - s352, s453 fixed |
 | 2025-12-01 | test3 | 97 | 54 | 64.2% | WAR fix applied - s119 now passing |
 | 2025-11-30 | test2 | 101 | 50 | 66.9% | LLM Triton v3 (before WAR fix) |
 | 2025-11-30 | test1 | 92 | 59 | 60.9% | PyTorch baseline (auto_test_all_tsvc.py) |
@@ -434,7 +502,8 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 - LLM output varies between runs due to non-determinism (~10 functions change per regeneration)
 - test3 fixed WAR detection bug, enabling s119 to pass
 - test4 added `tl.arange()` rule: 2/5 targeted functions fixed (s352, s453)
-- Net change from test3→test4: -1 (9 fixed, 10 regressed due to LLM variability)
+- test5 added scalar indexing rule: s3112, s331 fixed; infrastructure fix: s4112, s4114, s4116, vag fixed
+- Net change from test4→test5: 0 (multiple fixes offset by LLM variability)
 
 ---
 

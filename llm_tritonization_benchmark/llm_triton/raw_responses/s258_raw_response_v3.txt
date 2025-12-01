@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s258
-# Generated: 2025-12-01 13:59:19
+# Generated: 2025-12-01 15:10:03
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1174
-# Output Tokens: 697
+# Input Tokens: 1316
+# Output Tokens: 728
 
 ================================================================================
 PROMPT:
@@ -115,6 +115,18 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets  # Reuse the pre-defined offsets
 ```
 
+**NEVER index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations instead:**
+```python
+# ❌ WRONG - scalar indexing not supported
+for i in range(BLOCK_SIZE):
+    val = tensor[i]  # ERROR: _builder argument required
+
+# ✅ CORRECT - use vectorized operations with masks
+mask = offsets < n_elements
+vals = tl.load(ptr + offsets, mask=mask)
+result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -126,18 +138,14 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s258_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, aa_ptr, n, BLOCK_SIZE: tl.constexpr):
-    # This kernel processes the entire array sequentially due to WAR dependencies on scalar s
-    pid = tl.program_id(0)
-    if pid > 0:
-        return
-    
+def s258_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, aa_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
+    
     s = 0.0
     
-    for block_start in range(0, n, BLOCK_SIZE):
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n
+        mask = current_offsets < n_elements
         
         # Load arrays
         a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
@@ -145,38 +153,43 @@ def s258_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, aa_ptr, n, BLOCK_SIZE: tl.con
         d_vals = tl.load(d_ptr + current_offsets, mask=mask, other=0.0)
         aa_vals = tl.load(aa_ptr + current_offsets, mask=mask, other=0.0)
         
-        # Process each element in the block sequentially
+        # Check condition for each element
+        condition_mask = a_vals > 0.0
+        
+        # For elements where condition is true, update s with d[i] * d[i]
+        # Since s is scalar, we need to handle this sequentially within each block
         for i in range(BLOCK_SIZE):
-            if block_start + i >= n:
+            if block_start + i >= n_elements:
                 break
-            
-            elem_mask = i < BLOCK_SIZE and (block_start + i) < n
-            if elem_mask:
-                # Extract scalar values
-                a_val = tl.load(a_ptr + block_start + i)
-                d_val = tl.load(d_ptr + block_start + i)
-                c_val = tl.load(c_ptr + block_start + i)
-                aa_val = tl.load(aa_ptr + block_start + i)
-                
-                # Update s if condition is met
-                if a_val > 0.0:
-                    s = d_val * d_val
-                
-                # Compute and store results
-                b_val = s * c_val + d_val
-                e_val = (s + 1.0) * aa_val
-                
-                tl.store(b_ptr + block_start + i, b_val)
-                tl.store(e_ptr + block_start + i, e_val)
+            if i < BLOCK_SIZE:
+                elem_mask = (block_start + i) < n_elements
+                if elem_mask:
+                    a_val = tl.load(a_ptr + block_start + i)
+                    d_val = tl.load(d_ptr + block_start + i)
+                    c_val = tl.load(c_ptr + block_start + i)
+                    aa_val = tl.load(aa_ptr + block_start + i)
+                    
+                    if a_val > 0.0:
+                        s = d_val * d_val
+                    
+                    # Compute b[i] and e[i]
+                    b_val = s * c_val + d_val
+                    e_val = (s + 1.0) * aa_val
+                    
+                    tl.store(b_ptr + block_start + i, b_val)
+                    tl.store(e_ptr + block_start + i, e_val)
 
 def s258_triton(a, b, c, d, e, aa):
-    n = a.shape[0]
+    n_elements = a.shape[0]
+    
     BLOCK_SIZE = 256
     
-    grid = (1,)  # Single thread block due to sequential dependencies
-    
-    s258_kernel[grid](
-        a, b, c, d, e, aa, n,
+    # Launch kernel with single program
+    s258_kernel[(1,)](
+        a, b, c, d, e, aa,
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
+    
+    return b, e
 ```

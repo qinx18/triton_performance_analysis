@@ -4,36 +4,51 @@ import triton.language as tl
 
 @triton.jit
 def s176_kernel(a_ptr, b_ptr, c_ptr, m, LEN_1D, BLOCK_SIZE: tl.constexpr):
+    # Get program ID
+    pid = tl.program_id(0)
+    
+    # Calculate which j iteration this program handles
+    j = pid
+    if j >= m:
+        return
+    
+    # Pre-define offsets for vectorized operations
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    for j in range(m):  # j goes from 0 to LEN_1D/2 - 1
-        c_j = tl.load(c_ptr + j)
+    # Process array a in blocks
+    for block_start in range(0, m, BLOCK_SIZE):
+        # Calculate current offsets for this block
+        a_offsets = block_start + offsets
+        a_mask = a_offsets < m
         
-        for block_start in range(0, m, BLOCK_SIZE):
-            i_offsets = block_start + offsets
-            mask = i_offsets < m
-            
-            # Load a[i]
-            a_vals = tl.load(a_ptr + i_offsets, mask=mask, other=0.0)
-            
-            # Calculate b index: i + m - j - 1
-            b_indices = i_offsets + m - j - 1
-            b_vals = tl.load(b_ptr + b_indices, mask=mask, other=0.0)
-            
-            # Compute a[i] += b[i+m-j-1] * c[j]
-            result = a_vals + b_vals * c_j
-            
-            # Store back to a[i]
-            tl.store(a_ptr + i_offsets, result, mask=mask)
+        # Load current values from a
+        a_vals = tl.load(a_ptr + a_offsets, mask=a_mask, other=0.0)
+        
+        # Calculate b indices: i + m - j - 1
+        b_offsets = a_offsets + m - j - 1
+        b_mask = (a_offsets < m) & (b_offsets >= 0) & (b_offsets < LEN_1D)
+        
+        # Load values from b
+        b_vals = tl.load(b_ptr + b_offsets, mask=b_mask, other=0.0)
+        
+        # Load c[j] (scalar broadcast)
+        c_val = tl.load(c_ptr + j)
+        
+        # Compute update: b[i+m-j-1] * c[j]
+        update = b_vals * c_val
+        
+        # Add to a values
+        new_a_vals = a_vals + update
+        
+        # Store back to a
+        tl.store(a_ptr + a_offsets, new_a_vals, mask=a_mask)
 
 def s176_triton(a, b, c):
     LEN_1D = a.shape[0]
     m = LEN_1D // 2
     
+    # Launch kernel with one thread per j iteration
     BLOCK_SIZE = 256
+    grid = (m,)
     
-    s176_kernel[(1,)](
-        a, b, c,
-        m, LEN_1D,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s176_kernel[grid](a, b, c, m, LEN_1D, BLOCK_SIZE)
