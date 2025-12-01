@@ -521,6 +521,47 @@ IMPORTANT:
 - DO NOT parallelize dimensions marked as INVALID - this will cause race conditions
 - Use forward iteration (ascending indices) for memory access patterns
 
+## CRITICAL: Triton Compilation Rules
+
+**1. NEVER use `tl.arange()` inside a for loop:**
+```python
+# ❌ WRONG - causes compilation error
+for block_start in range(0, n, BLOCK_SIZE):
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)  # ERROR!
+
+# ✅ CORRECT - define tl.arange() ONCE at the start
+offsets = tl.arange(0, BLOCK_SIZE)  # Define once
+for block_start in range(0, n, BLOCK_SIZE):
+    current_offsets = block_start + offsets  # Use the pre-defined offsets
+```
+
+**2. NEVER index a tensor with a scalar variable inside kernel:**
+```python
+# ❌ WRONG - tensor indexing not supported
+vals = tl.load(ptr + offsets, mask=mask)
+for j in range(BLOCK_SIZE):
+    x = vals[j]  # ERROR! Cannot index tensor with scalar
+
+# ✅ CORRECT - use vectorized operations only
+vals = tl.load(ptr + offsets, mask=mask)
+result = vals * 2  # Vectorized operation
+```
+
+**3. NEVER use lambda functions in `tl.reduce()`:**
+```python
+# ❌ WRONG - lambda not supported
+prod = tl.reduce(vals, axis=0, combine_fn=lambda x, y: x * y)
+
+# ✅ CORRECT - use built-in reduction functions
+sum_val = tl.sum(vals, axis=0)
+max_val = tl.max(vals, axis=0)
+```
+
+**4. If sequential processing is required, fall back to PyTorch:**
+For algorithms that truly require sequential element-by-element processing (like prefix sums, recurrences),
+it's better to use PyTorch operations (torch.cumsum, torch.cumprod) rather than trying to implement
+sequential loops inside Triton kernels.
+
 Provide ONLY the Python code, no additional explanation."""
 
     print(f"Generating Triton code for {kernel_name}...")
