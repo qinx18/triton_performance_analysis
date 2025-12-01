@@ -1,7 +1,7 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-01 (WAR Fix Verification - test3_results.log)
-**Previous Tests:** 2025-11-30, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-01 (`tl.arange()` Rule - test4_results.log)
+**Previous Tests:** test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
@@ -207,6 +207,152 @@ s111, s1119, s126, s132, s1421, s151, s162, s172, s173, s174, s176, s2102, s2111
 
 ---
 
+## 🔬 LLM Triton v3 Testing with `tl.arange()` Rule (2025-12-01) - test4_results.log
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 96 | 63.6% |
+| ❌ **FAILING** | 55 | 36.4% |
+
+### Key Change: `tl.arange()` Inside For Loop Rule
+
+**Prompt Rule Added:**
+```
+NEVER use `tl.arange()` inside a for loop - it causes compilation errors.
+Define tl.arange() ONCE at kernel start, before any loops.
+```
+
+### Comparison with test3 (Before `tl.arange()` Rule)
+
+| Metric | test3 (before) | test4 (after) | Change |
+|--------|----------------|---------------|--------|
+| Passing | 97 (64.2%) | 96 (63.6%) | -1 |
+| Failing | 54 (35.8%) | 55 (36.4%) | +1 |
+
+### `tl.arange()` Rule Effectiveness
+
+Of the 5 functions originally failing due to `tl.arange()` in for loop:
+| Function | test3 | test4 | Status |
+|----------|-------|-------|--------|
+| **s352** | FAIL | PASS | **Fixed by rule** |
+| **s453** | FAIL | PASS | **Fixed by rule** |
+| s252 | FAIL | FAIL | Different root cause (numerical) |
+| s257 | FAIL | FAIL | Different root cause (tensor index) |
+| s3112 | FAIL | FAIL | Different root cause (@triton.jit) |
+
+**Result: 2/5 targeted functions fixed**
+
+### Functions FIXED in test4 (9 functions):
+| Function | Notes |
+|----------|-------|
+| **s352** | `tl.arange()` rule fix |
+| **s453** | `tl.arange()` rule fix |
+| s111 | LLM variability |
+| s172 | LLM variability |
+| s2244 | LLM variability |
+| s235 | LLM variability |
+| s275 | LLM variability |
+| s343 | LLM variability |
+| s442 | LLM variability |
+
+### Functions REGRESSED in test4 (10 functions - LLM variability):
+s121, s1213, s1221, s141, s161, s242, s243, s2710, s277, s331
+
+### Non-Numerical Errors (27 functions - Compilation/Runtime Errors)
+
+#### Tensor index type errors (8 functions)
+| Function | Error |
+|----------|-------|
+| **s257** | ValueError: unsupported tensor index: constexpr[0] |
+| **s353** | tensors used as indices must be long, int, byte or bool |
+| **s4112** | tensors used as indices must be long, int, byte or bool |
+| **s4114** | tensors used as indices must be long, int, byte or bool |
+| **s4116** | tensors used as indices must be long, int, byte or bool |
+| **s491** | tensors used as indices must be long, int, byte or bool |
+| **vag** | tensors used as indices must be long, int, byte or bool |
+| **vas** | tensors used as indices must be long, int, byte or bool |
+
+#### Missing arguments (4 functions)
+| Function | Error |
+|----------|-------|
+| **s174** | Missing 1 required positional argument: 'M' |
+| **s2710** | Missing 1 required positional argument: 'LEN_1D' |
+| **s332** | Missing 7 required positional arguments |
+| **s351** | Missing 1 required positional argument: 'c' |
+
+#### @triton.jit usage errors (2 functions)
+| Function | Error |
+|----------|-------|
+| **s3112** | `_builder` argument must be provided outside of JIT |
+| **s331** | `_builder` argument must be provided outside of JIT |
+
+#### Triton API errors (2 functions)
+| Function | Error |
+|----------|-------|
+| **s141** | zeros_like() got unexpected keyword argument 'dtype' |
+| **s312** | module 'triton.language.math' has no attribute 'multiply_op' |
+
+#### Type/pointer errors (2 functions)
+| Function | Error |
+|----------|-------|
+| **s4113** | invalid operands: pointer<fp32> vs triton.language.float32 |
+| **s4115** | invalid operands: pointer<fp32> vs triton.language.float32 |
+
+#### Timeout (1 function)
+| Function | Error |
+|----------|-------|
+| **s1119** | Test timeout |
+
+#### Other compilation errors (8 functions)
+| Function | Error |
+|----------|-------|
+| **s121** | tl.zeros compilation error |
+| **s2251** | Compilation error |
+| **s255** | Compilation error |
+| **s258** | Compilation error |
+| **s31111** | 'int' object is not callable |
+| **s341** | Compilation error |
+| **s423** | Tensor size mismatch |
+| **s482** | Compilation error |
+
+### Numerical/Algorithm Errors (28 functions)
+| Function | Max Error | Function | Max Error |
+|----------|-----------|----------|-----------|
+| s1213 | 8.18e+00 | s1221 | 3.76e+00 |
+| s126 | 4.57e+01 | s132 | 4.90e+00 |
+| s1421 | 5.10e+00 | s151 | 2.82e+00 |
+| s161 | 5.57e+00 | s162 | 2.58e+00 |
+| s173 | 6.48e+00 | s176 | 1.80e+02 |
+| s2102 | 2.26e+00 | s2111 | 4.71e+10 |
+| s232 | inf | s242 | 5.86e+03 |
+| s243 | 1.90e+00 | s244 | 1.11e+01 |
+| s252 | 1.14e+00 | s256 | 3.46e+00 |
+| s261 | 8.44e+00 | s276 | 6.18e+00 |
+| s277 | 1.08e+00 | s281 | 6.78e+00 |
+| s322 | 4.06e+12 | s323 | 1.06e+02 |
+| s422 | 7.65e+00 | s424 | 5.31e+00 |
+| s431 | 5.78e+00 | s471 | 2.27e+01 |
+
+### Non-Numerical Error Summary by Category
+| Category | Count | Functions |
+|----------|-------|-----------|
+| Tensor index type errors | 8 | s257, s353, s4112, s4114, s4116, s491, vag, vas |
+| Missing arguments | 4 | s174, s2710, s332, s351 |
+| @triton.jit usage errors | 2 | s3112, s331 |
+| Triton API errors | 2 | s141, s312 |
+| Type/pointer errors | 2 | s4113, s4115 |
+| Other compilation | 8 | s121, s2251, s255, s258, s31111, s341, s423, s482 |
+| Timeout | 1 | s1119 |
+
+### Passing Functions (96):
+s000, s111, s1111, s1112, s1113, s1115, s112, s113, s114, s115, s116, s1161, s118, s119, s122, s123, s1232, s124, s1244, s125, s1251, s127, s1279, s128, s1281, s131, s13110, s1351, s152, s171, s172, s175, s2101, s211, s212, s221, s222, s2233, s2244, s2275, s231, s233, s235, s241, s251, s253, s254, s271, s2711, s2712, s272, s273, s274, s275, s278, s279, s291, s292, s293, s311, s3110, s3111, s3113, s313, s314, s315, s316, s317, s318, s319, s321, s3251, s342, s343, s352, s4117, s4121, s421, s441, s442, s443, s451, s452, s453, s481, va, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failing Functions (55):
+s1119, s121, s1213, s1221, s126, s132, s141, s1421, s151, s161, s162, s173, s174, s176, s2102, s2111, s2251, s232, s242, s243, s244, s252, s255, s256, s257, s258, s261, s2710, s276, s277, s281, s31111, s3112, s312, s322, s323, s331, s332, s341, s351, s353, s4112, s4113, s4114, s4115, s4116, s422, s423, s424, s431, s471, s482, s491, vag, vas
+
+---
+
 ## 🔬 C Ground Truth Testing (2025-11-29)
 
 ### Important Finding
@@ -274,19 +420,21 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 
 ## 📈 Test History Comparison
 
-| Date | PASS | FAIL | Pass Rate | Notes |
-|------|------|------|-----------|-------|
-| **2025-12-01** | **97** | **54** | **64.2%** | **WAR fix applied** - s119 now passing |
-| 2025-11-30 (test2) | 101 | 50 | 66.9% | LLM Triton v3 (before WAR fix) |
-| 2025-11-30 (test1) | 92 | 59 | 60.9% | PyTorch baseline (auto_test_all_tsvc.py) |
-| 2025-11-29 | 97 | 54 | 64.2% | C ground truth - original prompt |
-| 2025-11-28 | 94 | 57 | 62.3% | Previous C ground truth run |
-| 2025-11-18 | 99 | 52 | 65.6% | PyTorch baseline comparison |
+| Date | Test | PASS | FAIL | Pass Rate | Notes |
+|------|------|------|------|-----------|-------|
+| **2025-12-01** | **test4** | **96** | **55** | **63.6%** | **+ `tl.arange()` rule** - s352, s453 fixed |
+| 2025-12-01 | test3 | 97 | 54 | 64.2% | WAR fix applied - s119 now passing |
+| 2025-11-30 | test2 | 101 | 50 | 66.9% | LLM Triton v3 (before WAR fix) |
+| 2025-11-30 | test1 | 92 | 59 | 60.9% | PyTorch baseline (auto_test_all_tsvc.py) |
+| 2025-11-29 | - | 97 | 54 | 64.2% | C ground truth - original prompt |
+| 2025-11-28 | - | 94 | 57 | 62.3% | Previous C ground truth run |
+| 2025-11-18 | - | 99 | 52 | 65.6% | PyTorch baseline comparison |
 
 **Key Observations:**
-- LLM output varies between runs due to non-determinism
+- LLM output varies between runs due to non-determinism (~10 functions change per regeneration)
 - test3 fixed WAR detection bug, enabling s119 to pass
-- 7 functions fixed by WAR analysis improvement, 11 regressed due to LLM variability
+- test4 added `tl.arange()` rule: 2/5 targeted functions fixed (s352, s453)
+- Net change from test3→test4: -1 (9 fixed, 10 regressed due to LLM variability)
 
 ---
 
