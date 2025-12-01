@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s318
-# Generated: 2025-12-01 15:51:43
+# Generated: 2025-12-01 18:29:34
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1405
-# Output Tokens: 419
+# Input Tokens: 1815
+# Output Tokens: 433
 
 ================================================================================
 PROMPT:
@@ -96,9 +96,9 @@ Please generate a complete Triton implementation that:
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
 The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
 
-**Correct example**:
+**REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s318_triton(a, b):  # Only array parameters
+def s318_triton(a, inc):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -110,7 +110,10 @@ def s318_triton(a, b, iterations):  # WRONG: No iterations parameter
 ```
 
 IMPORTANT:
-- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+
+**You MUST use EXACTLY these parameter names: `a, inc`**
+- Use EXACTLY the parameter names shown in the required function signature above
+- Do NOT rename parameters (e.g., don't use 't_val' if the signature shows 't')
 - Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
 - If WAR dependencies are shown above, you MUST use the read-only copy pattern
 - If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
@@ -143,6 +146,33 @@ vals = tl.load(ptr + offsets, mask=mask)
 result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
 ```
 
+**NEVER use non-existent Triton functions - use Python operators or alternatives:**
+```python
+# ❌ WRONG - these functions don't exist in Triton
+result = tl.mul(a, b)   # ERROR: no attribute 'mul'
+result = tl.div(a, b)   # ERROR: no attribute 'div'
+result = tl.add(a, b)   # ERROR: no attribute 'add'
+result = tl.any(cond)   # ERROR: no attribute 'any'
+
+# ✅ CORRECT - use Python operators or alternatives
+result = a * b   # multiplication
+result = a / b   # division
+result = a + b   # addition
+has_any = tl.sum(cond.to(tl.int32)) > 0  # check if any condition is true
+```
+
+**NEVER use Python lists inside @triton.jit kernels - they cause 'int' object is not callable errors:**
+```python
+# ❌ WRONG - Python lists not supported in Triton kernels
+indices = [0, 4, 8, 12, 16, 20, 24, 28]  # ERROR!
+for idx in indices:  # ERROR: 'int' object is not callable
+    val = tl.load(ptr + idx)
+
+# ✅ CORRECT - use tl.arange and vectorized operations
+offsets = tl.arange(0, BLOCK_SIZE)
+vals = tl.load(ptr + offsets, mask=mask)
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -154,10 +184,11 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s318_kernel(a_ptr, inc, n_elements, output_ptr):
-    BLOCK_SIZE = 256
+def s318_kernel(a_ptr, result_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Find maximum absolute value and its index using incremented indexing
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize variables
+    # Initialize with first element
     k = 0
     index = 0
     max_val = tl.abs(tl.load(a_ptr + k))
@@ -165,38 +196,34 @@ def s318_kernel(a_ptr, inc, n_elements, output_ptr):
     
     # Sequential search for maximum absolute value
     for i in range(1, n_elements):
-        if k >= n_elements:
-            break
-            
-        current_val = tl.abs(tl.load(a_ptr + k))
-        
-        # Update max and index if current value is greater
-        if current_val > max_val:
-            index = i
-            max_val = current_val
-            
+        if k < n_elements:
+            abs_val = tl.abs(tl.load(a_ptr + k))
+            if abs_val > max_val:
+                index = i
+                max_val = abs_val
         k += inc
     
     # Store results
-    tl.store(output_ptr, max_val)
-    tl.store(output_ptr + 1, index.to(tl.float32))
+    tl.store(result_ptr, max_val)
+    tl.store(result_ptr + 1, index.to(tl.float32))
 
 def s318_triton(a, inc):
     n_elements = a.shape[0]
     
-    # Output tensor to store [max_value, index]
-    output = torch.zeros(2, dtype=a.dtype, device=a.device)
+    # Create output tensor for max value and index
+    result = torch.zeros(2, device=a.device, dtype=a.dtype)
     
-    # Launch kernel with single thread since this is a sequential reduction
+    BLOCK_SIZE = 1024
     grid = (1,)
     
     s318_kernel[grid](
-        a, inc, n_elements, output
+        a, result, 
+        inc, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    max_val = output[0]
-    index = int(output[1])
-    chksum = max_val + float(index)
+    max_val = result[0].item()
+    index = int(result[1].item())
     
-    return max_val, index, chksum
+    return max_val + index + 1
 ```

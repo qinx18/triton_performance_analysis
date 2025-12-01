@@ -19,10 +19,11 @@ def s174_kernel(a_ptr, b_ptr, M, BLOCK_SIZE: tl.constexpr):
     result = a_vals + b_vals
     
     # Store to a[i+M]
-    tl.store(a_ptr + indices + M, result, mask=mask)
+    output_indices = indices + M
+    tl.store(a_ptr + output_indices, result, mask=mask)
 
 def s174_triton(a, b, M):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(M, BLOCK_SIZE),)
     
-    s174_kernel[grid](a, b, M, BLOCK_SIZE)
+    s174_kernel[grid](a, b, M, BLOCK_SIZE=BLOCK_SIZE)

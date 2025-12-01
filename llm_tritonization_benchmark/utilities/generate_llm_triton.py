@@ -37,6 +37,35 @@ KERNELS_DIR = "/home/qinxiao/workspace/pet/isl_analysis/kernels"
 PARALLEL_DIMS_ANALYSIS_FILE = "/home/qinxiao/workspace/pet/isl_analysis/results/parallel_dims_analysis.txt"
 BASELINES_DIR = Path("baselines")  # Still needed for function signature reference
 
+# Helper functions defined in TSVC that are called by main functions
+HELPER_FUNCTIONS = {
+    "test": {
+        "code": """real_t test(real_t* A){
+  real_t s = (real_t)0.0;
+  for (int i = 0; i < 4; i++)
+    s += A[i];
+  return s;
+}""",
+        "description": "Sums the first 4 elements of array A"
+    },
+    "f": {
+        "code": """real_t f(real_t a, real_t b){
+    return a*b;
+}""",
+        "description": "Returns the product of a and b (a*b)"
+    }
+}
+
+
+def find_used_helper_functions(func_body: str) -> List[str]:
+    """Find which helper functions are called in the function body."""
+    used = []
+    for helper_name in HELPER_FUNCTIONS:
+        # Look for function call pattern: helper_name(
+        if re.search(rf'\b{helper_name}\s*\(', func_body):
+            used.append(helper_name)
+    return used
+
 
 def extract_tsvc_function(func_name: str) -> Optional[dict]:
     """Extract a function from the original TSVC source file."""
@@ -81,12 +110,16 @@ def extract_tsvc_function(func_name: str) -> Optional[dict]:
         desc_lines = desc_match.group(0).split('\n')
         description = '\n'.join(line for line in desc_lines if line.strip().startswith('//'))
 
+    # Find helper functions used in this function
+    helper_functions_used = find_used_helper_functions(func_body)
+
     return {
         'name': func_name,
         'full_body': func_body,
         'local_vars': local_vars,
         'kernel_loop': kernel_loop,
-        'description': description
+        'description': description,
+        'helper_functions': helper_functions_used
     }
 
 
@@ -495,6 +528,22 @@ def generate_triton_from_tsvc(kernel_name: str) -> tuple:
         local_vars_str = '\n'.join(f"    {v};" for v in tsvc_func['local_vars'])
         c_code_section = f"// Local variables:\n{local_vars_str}\n\n// Kernel loop:\n{c_code_section}"
 
+    # Build helper functions section if any are used
+    helper_section = ""
+    if tsvc_func['helper_functions']:
+        helper_funcs_code = []
+        for helper_name in tsvc_func['helper_functions']:
+            helper_info = HELPER_FUNCTIONS[helper_name]
+            helper_funcs_code.append(f"// {helper_info['description']}\n{helper_info['code']}")
+        helper_section = f"""
+
+## Helper Functions Called in This Code:
+The following helper functions are called by the main function. You must inline their logic in your Triton implementation:
+```c
+{chr(10).join(helper_funcs_code)}
+```
+"""
+
     # Build prompt
     prompt = f"""I have an original TSVC (Test Suite for Vectorizing Compilers) C function that I want to implement in Triton for GPU acceleration.
 
@@ -508,7 +557,7 @@ def generate_triton_from_tsvc(kernel_name: str) -> tuple:
 ```c
 {c_code_section}
 ```
-{war_section}{par_section}
+{helper_section}{war_section}{par_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -593,24 +642,60 @@ result = tl.mul(a, b)   # ERROR: no attribute 'mul'
 result = tl.div(a, b)   # ERROR: no attribute 'div'
 result = tl.add(a, b)   # ERROR: no attribute 'add'
 result = tl.any(cond)   # ERROR: no attribute 'any'
+result = tl.cdiv(a, b)  # ERROR: no attribute 'cdiv' (use triton.cdiv in wrapper, not tl.cdiv in kernel)
 
 # ✅ CORRECT - use Python operators or alternatives
 result = a * b   # multiplication
 result = a / b   # division
 result = a + b   # addition
 has_any = tl.sum(cond.to(tl.int32)) > 0  # check if any condition is true
+# For cdiv (ceiling division), use triton.cdiv() in Python wrapper, NOT in kernel
+grid = (triton.cdiv(n_elements, BLOCK_SIZE),)  # OK in wrapper
 ```
 
-**NEVER use Python lists inside @triton.jit kernels - they cause 'int' object is not callable errors:**
+**NEVER use Python lists inside @triton.jit kernels - they cause compilation errors:**
 ```python
 # ❌ WRONG - Python lists not supported in Triton kernels
 indices = [0, 4, 8, 12, 16, 20, 24, 28]  # ERROR!
-for idx in indices:  # ERROR: 'int' object is not callable
+for idx in indices:  # ERROR: CompilationError - AttributeError("'Name' object has no attribute 'func'")
     val = tl.load(ptr + idx)
 
 # ✅ CORRECT - use tl.arange and vectorized operations
 offsets = tl.arange(0, BLOCK_SIZE)
 vals = tl.load(ptr + offsets, mask=mask)
+```
+
+**NEVER use `break` or `continue` statements inside @triton.jit kernels - they are NOT supported:**
+```python
+# ❌ WRONG - break/continue not supported in Triton
+@triton.jit
+def kernel(...):
+    for i in range(n):
+        if condition:
+            break  # ERROR: Unsupported AST node: Break
+        if other_condition:
+            continue  # ERROR: Unsupported AST node: Continue
+
+# ✅ CORRECT - use mask-based conditional execution instead
+@triton.jit
+def kernel(...):
+    # Process all elements, use masks to conditionally apply operations
+    mask = offsets < n_elements
+    vals = tl.load(ptr + offsets, mask=mask)
+    # Use tl.where for conditional operations
+    result = tl.where(condition_mask, val_if_true, val_if_false)
+    tl.store(out_ptr + offsets, result, mask=mask)
+```
+
+**When passing scalars from tensors to Triton kernels, extract the value with .item():**
+```python
+# ❌ WRONG - passing a 0-d tensor instead of scalar
+alpha = c[0]  # This is still a tensor!
+kernel[grid](ptr, alpha, ...)  # Type error: pointer<fp32> vs float32
+
+# ✅ CORRECT - extract the scalar value
+alpha = c[0].item()  # Now it's a Python float
+kernel[grid](ptr, alpha, ...)  # Works correctly
 ```
 
 Provide ONLY the Python code, no additional explanation."""

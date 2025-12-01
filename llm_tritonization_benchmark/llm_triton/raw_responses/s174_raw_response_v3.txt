@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s174
-# Generated: 2025-12-01 15:42:48
+# Generated: 2025-12-01 18:29:10
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1207
-# Output Tokens: 303
+# Input Tokens: 1621
+# Output Tokens: 317
 
 ================================================================================
 PROMPT:
@@ -71,9 +71,9 @@ Please generate a complete Triton implementation that:
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
 The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
 
-**Correct example**:
+**REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s174_triton(a, b):  # Only array parameters
+def s174_triton(a, b, M):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -85,7 +85,10 @@ def s174_triton(a, b, iterations):  # WRONG: No iterations parameter
 ```
 
 IMPORTANT:
-- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+
+**You MUST use EXACTLY these parameter names: `a, b, M`**
+- Use EXACTLY the parameter names shown in the required function signature above
+- Do NOT rename parameters (e.g., don't use 't_val' if the signature shows 't')
 - Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
 - If WAR dependencies are shown above, you MUST use the read-only copy pattern
 - If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
@@ -118,6 +121,33 @@ vals = tl.load(ptr + offsets, mask=mask)
 result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
 ```
 
+**NEVER use non-existent Triton functions - use Python operators or alternatives:**
+```python
+# ❌ WRONG - these functions don't exist in Triton
+result = tl.mul(a, b)   # ERROR: no attribute 'mul'
+result = tl.div(a, b)   # ERROR: no attribute 'div'
+result = tl.add(a, b)   # ERROR: no attribute 'add'
+result = tl.any(cond)   # ERROR: no attribute 'any'
+
+# ✅ CORRECT - use Python operators or alternatives
+result = a * b   # multiplication
+result = a / b   # division
+result = a + b   # addition
+has_any = tl.sum(cond.to(tl.int32)) > 0  # check if any condition is true
+```
+
+**NEVER use Python lists inside @triton.jit kernels - they cause 'int' object is not callable errors:**
+```python
+# ❌ WRONG - Python lists not supported in Triton kernels
+indices = [0, 4, 8, 12, 16, 20, 24, 28]  # ERROR!
+for idx in indices:  # ERROR: 'int' object is not callable
+    val = tl.load(ptr + idx)
+
+# ✅ CORRECT - use tl.arange and vectorized operations
+offsets = tl.arange(0, BLOCK_SIZE)
+vals = tl.load(ptr + offsets, mask=mask)
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -145,11 +175,12 @@ def s174_kernel(a_ptr, b_ptr, M, BLOCK_SIZE: tl.constexpr):
     result = a_vals + b_vals
     
     # Store to a[i+M]
-    tl.store(a_ptr + indices + M, result, mask=mask)
+    output_indices = indices + M
+    tl.store(a_ptr + output_indices, result, mask=mask)
 
 def s174_triton(a, b, M):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(M, BLOCK_SIZE),)
     
-    s174_kernel[grid](a, b, M, BLOCK_SIZE)
+    s174_kernel[grid](a, b, M, BLOCK_SIZE=BLOCK_SIZE)
 ```

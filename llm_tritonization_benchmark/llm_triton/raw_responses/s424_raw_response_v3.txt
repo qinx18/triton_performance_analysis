@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s424
-# Generated: 2025-12-01 15:55:09
+# Generated: 2025-12-01 18:30:22
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1251
-# Output Tokens: 398
+# Input Tokens: 1671
+# Output Tokens: 485
 
 ================================================================================
 PROMPT:
@@ -74,9 +74,9 @@ Please generate a complete Triton implementation that:
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
 The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
 
-**Correct example**:
+**REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s424_triton(a, b):  # Only array parameters
+def s424_triton(a, flat_2d_array):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -88,7 +88,10 @@ def s424_triton(a, b, iterations):  # WRONG: No iterations parameter
 ```
 
 IMPORTANT:
-- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+
+**You MUST use EXACTLY these parameter names: `a, flat_2d_array`**
+- Use EXACTLY the parameter names shown in the required function signature above
+- Do NOT rename parameters (e.g., don't use 't_val' if the signature shows 't')
 - Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
 - If WAR dependencies are shown above, you MUST use the read-only copy pattern
 - If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
@@ -121,6 +124,33 @@ vals = tl.load(ptr + offsets, mask=mask)
 result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
 ```
 
+**NEVER use non-existent Triton functions - use Python operators or alternatives:**
+```python
+# ❌ WRONG - these functions don't exist in Triton
+result = tl.mul(a, b)   # ERROR: no attribute 'mul'
+result = tl.div(a, b)   # ERROR: no attribute 'div'
+result = tl.add(a, b)   # ERROR: no attribute 'add'
+result = tl.any(cond)   # ERROR: no attribute 'any'
+
+# ✅ CORRECT - use Python operators or alternatives
+result = a * b   # multiplication
+result = a / b   # division
+result = a + b   # addition
+has_any = tl.sum(cond.to(tl.int32)) > 0  # check if any condition is true
+```
+
+**NEVER use Python lists inside @triton.jit kernels - they cause 'int' object is not callable errors:**
+```python
+# ❌ WRONG - Python lists not supported in Triton kernels
+indices = [0, 4, 8, 12, 16, 20, 24, 28]  # ERROR!
+for idx in indices:  # ERROR: 'int' object is not callable
+    val = tl.load(ptr + idx)
+
+# ✅ CORRECT - use tl.arange and vectorized operations
+offsets = tl.arange(0, BLOCK_SIZE)
+vals = tl.load(ptr + offsets, mask=mask)
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -132,34 +162,47 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s424_kernel(flat_2d_array_ptr, a_ptr, xx_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+def s424_kernel(
+    a_ptr,
+    flat_2d_array_ptr,
+    xx_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
     
     mask = indices < n_elements
     
+    # Load flat_2d_array[i] and a[i]
     flat_vals = tl.load(flat_2d_array_ptr + indices, mask=mask)
     a_vals = tl.load(a_ptr + indices, mask=mask)
     
+    # Compute xx[i+1] = flat_2d_array[i] + a[i]
     result = flat_vals + a_vals
     
-    tl.store(xx_ptr + indices + 1, result, mask=mask)
+    # Store to xx[i+1]
+    store_indices = indices + 1
+    store_mask = mask & (store_indices < n_elements + 1)
+    tl.store(xx_ptr + store_indices, result, mask=store_mask)
 
-def s424_triton(flat_2d_array, a):
-    LEN_1D = flat_2d_array.size(0)
-    n_elements = LEN_1D - 1
+def s424_triton(a, flat_2d_array):
+    n_elements = a.shape[0] - 1  # LEN_1D - 1
     
+    # Create xx array (offset version of flat_2d_array)
     vl = 63
-    xx = torch.zeros(LEN_1D + vl, dtype=flat_2d_array.dtype, device=flat_2d_array.device)
+    xx = torch.zeros_like(flat_2d_array)
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s424_kernel[grid](
-        flat_2d_array, a, xx, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a,
+        flat_2d_array,
+        xx,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
     )
     
     return xx

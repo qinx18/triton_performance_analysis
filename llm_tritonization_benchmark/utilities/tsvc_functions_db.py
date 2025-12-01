@@ -1771,7 +1771,7 @@ for (int nl = 0; nl < 2000*iterations; nl++) {
         "has_conditional": False,
         "has_reduction": True,
         "has_2d_arrays": False,
-        "scalar_params": {'iterations': 'scalar', 'test': 'scalar'},
+        "scalar_params": {'iterations': 'scalar'},  # 'test' is a helper function that sums 4 elements, not a parameter
     },
     "s3112": {
         "name": "s3112",

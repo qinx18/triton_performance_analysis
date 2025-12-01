@@ -1,13 +1,13 @@
 # LLM-Generated Triton Implementation for s353
-# Generated: 2025-12-01 15:53:40
+# Generated: 2025-12-01 18:30:06
 # Model: claude-sonnet-4-20250514
 # Source: Original TSVC C code
 # WAR Dependencies: None
 # Parallelization: N/A
 # Triton Strategy: N/A
 # Stop Reason: end_turn
-# Input Tokens: 1400
-# Output Tokens: 416
+# Input Tokens: 1818
+# Output Tokens: 1204
 
 ================================================================================
 PROMPT:
@@ -81,9 +81,9 @@ Please generate a complete Triton implementation that:
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
 The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
 
-**Correct example**:
+**REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s353_triton(a, b):  # Only array parameters
+def s353_triton(a, b, c, ip):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -95,7 +95,10 @@ def s353_triton(a, b, iterations):  # WRONG: No iterations parameter
 ```
 
 IMPORTANT:
-- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+
+**You MUST use EXACTLY these parameter names: `a, b, c, ip`**
+- Use EXACTLY the parameter names shown in the required function signature above
+- Do NOT rename parameters (e.g., don't use 't_val' if the signature shows 't')
 - Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
 - If WAR dependencies are shown above, you MUST use the read-only copy pattern
 - If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
@@ -128,6 +131,33 @@ vals = tl.load(ptr + offsets, mask=mask)
 result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
 ```
 
+**NEVER use non-existent Triton functions - use Python operators or alternatives:**
+```python
+# ❌ WRONG - these functions don't exist in Triton
+result = tl.mul(a, b)   # ERROR: no attribute 'mul'
+result = tl.div(a, b)   # ERROR: no attribute 'div'
+result = tl.add(a, b)   # ERROR: no attribute 'add'
+result = tl.any(cond)   # ERROR: no attribute 'any'
+
+# ✅ CORRECT - use Python operators or alternatives
+result = a * b   # multiplication
+result = a / b   # division
+result = a + b   # addition
+has_any = tl.sum(cond.to(tl.int32)) > 0  # check if any condition is true
+```
+
+**NEVER use Python lists inside @triton.jit kernels - they cause 'int' object is not callable errors:**
+```python
+# ❌ WRONG - Python lists not supported in Triton kernels
+indices = [0, 4, 8, 12, 16, 20, 24, 28]  # ERROR!
+for idx in indices:  # ERROR: 'int' object is not callable
+    val = tl.load(ptr + idx)
+
+# ✅ CORRECT - use tl.arange and vectorized operations
+offsets = tl.arange(0, BLOCK_SIZE)
+vals = tl.load(ptr + offsets, mask=mask)
+```
+
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
@@ -139,37 +169,77 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s353_kernel(a_ptr, b_ptr, ip_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+def s353_kernel(
+    a_ptr, b_ptr, ip_ptr, alpha,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    # Get program ID and calculate base offset
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     
-    offsets = tl.arange(0, BLOCK_SIZE)
+    # Create offset vectors for the 5 unrolled elements
+    base_offsets = tl.arange(0, BLOCK_SIZE)
+    offsets_0 = block_start + base_offsets
+    offsets_1 = offsets_0 + 1
+    offsets_2 = offsets_0 + 2
+    offsets_3 = offsets_0 + 3
+    offsets_4 = offsets_0 + 4
     
-    for unroll_start in range(0, BLOCK_SIZE, 5):
-        current_offsets = block_start + unroll_start + offsets[:5]
-        mask = current_offsets < n_elements
-        
-        # Load indices
-        ip_vals = tl.load(ip_ptr + current_offsets, mask=mask)
-        
-        # Load b values using gathered indices
-        b_vals = tl.load(b_ptr + ip_vals, mask=mask)
-        
-        # Load a values
-        a_vals = tl.load(a_ptr + current_offsets, mask=mask)
-        
-        # Compute and store result
-        result = a_vals + alpha * b_vals
-        tl.store(a_ptr + current_offsets, result, mask=mask)
+    # Create masks for valid elements
+    mask_0 = offsets_0 < n_elements
+    mask_1 = offsets_1 < n_elements
+    mask_2 = offsets_2 < n_elements
+    mask_3 = offsets_3 < n_elements
+    mask_4 = offsets_4 < n_elements
+    
+    # Load indices from ip array
+    ip_0 = tl.load(ip_ptr + offsets_0, mask=mask_0, other=0)
+    ip_1 = tl.load(ip_ptr + offsets_1, mask=mask_1, other=0)
+    ip_2 = tl.load(ip_ptr + offsets_2, mask=mask_2, other=0)
+    ip_3 = tl.load(ip_ptr + offsets_3, mask=mask_3, other=0)
+    ip_4 = tl.load(ip_ptr + offsets_4, mask=mask_4, other=0)
+    
+    # Load values from b array using gathered indices
+    b_0 = tl.load(b_ptr + ip_0, mask=mask_0, other=0.0)
+    b_1 = tl.load(b_ptr + ip_1, mask=mask_1, other=0.0)
+    b_2 = tl.load(b_ptr + ip_2, mask=mask_2, other=0.0)
+    b_3 = tl.load(b_ptr + ip_3, mask=mask_3, other=0.0)
+    b_4 = tl.load(b_ptr + ip_4, mask=mask_4, other=0.0)
+    
+    # Load current values from a array
+    a_0 = tl.load(a_ptr + offsets_0, mask=mask_0, other=0.0)
+    a_1 = tl.load(a_ptr + offsets_1, mask=mask_1, other=0.0)
+    a_2 = tl.load(a_ptr + offsets_2, mask=mask_2, other=0.0)
+    a_3 = tl.load(a_ptr + offsets_3, mask=mask_3, other=0.0)
+    a_4 = tl.load(a_ptr + offsets_4, mask=mask_4, other=0.0)
+    
+    # Perform saxpy operations
+    a_0 += alpha * b_0
+    a_1 += alpha * b_1
+    a_2 += alpha * b_2
+    a_3 += alpha * b_3
+    a_4 += alpha * b_4
+    
+    # Store results back to a array
+    tl.store(a_ptr + offsets_0, a_0, mask=mask_0)
+    tl.store(a_ptr + offsets_1, a_1, mask=mask_1)
+    tl.store(a_ptr + offsets_2, a_2, mask=mask_2)
+    tl.store(a_ptr + offsets_3, a_3, mask=mask_3)
+    tl.store(a_ptr + offsets_4, a_4, mask=mask_4)
 
-def s353_triton(a, b, ip, c):
+def s353_triton(a, b, c, ip):
     n_elements = a.shape[0]
     alpha = c[0].item()
     
+    # Calculate grid size - each block processes BLOCK_SIZE elements with unroll factor of 5
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    # Need to handle 5 elements per iteration, so adjust accordingly
+    grid = ((n_elements + 4) // 5 + BLOCK_SIZE - 1) // BLOCK_SIZE
     
-    s353_kernel[grid](
-        a, b, ip, alpha, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    s353_kernel[(grid,)](
+        a, b, ip, alpha,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
     )
 ```

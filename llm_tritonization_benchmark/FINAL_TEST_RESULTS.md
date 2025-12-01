@@ -452,28 +452,28 @@ s121, s1213, s1221, s141, s161, s242, s243, s2710, s277, s331
 |----------|-------|
 | **s1119** | Test timeout |
 
-#### Other compilation errors (8 functions)
+#### Other compilation errors (7 functions)
 | Function | Error |
 |----------|-------|
-| **s121** | tl.zeros compilation error |
 | **s2251** | Compilation error |
 | **s255** | Compilation error |
 | **s258** | Compilation error |
-| **s31111** | 'int' object is not callable |
+| **s31111** | 'int' object is not callable (baseline bug - test is helper function, not parameter) |
 | **s341** | Compilation error |
 | **s423** | Tensor size mismatch |
 | **s482** | Compilation error |
 
-### Numerical/Algorithm Errors (28 functions)
+### Numerical/Algorithm Errors (29 functions)
 | Function | Max Error | Function | Max Error |
 |----------|-----------|----------|-----------|
-| s1213 | 8.18e+00 | s1221 | 3.76e+00 |
-| s126 | 4.57e+01 | s132 | 4.90e+00 |
-| s1421 | 5.10e+00 | s151 | 2.82e+00 |
-| s161 | 5.57e+00 | s162 | 2.58e+00 |
-| s173 | 6.48e+00 | s176 | 1.80e+02 |
-| s2102 | 2.26e+00 | s2111 | 4.71e+10 |
-| s232 | inf | s242 | 5.86e+03 |
+| s121 | 1.60e+01 | s1213 | 8.18e+00 |
+| s1221 | 3.76e+00 | s126 | 4.57e+01 |
+| s132 | 4.90e+00 | s1421 | 5.10e+00 |
+| s151 | 2.82e+00 | s161 | 5.57e+00 |
+| s162 | 2.58e+00 | s173 | 6.48e+00 |
+| s176 | 1.80e+02 | s2102 | 2.26e+00 |
+| s2111 | 4.71e+10 | s232 | inf |
+| s242 | 5.86e+03 |
 | s243 | 1.90e+00 | s244 | 1.11e+01 |
 | s252 | 1.14e+00 | s256 | 3.46e+00 |
 | s261 | 8.44e+00 | s276 | 6.18e+00 |
@@ -490,7 +490,7 @@ s121, s1213, s1221, s141, s161, s242, s243, s2710, s277, s331
 | @triton.jit usage errors | 2 | s3112, s331 |
 | Triton API errors | 2 | s141, s312 |
 | Type/pointer errors | 2 | s4113, s4115 |
-| Other compilation | 8 | s121, s2251, s255, s258, s31111, s341, s423, s482 |
+| Other compilation | 7 | s2251, s255, s258, s31111, s341, s423, s482 |
 | Timeout | 1 | s1119 |
 
 ### Passing Functions (96):

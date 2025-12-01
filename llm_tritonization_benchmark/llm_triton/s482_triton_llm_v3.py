@@ -10,37 +10,28 @@ def s482_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
         
-        # Load data
+        # Load values
         b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
         c_vals = tl.load(c_ptr + current_offsets, mask=mask, other=0.0)
         a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         
-        # Check if any c[i] > b[i] in this block
-        break_condition = c_vals > b_vals
-        any_break = tl.any(break_condition & mask)
-        
-        if any_break:
-            # Find first position where break occurs
-            break_positions = tl.where(break_condition & mask, current_offsets, n_elements)
-            first_break = tl.min(break_positions)
-            
-            # Only process elements before the break
-            process_mask = mask & (current_offsets < first_break)
-            
-            # Compute and store
-            result = a_vals + b_vals * c_vals
-            tl.store(a_ptr + current_offsets, result, mask=process_mask)
-            return
-        
-        # No break in this block, process all valid elements
+        # Compute a[i] += b[i] * c[i]
         result = a_vals + b_vals * c_vals
         tl.store(a_ptr + current_offsets, result, mask=mask)
+        
+        # Check break condition: if c[i] > b[i] for any valid element
+        break_condition = (c_vals > b_vals) & mask
+        should_break = tl.sum(break_condition.to(tl.int32)) > 0
+        
+        if should_break:
+            break
 
 def s482_triton(a, b, c):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
     
-    s482_kernel[(1,)](
+    grid = (1,)
+    s482_kernel[grid](
         a, b, c,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE

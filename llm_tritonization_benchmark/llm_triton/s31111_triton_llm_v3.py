@@ -1,39 +1,39 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s31111_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Define offsets once at kernel start
+def s31111_kernel(a_ptr, test_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize sum
-    sum_val = 0.0
+    # Load test function values (8 elements: test(&a[0]), test(&a[4]), ..., test(&a[28]))
+    test_mask = offsets < 8
+    test_vals = tl.load(test_ptr + offsets, mask=test_mask, other=0.0)
     
-    # Load values at specific indices and sum them
-    indices = [0, 4, 8, 12, 16, 20, 24, 28]
+    # Sum all test values
+    sum_val = tl.sum(test_vals)
     
-    for idx in indices:
-        if idx < n_elements:
-            val = tl.load(a_ptr + idx)
-            sum_val += val
-    
-    # Store result (only first thread stores the final sum)
+    # Store result (first thread only)
     if tl.program_id(0) == 0:
         tl.store(result_ptr, sum_val)
 
-def s31111_triton(a):
-    n_elements = a.shape[0]
+def s31111_triton(a, test):
+    # Ensure inputs are contiguous
+    a = a.contiguous()
+    test = test.contiguous()
     
     # Create output tensor
     result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single block since we're summing specific indices
+    # Grid and block size
     BLOCK_SIZE = 32
     grid = (1,)
     
+    # Launch kernel
     s31111_kernel[grid](
-        a, result, n_elements, BLOCK_SIZE
+        a, test, result,
+        a.numel(),
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
     return result.item()

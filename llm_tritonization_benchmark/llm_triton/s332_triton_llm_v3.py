@@ -3,12 +3,11 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s332_kernel(a_ptr, t, result_index_ptr, result_value_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s332_kernel(a_ptr, result_ptr, t, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    found_index = -2
-    found_value = -1.0
-    found = False
+    index = -2
+    value = -1.0
     
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
@@ -16,39 +15,34 @@ def s332_kernel(a_ptr, t, result_index_ptr, result_value_ptr, n_elements, BLOCK_
         
         a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=float('-inf'))
         
+        # Check if any element is greater than threshold
         condition = a_vals > t
-        valid_condition = condition & mask
+        has_match = tl.sum(condition.to(tl.int32)) > 0
         
-        if tl.any(valid_condition):
-            # Find the first valid index in this block
-            first_valid_mask = valid_condition & (tl.cumsum(valid_condition.to(tl.int32), axis=0) == 1)
-            if tl.any(first_valid_mask):
-                # Extract the index and value
-                indices = tl.where(first_valid_mask, current_offsets, n_elements)
-                values = tl.where(first_valid_mask, a_vals, -1.0)
-                
-                min_idx = tl.min(indices, axis=0)
-                if min_idx < n_elements:
-                    found_index = min_idx
-                    found_value = tl.sum(tl.where(current_offsets == found_index, a_vals, 0.0), axis=0)
-                    found = True
-                    break
+        if has_match:
+            # Find first element that matches condition
+            for i in range(BLOCK_SIZE):
+                offset = block_start + i
+                if offset < n_elements:
+                    val = tl.load(a_ptr + offset)
+                    if val > t:
+                        index = offset
+                        value = val
+                        break
+            break
     
-    if tl.program_id(0) == 0:
-        tl.store(result_index_ptr, found_index)
-        tl.store(result_value_ptr, found_value)
+    chksum = value + index
+    tl.store(result_ptr, chksum)
 
-def s332_triton(a, t_val):
-    n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
+def s332_triton(a, t):
+    n_elements = a.numel()
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    result_index = torch.tensor([-2], dtype=torch.int32, device=a.device)
-    result_value = torch.tensor([-1.0], dtype=a.dtype, device=a.device)
+    BLOCK_SIZE = 256
     
-    grid = (1,)
-    s332_kernel[grid](
-        a, t_val, result_index, result_value, n_elements, BLOCK_SIZE
+    s332_kernel[(1,)](
+        a, result, t, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    chksum = result_value.item() + float(result_index.item())
-    return result_value.item(), result_index.item(), chksum
+    return result.item()
