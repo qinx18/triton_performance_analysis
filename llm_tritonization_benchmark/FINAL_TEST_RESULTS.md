@@ -1,26 +1,108 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-01 (Scalar Indexing Rule - test5_results.log)
-**Previous Tests:** test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-01 (Regeneration test6_results.log)
+**Previous Tests:** test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 LLM Triton v3 Testing with Scalar Indexing Rule (2025-12-01) - test5_results.log - LATEST RUN
+## 🔬 LLM Triton v3 Regeneration Test (2025-12-01) - test6_results.log - LATEST RUN
 
 ### Summary
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| ✅ **PASSING** | 96 | 63.6% |
-| ❌ **FAILING** | 55 | 36.4% |
+| ✅ **PASSING** | 92 | 60.9% |
+| ❌ **FAILING** | 59 | 39.1% |
 
-### Key Changes: Two Prompt Rules Now Active
+### Key Finding: LLM Non-Determinism Impact
 
-**Prompt Rules Applied:**
+**Same prompt rules as test5, but regenerated all 151 functions to measure variance.**
+
+### Comparison with test5 (Same Prompt, Different Run)
+
+| Metric | test5 | test6 | Change |
+|--------|-------|-------|--------|
+| Passing | 97 (64.2%) | 92 (60.9%) | **-5** |
+| Failing | 54 (35.8%) | 59 (39.1%) | +5 |
+
+### Functions that REGRESSED (test5 → test6):
+| Function | test5 | test6 | Error Type |
+|----------|-------|-------|------------|
+| **s112** | ✓ | ✗ | Numerical error |
+| **s118** | ✓ | ✗ | Numerical error |
+| **s121** | ✓ | ✗ | Compilation error |
+| **s261** | ✓ | ✗ | Numerical error |
+| **s271** | ✓ | ✗ | Numerical error |
+| **s291** | ✓ | ✗ | `break` statement (UnsupportedAST) |
+| **s3110** | ✓ | ✗ | Numerical error |
+| **s331** | ✓ | ✗ | `_builder` error (scalar indexing) |
+| **s343** | ✓ | ✗ | Numerical error |
+| **s4116** | ✓ | ✗ | Numerical error |
+| **s421** | ✓ | ✗ | Numerical error |
+
+### Functions that IMPROVED (test5 → test6):
+| Function | test5 | test6 | Notes |
+|----------|-------|-------|-------|
+| **s1112** | ✗ | ✓ | Was `tl.cdiv` error, now fixed |
+| **s1119** | ✗ | ✓ | Now passes |
+| **s1244** | ✗ | ✓ | Now passes |
+| **s235** | ✗ | ✓ | Now passes |
+| **s242** | ✗ | ✓ | Now passes |
+| **s243** | ✗ | ✓ | Now passes |
+| **s275** | ✗ | ✓ | Now passes |
+
+### Key Observations
+
+1. **Net change: -4 functions** (11 regressed, 7 improved)
+2. **s331 regressed**: The scalar indexing rule was not followed in this regeneration
+3. **s291 regressed**: LLM used `break` statement (unsupported in Triton)
+4. **Variance range**: ~60-65% pass rate with current prompt rules
+
+### Non-Numerical Errors (10 functions - Compilation/Runtime Errors)
+
+| Function | Error Type | Description |
+|----------|------------|-------------|
+| **s174** | MissingArgs | Missing 1 required positional argument: 'M' |
+| **s31111** | TypeError | 'int' object is not callable |
+| **s312** | AttributeError | module 'triton.language' has no attribute 'mul' |
+| **s318** | CompilationError | at 13:12: compilation error |
+| **s332** | MissingArgs | Missing 1 required positional argument: 't_val' |
+| **s351** | MissingArgs | Missing 1 required positional argument: 'c' |
+| **s353** | MissingArgs | Missing 1 required positional argument: 'c' |
+| **s423** | MissingArgs | Missing 1 required positional argument: 'xx' |
+| **s424** | MissingArgs | Missing 1 required positional argument: 'xx' |
+| **s482** | AttributeError | module 'triton.language' has no attribute 'any' |
+
+### Non-Numerical Error Summary by Category
+| Category | Count | Functions |
+|----------|-------|-----------|
+| Missing arguments (LLM signature bugs) | 6 | s174, s332, s351, s353, s423, s424 |
+| Triton API errors (non-existent functions) | 2 | s312, s482 |
+| Compilation errors | 1 | s318 |
+| Other | 1 | s31111 |
+
+### Passing Functions (92):
+s000, s111, s1111, s1112, s1113, s1115, s1119, s113, s114, s115, s116, s1161, s119, s122, s123, s1232, s1244, s125, s1251, s1279, s128, s1281, s131, s13110, s1351, s141, s152, s172, s175, s2101, s211, s212, s221, s222, s2275, s231, s233, s235, s241, s242, s243, s251, s253, s2710, s2711, s2712, s272, s273, s274, s275, s278, s279, s292, s293, s311, s3111, s3112, s3113, s313, s314, s315, s316, s317, s319, s321, s323, s3251, s352, s4112, s4114, s4115, s4117, s4121, s441, s442, s443, s451, s452, s453, s481, va, vag, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failing Functions (59):
+s112, s118, s121, s1213, s1221, s124, s126, s127, s132, s1421, s151, s161, s162, s171, s173, s174, s176, s2102, s2111, s2233, s2244, s2251, s232, s244, s252, s254, s255, s256, s257, s258, s261, s271, s276, s277, s281, s291, s3110, s31111, s312, s318, s322, s331, s332, s341, s342, s343, s351, s353, s4113, s4116, s421, s422, s423, s424, s431, s471, s482, s491, vas
+
+---
+
+## 🔬 LLM Triton v3 Testing with Scalar Indexing Rule (2025-12-01) - test5_results.log
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 97 | 64.2% |
+| ❌ **FAILING** | 54 | 35.8% |
+
+### Prompt Rules Applied (Same as test6)
+
 1. **`tl.arange()` Rule**: Never use `tl.arange()` inside a for loop - define once at kernel start
-2. **Scalar Indexing Rule** (NEW): Never index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations
+2. **Scalar Indexing Rule**: Never index a tensor with a scalar variable inside @triton.jit kernel - use vectorized operations
 
 **Infrastructure Fix:**
 - `ip` array now initialized with `torch.randint(..., dtype=torch.long)` instead of float
@@ -29,8 +111,8 @@
 
 | Metric | test4 (before) | test5 (after) | Change |
 |--------|----------------|---------------|--------|
-| Passing | 96 (63.6%) | 96 (63.6%) | 0 |
-| Failing | 55 (36.4%) | 55 (36.4%) | 0 |
+| Passing | 96 (63.6%) | 97 (64.2%) | +1 |
+| Failing | 55 (36.4%) | 54 (35.8%) | -1 |
 
 ### Key Fixes in test5
 
@@ -44,7 +126,7 @@
 **Remaining Issues:**
 - **vas, s491, s353**: Still fail due to numerical/algorithm issues (scatter operations)
 
-### Non-Numerical Errors (10 functions - Compilation/Runtime Errors)
+### Non-Numerical Errors (9 functions - Compilation/Runtime Errors)
 
 | Function | Error Type | Description |
 |----------|------------|-------------|
@@ -54,23 +136,22 @@
 | **s332** | MissingArgs | Missing 1 required positional argument: 't_val' |
 | **s351** | MissingArgs | Missing 1 required positional argument: 'c' |
 | **s353** | MissingArgs | Missing 1 required positional argument: 'ip' |
-| **s423** | RuntimeError | Tensor size mismatch (expanded size) |
-| **s424** | CUDA Error | Illegal memory access |
+| **s423** | MissingArgs | Missing 1 required positional argument: 'xx' |
+| **s424** | MissingArgs | Missing 1 required positional argument: 'xx' |
 | **s482** | AttributeError | module 'triton.language' has no attribute 'any' |
 
 ### Non-Numerical Error Summary by Category
 | Category | Count | Functions |
 |----------|-------|-----------|
-| Missing arguments (LLM signature bugs) | 4 | s318, s332, s351, s353 |
+| Missing arguments (LLM signature bugs) | 6 | s318, s332, s351, s353, s423, s424 |
 | @triton.jit usage errors | 1 | s1112 |
 | Triton API errors | 1 | s482 |
-| Memory/CUDA errors | 2 | s423, s424 |
 | Other | 1 | s31111 |
 
-### Passing Functions (96):
-s000, s111, s1111, s1113, s1115, s112, s113, s114, s115, s116, s1161, s118, s119, s121, s1221, s122, s123, s1232, s124, s1244, s125, s1251, s127, s1279, s128, s1281, s131, s13110, s1351, s141, s152, s161, s171, s172, s175, s2101, s211, s212, s221, s222, s2233, s2275, s231, s233, s241, s251, s253, s254, s261, s271, s2710, s2711, s2712, s272, s273, s274, s278, s279, s291, s293, s311, s3110, s3111, s3112, s3113, s313, s314, s315, s316, s317, s319, s321, s323, s3251, s331, s343, s352, s4112, s4114, s4115, s4116, s4117, s4121, s421, s441, s442, s443, s451, s453, s481, va, vag, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+### Passing Functions (97):
+s000, s111, s1111, s1113, s1115, s112, s113, s114, s115, s116, s1161, s118, s119, s121, s1221, s122, s123, s1232, s124, s1244, s125, s1251, s127, s1279, s128, s1281, s131, s13110, s1351, s141, s152, s161, s171, s172, s175, s2101, s211, s212, s221, s222, s2233, s2275, s231, s233, s241, s251, s253, s254, s261, s271, s2710, s2711, s2712, s272, s273, s274, s278, s279, s291, s293, s311, s3110, s3111, s3112, s3113, s312, s313, s314, s315, s316, s317, s319, s321, s323, s3251, s331, s343, s352, s4112, s4114, s4115, s4116, s4117, s4121, s421, s441, s442, s443, s451, s453, s481, va, vag, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
 
-### Failing Functions (55):
+### Failing Functions (54):
 s1112, s1119, s1213, s126, s132, s1421, s151, s162, s173, s174, s176, s2102, s2111, s2244, s2251, s232, s235, s242, s243, s244, s252, s255, s256, s257, s258, s275, s276, s277, s281, s292, s31111, s318, s322, s332, s341, s342, s351, s353, s4113, s422, s423, s424, s431, s452, s471, s482, s491, vas
 
 ---
@@ -489,7 +570,8 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 
 | Date | Test | PASS | FAIL | Pass Rate | Notes |
 |------|------|------|------|-----------|-------|
-| **2025-12-01** | **test5** | **96** | **55** | **63.6%** | **+ Scalar indexing rule + ip fix** - s3112, s331 fixed |
+| **2025-12-01** | **test6** | **92** | **59** | **60.9%** | **Regeneration test** - demonstrates LLM variance |
+| 2025-12-01 | test5 | 96 | 55 | 63.6% | + Scalar indexing rule + ip fix - s3112, s331 fixed |
 | 2025-12-01 | test4 | 96 | 55 | 63.6% | + `tl.arange()` rule - s352, s453 fixed |
 | 2025-12-01 | test3 | 97 | 54 | 64.2% | WAR fix applied - s119 now passing |
 | 2025-11-30 | test2 | 101 | 50 | 66.9% | LLM Triton v3 (before WAR fix) |
@@ -503,7 +585,8 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 - test3 fixed WAR detection bug, enabling s119 to pass
 - test4 added `tl.arange()` rule: 2/5 targeted functions fixed (s352, s453)
 - test5 added scalar indexing rule: s3112, s331 fixed; infrastructure fix: s4112, s4114, s4116, vag fixed
-- Net change from test4→test5: 0 (multiple fixes offset by LLM variability)
+- **test6 vs test5**: Same prompt, regenerated all functions → 11 regressed, 7 improved, net -4
+- **Variance range**: Pass rate fluctuates between 60-65% with current prompt rules
 
 ---
 

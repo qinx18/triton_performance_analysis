@@ -805,7 +805,7 @@ for (int nl = 0; nl < 10*iterations; nl++) {
         "has_conditional": False,
         "has_reduction": False,
         "has_2d_arrays": False,
-        "scalar_params": {'m': 'scalar', 'iterations': 'scalar'},
+        "scalar_params": {'M': 'scalar', 'iterations': 'scalar'},
     },
     "s175": {
         "name": "s175",
@@ -1946,7 +1946,7 @@ L5:
         "has_conditional": True,
         "has_reduction": True,
         "has_2d_arrays": False,
-        "scalar_params": {'abs': 'scalar', 'iterations': 'scalar', 'inc': 'scalar'},
+        "scalar_params": {'iterations': 'scalar', 'inc': 'scalar'},
     },
     "s319": {
         "name": "s319",
@@ -2154,12 +2154,12 @@ for (int nl = 0; nl < 8*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'r'},
+        "arrays": {'a': 'rw', 'b': 'r', 'c': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
         "has_2d_arrays": False,
-        "scalar_params": {'iterations': 'scalar', 'alpha': 'scalar'},
+        "scalar_params": {'iterations': 'scalar'},
     },
     "s352": {
         "name": "s352",
@@ -2192,12 +2192,12 @@ for (int nl = 0; nl < iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'r', 'ip': 'r'},
+        "arrays": {'a': 'rw', 'b': 'r', 'c': 'r', 'ip': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
         "has_2d_arrays": False,
-        "scalar_params": {'iterations': 'scalar', 'alpha': 'scalar'},
+        "scalar_params": {'iterations': 'scalar'},
     },
     "s4112": {
         "name": "s4112",
@@ -2358,7 +2358,7 @@ for (int nl = 0; nl < 4*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'r', 'xx': 'r', 'flat_2d_array': 'rw'},
+        "arrays": {'a': 'r', 'flat_2d_array': 'rw'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -2374,7 +2374,7 @@ for (int nl = 0; nl < 4*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'r', 'xx': 'rw', 'flat_2d_array': 'r'},
+        "arrays": {'a': 'r', 'flat_2d_array': 'rw'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,

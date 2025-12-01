@@ -1,22 +1,35 @@
 import torch
 
-def s424_pytorch(a, flat_2d_array, xx):
+def s424_pytorch(a, flat_2d_array):
     """
-    PyTorch implementation of TSVC s424
-    
+    PyTorch implementation of TSVC s424 function.
+
     Original C code:
-    for (int nl = 0; nl < 4*iterations; nl++) {
-        for (int i = 0; i < LEN_1D - 1; i++) {
-            xx[i+1] = flat_2d_array[i] + a[i];
-        }
+    int vl = 63;
+    xx = flat_2d_array + vl;
+    for (int i = 0; i < LEN_1D - 1; i++) {
+        xx[i+1] = flat_2d_array[i] + a[i];
     }
-    
-    Arrays: a (r), flat_2d_array (r), xx (rw)
+
+    This means xx is a pointer to flat_2d_array offset by 63.
+    So: xx[i+1] = flat_2d_array[63 + i + 1] = flat_2d_array[64 + i]
+    Therefore: flat_2d_array[64 + i] = flat_2d_array[i] + a[i]
+
+    Arrays: a (r), flat_2d_array (rw)
     """
     a = a.contiguous()
     flat_2d_array = flat_2d_array.contiguous()
-    xx = xx.contiguous()
-    
-    n = len(a)
-    if n > 0:
-        xx[1:n] = flat_2d_array[:n-1] + a[:n-1]
+
+    vl = 63
+    LEN_1D = a.shape[0]
+
+    # xx points to flat_2d_array + vl (pointer arithmetic)
+    # Loop: for i in [0, LEN_1D-2]
+    #   xx[i+1] = flat_2d_array[i] + a[i]
+    #   which is: flat_2d_array[vl + i + 1] = flat_2d_array[i] + a[i]
+    #   or:       flat_2d_array[64 + i] = flat_2d_array[i] + a[i]
+
+    for i in range(LEN_1D - 1):
+        flat_2d_array[vl + i + 1] = flat_2d_array[i] + a[i]
+
+    return flat_2d_array

@@ -15,6 +15,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List
 
+# Import TSVC functions database for exact signatures
+from tsvc_functions_db import TSVC_FUNCTIONS
+
 # Add PET analysis directory to path
 sys.path.insert(0, "/home/qinxiao/workspace/pet/isl_analysis")
 try:
@@ -172,6 +175,31 @@ def get_pytorch_signature(kernel_name: str) -> Optional[str]:
     if match:
         return match.group(1)
     return None
+
+
+def get_exact_function_signature(kernel_name: str) -> Optional[str]:
+    """Build the exact function signature from the TSVC database.
+
+    Returns the signature with arrays first, then scalar params (excluding 'iterations').
+    Example: "a, b, M" for s174 which has arrays {a, b} and scalar_params {M, iterations}
+    """
+    if kernel_name not in TSVC_FUNCTIONS:
+        return None
+
+    func_info = TSVC_FUNCTIONS[kernel_name]
+    params = []
+
+    # Add array parameters (sorted for consistency)
+    if 'arrays' in func_info:
+        arrays = sorted(func_info['arrays'].keys())
+        params.extend(arrays)
+
+    # Add scalar parameters (excluding 'iterations' which is for benchmarking only)
+    if 'scalar_params' in func_info:
+        scalars = [p for p in sorted(func_info['scalar_params'].keys()) if p != 'iterations']
+        params.extend(scalars)
+
+    return ", ".join(params) if params else None
 
 
 def load_parallelization_analysis(kernel_name: str) -> Optional[dict]:
@@ -450,6 +478,9 @@ def generate_triton_from_tsvc(kernel_name: str) -> tuple:
     # Get PyTorch signature for reference
     pytorch_sig = get_pytorch_signature(kernel_name)
 
+    # Get exact function signature from database
+    exact_sig = get_exact_function_signature(kernel_name)
+
     # Load WAR analysis
     war_result = load_war_analysis(kernel_name)
     war_section = build_war_instructions(kernel_name, war_result)
@@ -498,9 +529,9 @@ Please generate a complete Triton implementation that:
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop in your implementation.
 The `iterations` parameter is only used for benchmarking timing in the original C code - it should NOT be part of the Triton function.
 
-**Correct example**:
+**REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def {kernel_name}_triton(a, b):  # Only array parameters
+def {kernel_name}_triton({exact_sig if exact_sig else 'a, b'}):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -512,9 +543,17 @@ def {kernel_name}_triton(a, b, iterations):  # WRONG: No iterations parameter
 ```
 """
 
-    prompt += """
+    # Build signature instruction
+    sig_instruction = ""
+    if exact_sig:
+        sig_instruction = f"""
+**You MUST use EXACTLY these parameter names: `{exact_sig}`**
+"""
+
+    prompt += f"""
 IMPORTANT:
-- The function should only accept array tensor parameters (a, b, c, etc.) - NO iterations parameter
+{sig_instruction}- Use EXACTLY the parameter names shown in the required function signature above
+- Do NOT rename parameters (e.g., don't use 't_val' if the signature shows 't')
 - Do NOT implement the outer timing loop (for nl = 0; nl < iterations; nl++)
 - If WAR dependencies are shown above, you MUST use the read-only copy pattern
 - If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
@@ -545,6 +584,33 @@ for i in range(BLOCK_SIZE):
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 result = tl.sum(vals, axis=0)  # Use tl.sum, tl.max, etc.
+```
+
+**NEVER use non-existent Triton functions - use Python operators or alternatives:**
+```python
+# ❌ WRONG - these functions don't exist in Triton
+result = tl.mul(a, b)   # ERROR: no attribute 'mul'
+result = tl.div(a, b)   # ERROR: no attribute 'div'
+result = tl.add(a, b)   # ERROR: no attribute 'add'
+result = tl.any(cond)   # ERROR: no attribute 'any'
+
+# ✅ CORRECT - use Python operators or alternatives
+result = a * b   # multiplication
+result = a / b   # division
+result = a + b   # addition
+has_any = tl.sum(cond.to(tl.int32)) > 0  # check if any condition is true
+```
+
+**NEVER use Python lists inside @triton.jit kernels - they cause 'int' object is not callable errors:**
+```python
+# ❌ WRONG - Python lists not supported in Triton kernels
+indices = [0, 4, 8, 12, 16, 20, 24, 28]  # ERROR!
+for idx in indices:  # ERROR: 'int' object is not callable
+    val = tl.load(ptr + idx)
+
+# ✅ CORRECT - use tl.arange and vectorized operations
+offsets = tl.arange(0, BLOCK_SIZE)
+vals = tl.load(ptr + offsets, mask=mask)
 ```
 
 Provide ONLY the Python code, no additional explanation."""

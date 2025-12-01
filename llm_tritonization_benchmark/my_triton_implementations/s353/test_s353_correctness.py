@@ -49,24 +49,26 @@ def test_correctness():
             # Initialize base arrays
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            c = torch.randn(N + 10, device='cuda', dtype=torch.float32)  # alpha = c[0]
             ip = torch.randint(0, N + 10, (N + 10,), device='cuda', dtype=torch.long)
-            alpha = 1  # Scalar parameter (integer)
             iterations = 1  # Scalar parameter (integer)
 
             # Create copies for PyTorch baseline
             a_pt = a.clone()
             b_pt = b.clone()
+            c_pt = c.clone()
             ip_pt = ip.clone()
 
             # Create copies for Triton implementation
             a_tr = a.clone()
             b_tr = b.clone()
+            c_tr = c.clone()
             ip_tr = ip.clone()
 
             # Available tensors and scalars for dynamic argument building
-            pt_tensors = {"a": a_pt, "b": b_pt, "ip": ip_pt}
-            tr_tensors = {"a": a_tr, "b": b_tr, "ip": ip_tr}
-            scalars = {"alpha": alpha, "iterations": iterations}
+            pt_tensors = {"a": a_pt, "b": b_pt, "c": c_pt, "ip": ip_pt}
+            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "ip": ip_tr}
+            scalars = {"iterations": iterations}
 
             # Build argument lists based on actual function signatures
             pt_args = build_args(s353_pytorch, pt_tensors, scalars)

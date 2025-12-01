@@ -1,10 +1,11 @@
 import torch
 
-def s353_pytorch(a, b, ip, alpha):
+def s353_pytorch(a, b, c, ip):
     """
     PyTorch implementation of TSVC s353 - vectorized indirect addressing with unrolling.
-    
+
     Original C code:
+    real_t alpha = c[0];
     for (int nl = 0; nl < iterations; nl++) {
         for (int i = 0; i < LEN_1D; i += 5) {
             a[i] += alpha * b[ip[i]];
@@ -14,16 +15,17 @@ def s353_pytorch(a, b, ip, alpha):
             a[i + 4] += alpha * b[ip[i + 4]];
         }
     }
-    
+
     Args:
         a: read-write tensor
         b: read-only tensor
+        c: read-only tensor (alpha = c[0])
         ip: read-only index tensor
-        alpha: scalar parameter
     """
     a = a.contiguous()
     b = b.contiguous()
     ip = ip.contiguous()
+    alpha = c[0].item()
     
     n = a.size(0)
     

@@ -47,10 +47,12 @@ def test_correctness():
 
         try:
             # Initialize base arrays
-            a = torch.randn(N, device='cuda', dtype=torch.float32)
-            b = torch.randn(N, device='cuda', dtype=torch.float32)
+            # M determines iteration count and offset: a[i+M] = a[i] + b[i]
+            # So array a must be at least 2*M in size
+            M = N // 2
+            a = torch.randn(2 * M, device='cuda', dtype=torch.float32)
+            b = torch.randn(M, device='cuda', dtype=torch.float32)
             iterations = 1  # Scalar parameter (integer)
-            m = 1  # Scalar parameter (integer)
 
             # Create copies for PyTorch baseline
             a_pt = a.clone()
@@ -63,7 +65,7 @@ def test_correctness():
             # Available tensors and scalars for dynamic argument building
             pt_tensors = {"a": a_pt, "b": b_pt}
             tr_tensors = {"a": a_tr, "b": b_tr}
-            scalars = {"iterations": iterations, "m": m}
+            scalars = {"iterations": iterations, "M": M}
 
             # Build argument lists based on actual function signatures
             pt_args = build_args(s174_pytorch, pt_tensors, scalars)
