@@ -49,22 +49,19 @@ def test_correctness():
             # Initialize base arrays
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             flat_2d_array = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)
-            xx = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1  # Scalar parameter (integer)
 
             # Create copies for PyTorch baseline
             a_pt = a.clone()
             flat_2d_array_pt = flat_2d_array.clone()
-            xx_pt = xx.clone()
 
             # Create copies for Triton implementation
             a_tr = a.clone()
             flat_2d_array_tr = flat_2d_array.clone()
-            xx_tr = xx.clone()
 
             # Available tensors and scalars for dynamic argument building
-            pt_tensors = {"a": a_pt, "flat_2d_array": flat_2d_array_pt, "xx": xx_pt}
-            tr_tensors = {"a": a_tr, "flat_2d_array": flat_2d_array_tr, "xx": xx_tr}
+            pt_tensors = {"a": a_pt, "flat_2d_array": flat_2d_array_pt}
+            tr_tensors = {"a": a_tr, "flat_2d_array": flat_2d_array_tr}
             scalars = {"iterations": iterations}
 
             # Build argument lists based on actual function signatures

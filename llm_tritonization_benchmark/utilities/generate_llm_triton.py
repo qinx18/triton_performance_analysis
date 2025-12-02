@@ -580,13 +580,14 @@ The `iterations` parameter is only used for benchmarking timing in the original 
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def {kernel_name}_triton({exact_sig if exact_sig else 'a, b'}):
+def {kernel_name}_triton({exact_sig if exact_sig else ''}):
     ...  # Just the kernel computation, NO timing loop
 ```
+{'**Note: This function takes NO input parameters - it only computes a scalar result.**' if not exact_sig else ''}
 
 **Incorrect example**:
 ```python
-def {kernel_name}_triton(a, b, iterations):  # WRONG: No iterations parameter
+def {kernel_name}_triton({(exact_sig + ', iterations') if exact_sig else 'a, b, iterations'}):  # WRONG: No iterations parameter{', no unused arrays' if not exact_sig else ''}
     for _ in range(iterations):  # WRONG: No timing loop
         ...
 ```
@@ -696,6 +697,56 @@ kernel[grid](ptr, alpha, ...)  # Type error: pointer<fp32> vs float32
 # ✅ CORRECT - extract the scalar value
 alpha = c[0].item()  # Now it's a Python float
 kernel[grid](ptr, alpha, ...)  # Works correctly
+```
+
+**NEVER use Python slicing on Triton tensors - it causes compilation errors:**
+```python
+# ❌ WRONG - Python slicing not supported in Triton
+vals = tl.load(ptr + offsets, mask=mask)
+partial = vals[:4]  # ERROR: unsupported tensor index: slice
+result = vals[0:8]  # ERROR: unsupported tensor index: slice
+
+# ✅ CORRECT - use masks or load exactly what you need
+# If you need first 4 elements, load only 4 elements:
+small_offsets = tl.arange(0, 4)
+vals = tl.load(ptr + small_offsets)  # Load exactly 4 elements
+```
+
+**Pass tensors directly to Triton kernels, NOT data_ptr():**
+```python
+# ❌ WRONG - don't use data_ptr() when calling kernel
+ptr = tensor.data_ptr()
+kernel[grid](ptr, ...)  # ERROR: expects tensor, not int
+
+# ✅ CORRECT - pass tensor directly
+kernel[grid](tensor, ...)  # Triton handles pointer automatically
+```
+
+**NEVER use Python chained comparisons inside @triton.jit kernels - they are NOT supported:**
+```python
+# ❌ WRONG - chained comparison not supported in Triton
+if 1 <= i < n:  # ERROR: simultaneous multiple comparison is not supported
+    ...
+
+# ✅ CORRECT - use separate comparisons with logical AND
+if (i >= 1) & (i < n):  # Use & for element-wise AND
+    ...
+# Or for scalar conditions:
+if i >= 1 and i < n:  # Use 'and' for scalar boolean logic
+    ...
+```
+
+**NEVER load from a bare pointer without an offset vector - always use tl.arange offsets:**
+```python
+# ❌ WRONG - bare pointer load without offset
+val = tl.load(ptr)  # ERROR: compilation error
+val = tl.load(ptr, mask=mask)  # ERROR: mask without offset
+
+# ✅ CORRECT - always use offset vector with pointer
+offsets = tl.arange(0, BLOCK_SIZE)
+vals = tl.load(ptr + offsets, mask=mask)  # Load with offset vector
+# For single element, use offset of 0:
+val = tl.load(ptr + tl.arange(0, 1))  # Load single element
 ```
 
 Provide ONLY the Python code, no additional explanation."""

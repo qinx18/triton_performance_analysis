@@ -48,7 +48,6 @@ def test_correctness():
         try:
             # Initialize base arrays
             a = torch.randn(N, device='cuda', dtype=torch.float32)
-            abs = 1  # Scalar parameter (integer)
             inc = 1  # Scalar parameter (integer)
             iterations = 1  # Scalar parameter (integer)
 
@@ -61,7 +60,7 @@ def test_correctness():
             # Available tensors and scalars for dynamic argument building
             pt_tensors = {"a": a_pt}
             tr_tensors = {"a": a_tr}
-            scalars = {"abs": abs, "inc": inc, "iterations": iterations}
+            scalars = {"inc": inc, "iterations": iterations}
 
             # Build argument lists based on actual function signatures
             pt_args = build_args(s318_pytorch, pt_tensors, scalars)

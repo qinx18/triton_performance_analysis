@@ -49,22 +49,19 @@ def test_correctness():
             # Initialize base arrays
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             flat_2d_array = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)
-            xx = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1  # Scalar parameter (integer)
 
             # Create copies for PyTorch baseline
             a_pt = a.clone()
             flat_2d_array_pt = flat_2d_array.clone()
-            xx_pt = xx.clone()
 
             # Create copies for Triton implementation
             a_tr = a.clone()
             flat_2d_array_tr = flat_2d_array.clone()
-            xx_tr = xx.clone()
 
             # Available tensors and scalars for dynamic argument building
-            pt_tensors = {"a": a_pt, "flat_2d_array": flat_2d_array_pt, "xx": xx_pt}
-            tr_tensors = {"a": a_tr, "flat_2d_array": flat_2d_array_tr, "xx": xx_tr}
+            pt_tensors = {"a": a_pt, "flat_2d_array": flat_2d_array_pt}
+            tr_tensors = {"a": a_tr, "flat_2d_array": flat_2d_array_tr}
             scalars = {"iterations": iterations}
 
             # Build argument lists based on actual function signatures
@@ -78,10 +75,10 @@ def test_correctness():
             s424_triton(*tr_args)
 
             # Compare output arrays directly (in-place modification)
-            max_error = torch.max(torch.abs(xx_pt - xx_tr)).item()
+            max_error = torch.max(torch.abs(flat_2d_array_pt - flat_2d_array_tr)).item()
 
             # Use relative tolerance for numerically unstable algorithms
-            passed = max_error < 1e-3 or torch.allclose(xx_pt, xx_tr, rtol=1e-3, atol=1e-3)
+            passed = max_error < 1e-3 or torch.allclose(flat_2d_array_pt, flat_2d_array_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"✓ PASS  (max_err={max_error:.2e})")
             else:
