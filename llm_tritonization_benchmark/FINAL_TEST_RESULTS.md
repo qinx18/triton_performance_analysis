@@ -1,14 +1,127 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-02 (Regeneration test7_results.log)
-**Previous Tests:** test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-02 (Regeneration test8_results.log)
+**Previous Tests:** test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 LLM Triton v3 Targeted Fixes (2025-12-02) - test7_results.log - LATEST RUN
+## 🔬 LLM Triton v3 Regeneration Test (2025-12-02) - test8_results.log - LATEST RUN
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 102 | 67.5% |
+| ❌ **FAILING** | 49 | 32.5% |
+
+### Key Finding: Prompt Updates and Baseline Fixes
+
+**Full regeneration of all 151 functions with updated prompts and baseline bug fixes. Pass rate: 102/151 (67.5%).**
+
+### Comparison with test7
+
+| Metric | test7 | test8 | Change |
+|--------|-------|-------|--------|
+| Passing | 104 (68.9%) | 102 (67.5%) | **-2** |
+| Failing | 47 (31.1%) | 49 (32.5%) | +2 |
+
+### Functions that REGRESSED (test7 → test8):
+| Function | test7 | test8 | Error Type |
+|----------|-------|-------|------------|
+| **s1232** | ✓ | ✗ | Numerical error |
+| **s152** | ✓ | ✗ | UnsupportedAST: break |
+| **s2102** | ✓ | ✗ | Numerical error |
+| **s212** | ✓ | ✗ | Numerical error |
+| **s2244** | ✓ | ✗ | Numerical error |
+| **s233** | ✓ | ✗ | Numerical error |
+| **s242** | ✓ | ✗ | Numerical error |
+| **s258** | ✓ | ✗ | Numerical error |
+| **s3110** | ✓ | ✗ | AttributeError: constexpr.to() |
+| **s314** | ✓ | ✗ | CompilationError: store after loop |
+| **s319** | ✓ | ✗ | CompilationError: PassManager failed |
+| **s342** | ✓ | ✗ | Numerical error |
+| **s353** | ✓ | ✗ | Numerical error |
+| **s4113** | ✓ | ✗ | Numerical error |
+| **vas** | ✓ | ✗ | ValueError: _builder |
+
+### Functions that IMPROVED (test7 → test8):
+| Function | test7 | test8 | Notes |
+|----------|-------|-------|-------|
+| **s119** | ✗ | ✓ | Prompt/baseline update |
+| **s121** | ✗ | ✓ | Prompt/baseline update |
+| **s1232** | ✗ | ✓ | Prompt/baseline update |
+| **s211** | ✗ | ✓ | Prompt/baseline update |
+| **s251** | ✗ | ✓ | Prompt/baseline update |
+| **s313** | ✗ | ✓ | Prompt/baseline update |
+| **s343** | ✗ | ✓ | Prompt/baseline update |
+| **s421** | ✗ | ✓ | Prompt/baseline update |
+| **s491** | ✗ | ✓ | Prompt/baseline update |
+
+### Non-Numerical Errors (16 functions - Compilation/Runtime Errors)
+
+| Function | Error Type | Description |
+|----------|------------|-------------|
+| **s114** | UnsupportedAST | `break` statement not supported in Triton |
+| **s123** | UnsupportedAST | `break` statement not supported in Triton |
+| **s124** | UnsupportedAST | `break` statement not supported in Triton |
+| **s132** | CompilationError | `tl.arange()` compilation error |
+| **s2251** | TypeError | `cannot add pointers together` |
+| **s257** | ValueError | `unsupported tensor index: constexpr[0]` |
+| **s275** | ValueError | `_builder` argument - scalar indexing in kernel |
+| **s291** | CompilationError | `tl.load` scalar index compilation error |
+| **s292** | UnsupportedAST | `break` statement not supported in Triton |
+| **s3110** | AttributeError | `'constexpr' object has no attribute 'to'` |
+| **s314** | CompilationError | `tl.store` after for loop not allowed |
+| **s319** | CompilationError | `PassManager::run failed` |
+| **s332** | UnsupportedAST | `break` statement not supported in Triton |
+| **s351** | CompilationError | `tl.arange()` compilation error |
+| **s352** | CompilationError | `tl.arange(0, 5)` inside for loop |
+| **s482** | UnsupportedAST | `return` inside for/while not supported |
+| **vas** | ValueError | `_builder` argument - scalar indexing in kernel |
+
+### Non-Numerical Error Summary by Category
+| Category | Count | Functions | Prompt Rule Exists? |
+|----------|-------|-----------|---------------------|
+| UnsupportedAST (break/continue/return) | 7 | s114, s123, s124, s292, s332, s482 | ✅ YES - LLM ignores rule |
+| CompilationError (tl.arange in loop) | 3 | s132, s351, s352 | ✅ YES - LLM ignores rule |
+| ValueError (_builder/scalar indexing) | 2 | s275, vas | ✅ YES - LLM ignores rule |
+| CompilationError (other) | 2 | s314, s319 | ❌ NO - new patterns |
+| TypeError (pointer arithmetic) | 1 | s2251 | ❌ NO - need new rule |
+| ValueError (tensor index constexpr) | 1 | s257 | ✅ Related to scalar indexing |
+| AttributeError (constexpr methods) | 1 | s3110 | ❌ NO - need new rule |
+| CompilationError (scalar load) | 1 | s291 | ✅ Related to scalar indexing |
+
+### Numerical Errors (32 functions)
+| Function | Max Error | Function | Max Error |
+|----------|-----------|----------|-----------|
+| s112 | 1.37e-01 | s1213 | 9.54e+00 |
+| s1221 | 1.02e+02 | s126 | 5.47e+01 |
+| s128 | 1.19e+01 | s141 | 7.76e+00 |
+| s1421 | 7.36e+00 | s151 | 4.13e+00 |
+| s161 | 9.41e+00 | s162 | 2.77e+00 |
+| s176 | 1.13e+02 | s211 | 9.58e+00 |
+| s2111 | 3.68e+09 | s212 | 1.65e+01 |
+| s2244 | (numerical) | s233 | 5.98e+01 |
+| s242 | 1.98e+04 | s244 | 1.19e+01 |
+| s256 | 4.24e+00 | s258 | (numerical) |
+| s261 | 5.88e+00 | s277 | 1.06e+01 |
+| s281 | 1.38e+08 | s322 | 3.17e+18 |
+| s3251 | 1.50e+01 | s341 | 3.17e+00 |
+| s342 | (numerical) | s353 | 2.08e+00 |
+| s4113 | 5.10e+00 | s424 | (numerical) |
+| s431 | (numerical) | s442 | (numerical) |
+
+### Passing Functions (102):
+s000, s111, s1111, s1112, s1113, s1115, s1119, s113, s115, s116, s1161, s118, s119, s121, s122, s1232, s1244, s125, s1251, s127, s1279, s1281, s131, s13110, s1351, s152, s171, s172, s173, s174, s175, s2101, s2102, s221, s222, s2233, s2275, s231, s232, s235, s241, s243, s251, s252, s253, s254, s255, s271, s2710, s2711, s2712, s272, s273, s274, s276, s278, s279, s293, s311, s3111, s31111, s3112, s3113, s312, s313, s315, s316, s317, s318, s321, s323, s331, s343, s4112, s4114, s4115, s4116, s4117, s4121, s421, s422, s423, s441, s443, s451, s452, s453, s471, s481, s491, va, vag, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failing Functions (49):
+s112, s114, s1213, s1221, s123, s124, s126, s128, s132, s141, s1421, s151, s161, s162, s176, s211, s2111, s212, s2244, s2251, s233, s242, s244, s256, s257, s258, s261, s275, s277, s281, s291, s292, s3110, s314, s319, s322, s3251, s332, s341, s342, s351, s352, s353, s4113, s424, s431, s442, s482, vas
+
+---
+
+## 🔬 LLM Triton v3 Targeted Fixes (2025-12-02) - test7_results.log
 
 ### Summary
 | Metric | Count | Percentage |
@@ -722,7 +835,8 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 
 | Date | Test | PASS | FAIL | Pass Rate | Notes |
 |------|------|------|------|-----------|-------|
-| **2025-12-02** | **test7** | **104** | **47** | **68.9%** | **LATEST** - Best pass rate, +12 from test6 |
+| **2025-12-02** | **test8** | **102** | **49** | **67.5%** | **LATEST** - LLM variance, -2 from test7 |
+| 2025-12-02 | test7 | 104 | 47 | 68.9% | Best pass rate, +12 from test6 |
 | 2025-12-01 | test6 | 92 | 59 | 60.9% | Regeneration test - demonstrates LLM variance |
 | 2025-12-01 | test5 | 97 | 54 | 64.2% | + Scalar indexing rule + ip fix - s3112, s331 fixed |
 | 2025-12-01 | test4 | 96 | 55 | 63.6% | + `tl.arange()` rule - s352, s453 fixed |
