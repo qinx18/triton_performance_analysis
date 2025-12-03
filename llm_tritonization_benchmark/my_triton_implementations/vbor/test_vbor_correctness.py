@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Correctness Test for vbor
-Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
 import inspect
@@ -12,18 +11,16 @@ import torch
 
 try:
     from baselines.vbor_baseline import vbor_pytorch
-    from llm_triton.vbor_triton_llm_v3 import vbor_triton
+    from test9.llm_triton.vbor.attempt1 import vbor_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
 def get_func_params(func):
-    """Get the parameter names a function accepts"""
     sig = inspect.signature(func)
     return list(sig.parameters.keys())
 
 def build_args(func, available_tensors, available_scalars):
-    """Build argument list based on what the function actually accepts"""
     params = get_func_params(func)
     args = []
     for p in params:
@@ -34,7 +31,6 @@ def build_args(func, available_tensors, available_scalars):
     return args
 
 def test_correctness():
-    """Test correctness across multiple sizes"""
     test_sizes = [64, 128, 256]
     all_passed = True
 
@@ -46,7 +42,6 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            # Initialize base arrays
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
@@ -54,9 +49,8 @@ def test_correctness():
             d = torch.randn(N, device='cuda', dtype=torch.float32)
             e = torch.randn(N, device='cuda', dtype=torch.float32)
             x = torch.randn(N, device='cuda', dtype=torch.float32)
-            iterations = 1  # Scalar parameter (integer)
+            iterations = 1
 
-            # Create copies for PyTorch baseline
             a_pt = a.clone()
             aa_pt = aa.clone()
             b_pt = b.clone()
@@ -65,7 +59,6 @@ def test_correctness():
             e_pt = e.clone()
             x_pt = x.clone()
 
-            # Create copies for Triton implementation
             a_tr = a.clone()
             aa_tr = aa.clone()
             b_tr = b.clone()
@@ -74,43 +67,36 @@ def test_correctness():
             e_tr = e.clone()
             x_tr = x.clone()
 
-            # Available tensors and scalars for dynamic argument building
             pt_tensors = {"a": a_pt, "aa": aa_pt, "b": b_pt, "c": c_pt, "d": d_pt, "e": e_pt, "x": x_pt}
             tr_tensors = {"a": a_tr, "aa": aa_tr, "b": b_tr, "c": c_tr, "d": d_tr, "e": e_tr, "x": x_tr}
             scalars = {"iterations": iterations}
 
-            # Build argument lists based on actual function signatures
             pt_args = build_args(vbor_pytorch, pt_tensors, scalars)
             tr_args = build_args(vbor_triton, tr_tensors, scalars)
 
-            # Run PyTorch baseline (may modify arrays in-place or return result)
             pytorch_result = vbor_pytorch(*pt_args)
-
-            # Run Triton LLM (modifies arrays in-place)
             vbor_triton(*tr_args)
 
-            # Compare output arrays directly (in-place modification)
             max_error = torch.max(torch.abs(x_pt - x_tr)).item()
 
-            # Use relative tolerance for numerically unstable algorithms
             passed = max_error < 1e-3 or torch.allclose(x_pt, x_tr, rtol=1e-3, atol=1e-3)
             if passed:
-                print(f"✓ PASS  (max_err={max_error:.2e})")
+                print(f"PASS  (max_err={max_error:.2e})")
             else:
-                print(f"✗ FAIL  (max_error={max_error:.2e})")
+                print(f"FAIL  (max_error={max_error:.2e})")
                 all_passed = False
 
         except Exception as e:
-            print(f"✗ ERROR: {e}")
+            print(f"ERROR: {e}")
             import traceback
             traceback.print_exc()
             all_passed = False
 
     print("="*70)
     if all_passed:
-        print("✅ All tests PASSED!")
+        print("All tests PASSED!")
     else:
-        print("❌ Some tests FAILED!")
+        print("Some tests FAILED!")
     print("="*70)
 
     return all_passed

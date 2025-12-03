@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s317
-Tests: PyTorch baseline vs Triton LLM implementation (in-place comparison)
 """
 import sys
 import inspect
@@ -12,18 +11,16 @@ import torch
 
 try:
     from baselines.s317_baseline import s317_pytorch
-    from llm_triton.s317_triton_llm_v3 import s317_triton
+    from test9.llm_triton.s317.attempt1 import s317_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
 def get_func_params(func):
-    """Get the parameter names a function accepts"""
     sig = inspect.signature(func)
     return list(sig.parameters.keys())
 
 def build_args(func, available_tensors, available_scalars):
-    """Build argument list based on what the function actually accepts"""
     params = get_func_params(func)
     args = []
     for p in params:
@@ -34,7 +31,6 @@ def build_args(func, available_tensors, available_scalars):
     return args
 
 def test_correctness():
-    """Test correctness across multiple sizes"""
     test_sizes = [100, 1000, 10000]
     all_passed = True
 
@@ -46,52 +42,42 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            # Initialize base arrays
-            iterations = 1  # Scalar parameter (integer)
+            iterations = 1
 
-            # Create copies for PyTorch baseline
             pass
 
-            # Create copies for Triton implementation
             pass
 
-            # Available tensors and scalars for dynamic argument building
             pt_tensors = {}
             tr_tensors = {}
             scalars = {"iterations": iterations}
 
-            # Build argument lists based on actual function signatures
             pt_args = build_args(s317_pytorch, pt_tensors, scalars)
             tr_args = build_args(s317_triton, tr_tensors, scalars)
 
-            # Run PyTorch baseline (may modify arrays in-place or return result)
             pytorch_result = s317_pytorch(*pt_args)
-
-            # Run Triton LLM (modifies arrays in-place)
             s317_triton(*tr_args)
 
-            # Compare output arrays directly (in-place modification)
-            max_error = 0.0  # No output arrays to compare
+            max_error = 0.0
 
-            # Use relative tolerance for numerically unstable algorithms
-            passed = True  # No output arrays - function runs without error
+            passed = True
             if passed:
-                print(f"✓ PASS  (max_err={max_error:.2e})")
+                print(f"PASS  (max_err={max_error:.2e})")
             else:
-                print(f"✗ FAIL  (max_error={max_error:.2e})")
+                print(f"FAIL  (max_error={max_error:.2e})")
                 all_passed = False
 
         except Exception as e:
-            print(f"✗ ERROR: {e}")
+            print(f"ERROR: {e}")
             import traceback
             traceback.print_exc()
             all_passed = False
 
     print("="*70)
     if all_passed:
-        print("✅ All tests PASSED!")
+        print("All tests PASSED!")
     else:
-        print("❌ Some tests FAILED!")
+        print("Some tests FAILED!")
     print("="*70)
 
     return all_passed

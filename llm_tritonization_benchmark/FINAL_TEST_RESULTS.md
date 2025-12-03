@@ -1,14 +1,100 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-02 (Regeneration test8_results.log)
-**Previous Tests:** test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-03 (Integrated generate_and_test.py - test9)
+**Previous Tests:** test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 LLM Triton v3 Regeneration Test (2025-12-02) - test8_results.log - LATEST RUN
+## 🔬 LLM Triton v3 with Retry Mechanism (2025-12-03) - test9 - LATEST RUN
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 120 | 79.5% |
+| ❌ **FAILING** | 31 | 20.5% |
+
+### Key Finding: Retry Mechanism Significantly Improves Pass Rate
+
+**New integrated pipeline (`generate_and_test.py`) with automatic retry mechanism:**
+- Max 3 attempts per function
+- On failure, provides error feedback to LLM for retry
+- Distinguishes between numerical and non-numerical errors
+
+### Pass Rate by Attempt
+| Attempt | Passed | Cumulative |
+|---------|--------|------------|
+| Attempt 1 | 102 | 102 (67.5%) |
+| Attempt 2 | +18 | 120 (79.5%) |
+| Attempt 3 | +0 | 120 (79.5%) |
+
+**Key Insight:** 18 additional functions passed after error feedback. Attempt 3 yielded no additional fixes, suggesting diminishing returns after 2 retries.
+
+### Comparison with test8
+
+| Metric | test8 | test9 | Change |
+|--------|-------|-------|--------|
+| Passing | 102 (67.5%) | 120 (79.5%) | **+18** |
+| Failing | 49 (32.5%) | 31 (20.5%) | **-18** |
+
+### Functions FIXED by Retry (18 functions - Passed on Attempt 2):
+| Function | Notes |
+|----------|-------|
+| **s112** | Numerical error → fixed |
+| **s122** | Numerical error → fixed |
+| **s124** | Numerical error → fixed |
+| **s128** | Numerical error → fixed |
+| **s1421** | Numerical error → fixed |
+| **s2111** | Numerical error → fixed |
+| **s2233** | Numerical error → fixed |
+| **s2244** | Numerical error → fixed |
+| **s243** | Numerical error → fixed |
+| **s252** | Numerical error → fixed |
+| **s254** | Numerical error → fixed |
+| **s256** | Numerical error → fixed |
+| **s312** | Numerical error → fixed |
+| **s318** | Numerical error → fixed |
+| **s341** | Numerical error → fixed |
+| **s351** | Numerical error → fixed |
+| **s353** | Numerical error → fixed |
+| **s4116** | Numerical error → fixed |
+
+### Failed Functions (31) - ALL Numerical Errors
+
+| Function | Max Error | Function | Max Error |
+|----------|-----------|----------|-----------|
+| s1213 | 4.81e+00 | s1221 | 8.92e+00 |
+| s123 | unknown | s126 | 2.52e+01 |
+| s151 | 1.98e+00 | s161 | 6.28e+00 |
+| s162 | 1.15e+00 | s176 | 1.12e+01 |
+| s2102 | 1.00e+00 | s211 | 4.74e+00 |
+| s2251 | unknown | s232 | unknown |
+| s255 | 1.66e+00 | s257 | unknown |
+| s261 | 5.02e+00 | s275 | unknown |
+| s281 | 5.06e+00 | s291 | unknown |
+| s292 | unknown | s319 | unknown |
+| s322 | 7.97e+01 | s332 | unknown |
+| s342 | unknown | s343 | 4.04e+00 |
+| s4113 | 3.11e+00 | s424 | 4.94e+00 |
+| s431 | 2.13e+00 | s481 | unknown |
+| s482 | 2.05e-01 | s491 | 7.05e+00 |
+| vas | 3.63e+00 | | |
+
+### Non-Numerical Errors: NONE
+
+**All 31 failed functions failed due to numerical errors (incorrect computation results).** No compilation errors, runtime errors, or API usage errors in the final attempts.
+
+### Passing Functions (120):
+s000, s111, s1111, s1112, s1113, s1115, s1119, s112, s113, s114, s115, s116, s1161, s118, s119, s121, s122, s1232, s1244, s124, s125, s1251, s127, s1279, s1281, s128, s131, s13110, s132, s1351, s1421, s141, s152, s171, s172, s173, s174, s175, s2101, s212, s2111, s221, s222, s2233, s2244, s2275, s231, s233, s235, s241, s242, s243, s244, s251, s252, s253, s254, s256, s258, s271, s2710, s2711, s2712, s272, s273, s274, s276, s277, s278, s279, s293, s311, s3110, s3111, s31111, s3112, s3113, s312, s313, s314, s315, s316, s317, s318, s321, s323, s3251, s331, s341, s351, s352, s353, s4112, s4114, s4115, s4116, s4117, s4121, s421, s422, s423, s441, s442, s443, s451, s452, s453, s471, va, vag, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failing Functions (31):
+s1213, s1221, s123, s126, s151, s161, s162, s176, s2102, s211, s2251, s232, s255, s257, s261, s275, s281, s291, s292, s319, s322, s332, s342, s343, s4113, s424, s431, s481, s482, s491, vas
+
+---
+
+## 🔬 LLM Triton v3 Regeneration Test (2025-12-02) - test8_results.log
 
 ### Summary
 | Metric | Count | Percentage |
@@ -835,8 +921,9 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 
 | Date | Test | PASS | FAIL | Pass Rate | Notes |
 |------|------|------|------|-----------|-------|
-| **2025-12-02** | **test8** | **102** | **49** | **67.5%** | **LATEST** - LLM variance, -2 from test7 |
-| 2025-12-02 | test7 | 104 | 47 | 68.9% | Best pass rate, +12 from test6 |
+| **2025-12-03** | **test9** | **120** | **31** | **79.5%** | **LATEST** - Retry mechanism, +18 from test8 |
+| 2025-12-02 | test8 | 102 | 49 | 67.5% | LLM variance, -2 from test7 |
+| 2025-12-02 | test7 | 104 | 47 | 68.9% | Manual fixes, +12 from test6 |
 | 2025-12-01 | test6 | 92 | 59 | 60.9% | Regeneration test - demonstrates LLM variance |
 | 2025-12-01 | test5 | 97 | 54 | 64.2% | + Scalar indexing rule + ip fix - s3112, s331 fixed |
 | 2025-12-01 | test4 | 96 | 55 | 63.6% | + `tl.arange()` rule - s352, s453 fixed |
@@ -853,8 +940,10 @@ The **64.2% pass rate** against C ground truth is the true measure of LLM-genera
 - test4 added `tl.arange()` rule: 2/5 targeted functions fixed (s352, s453)
 - test5 added scalar indexing rule: s3112, s331 fixed; infrastructure fix: s4112, s4114, s4116, vag fixed
 - test6 vs test5: Same prompt, regenerated all functions → 11 regressed, 7 improved, net -4
-- **test7 vs test6**: Same prompt, regenerated all functions → 34 improved, 11 regressed, net **+12**
-- **Variance range**: Pass rate fluctuates between 60-69% with current prompt rules
+- test7 vs test6: Same prompt, regenerated all functions → 34 improved, 11 regressed, net +12
+- **test9 vs test8**: Retry mechanism with error feedback → **+18 functions fixed** (67.5% → 79.5%)
+- **Retry effectiveness**: 18 functions fixed on attempt 2, 0 on attempt 3 (diminishing returns after 2 retries)
+- **All remaining failures are numerical errors** - retry mechanism eliminated all compilation/runtime errors
 
 ---
 

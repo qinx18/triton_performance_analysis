@@ -385,13 +385,44 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
         seq_dim = opt['sequential_dim']
         par_dim = opt['parallel_dim']
         par_type = opt['parallelism_type']
+        triton_strategy = opt.get('triton_strategy', 'MULTI_KERNEL_LAUNCH')
 
         lines.append(f"### Required Strategy: {seq_dim}-sequential, {par_dim}-parallel")
         lines.append("")
-        lines.append("**Implementation Pattern:**")
-        lines.append(f"- Python wrapper: loop over `{seq_dim}` sequentially")
-        lines.append(f"- Triton kernel: parallelize ALL `{par_dim}` values using VECTORIZED operations")
-        lines.append("")
+
+        if triton_strategy == 'SINGLE_KERNEL_INLOOP':
+            # Prefer in-kernel loop - more efficient, single kernel launch
+            lines.append("**Implementation Pattern (SINGLE KERNEL with in-kernel loop):**")
+            lines.append(f"- Python wrapper: launch ONE kernel with `grid = (triton.cdiv({par_dim}_size, BLOCK_SIZE),)`")
+            lines.append(f"- Triton kernel: use `for {seq_dim} in range(...)` loop INSIDE the kernel")
+            lines.append(f"- Triton kernel: parallelize `{par_dim}` values using VECTORIZED operations within each block")
+            lines.append("")
+            lines.append("**Why in-kernel loop is safe:**")
+            lines.append(f"- The sequential dimension `{seq_dim}` has dependencies that require ordering")
+            lines.append(f"- But within each `{seq_dim}` iteration, all `{par_dim}` values are independent")
+            lines.append(f"- Reading from previous `{seq_dim}` iteration is safe because the in-kernel loop ensures ordering")
+            lines.append("")
+            lines.append("**Example structure:**")
+            lines.append("```python")
+            lines.append("@triton.jit")
+            lines.append(f"def kernel(...):")
+            lines.append(f"    {par_dim}_offsets = tl.arange(0, BLOCK_SIZE)")
+            lines.append(f"    {par_dim}_idx = pid * BLOCK_SIZE + {par_dim}_offsets")
+            lines.append(f"    for {seq_dim} in range(start, end):  # Sequential loop INSIDE kernel")
+            lines.append(f"        # Load, compute, store for this {seq_dim} iteration")
+            lines.append("        ...")
+            lines.append("")
+            lines.append(f"# Wrapper: single kernel launch!")
+            lines.append(f"grid = (triton.cdiv({par_dim}_size, BLOCK_SIZE),)")
+            lines.append("kernel[grid](...)")
+            lines.append("```")
+            lines.append("")
+        else:
+            # Fallback to sequential kernel launches
+            lines.append("**Implementation Pattern (Sequential kernel launches):**")
+            lines.append(f"- Python wrapper: loop over `{seq_dim}` sequentially, launching kernel each iteration")
+            lines.append(f"- Triton kernel: parallelize ALL `{par_dim}` values using VECTORIZED operations")
+            lines.append("")
 
         if par_type == 'reduction':
             lines.append(f"**Reduction pattern:** Use `tl.sum()` to reduce across {par_dim} dimension")
@@ -712,8 +743,8 @@ Provide ONLY the complete Python code, no explanation."""
         return None
 
 
-def generate_correctness_test(func_name: str, func_spec: dict) -> str:
-    """Generate correctness test script."""
+def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1) -> str:
+    """Generate correctness test script for a specific attempt."""
     arrays = func_spec['arrays']
     has_offset = func_spec['has_offset']
     has_2d = func_spec.get('has_2d_arrays', False)
@@ -804,7 +835,7 @@ import torch
 
 try:
     from baselines.{func_name}_baseline import {func_name}_pytorch
-    from test9.llm_triton.{func_name}_triton_llm_v3 import {func_name}_triton
+    from test9.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -973,17 +1004,24 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     baselines_dir = Path("baselines")
     test9_dir = Path("test9")
     llm_triton_dir = test9_dir / "llm_triton"
-    raw_responses_dir = llm_triton_dir / "raw_responses"
+    func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
+    func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
     test_dir = Path("my_triton_implementations") / func_name
 
     baselines_dir.mkdir(exist_ok=True)
     test9_dir.mkdir(exist_ok=True)
     llm_triton_dir.mkdir(exist_ok=True)
-    raw_responses_dir.mkdir(exist_ok=True)
+    func_code_dir.mkdir(exist_ok=True)
+    (llm_triton_dir / "raw_responses").mkdir(exist_ok=True)
+    func_raw_dir.mkdir(exist_ok=True)
     test_dir.mkdir(exist_ok=True, parents=True)
 
+    # Create __init__.py files to make directories importable
+    (test9_dir / "__init__.py").touch()
+    (llm_triton_dir / "__init__.py").touch()
+    (func_code_dir / "__init__.py").touch()
+
     baseline_file = baselines_dir / f"{func_name}_baseline.py"
-    triton_file = llm_triton_dir / f"{func_name}_triton_llm_v3.py"
     test_file = test_dir / f"test_{func_name}_correctness.py"
 
     results = {
@@ -1011,43 +1049,46 @@ def process_function(func_name: str, func_spec: dict) -> dict:
             print(f"  Failed to generate baseline")
             return results
 
-    # Step 2: Generate correctness test
-    print(f"  Generating correctness test...")
-    test_code = generate_correctness_test(func_name, func_spec)
-    with open(test_file, 'w') as f:
-        f.write(test_code)
-    test_file.chmod(0o755)
-    results["test_generated"] = True
-
-    # Step 3: Generate Triton with retry loop
+    # Step 2: Generate Triton with retry loop
     original_prompt = None
     last_code = None
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         results["attempts"] = attempt
 
+        # File paths for this attempt
+        triton_file = func_code_dir / f"attempt{attempt}.py"
+        raw_file = func_raw_dir / f"attempt{attempt}.txt"
+
         try:
             if attempt == 1:
                 # Initial generation
                 triton_code, original_prompt, full_response = generate_triton_initial(func_name)
-
-                # Save raw response
-                raw_file = raw_responses_dir / f"{func_name}_raw_response_v3.txt"
-                with open(raw_file, 'w') as f:
-                    f.write(full_response)
             else:
                 # Retry with error feedback
                 triton_code, retry_prompt = generate_triton_with_retry(
                     func_name, original_prompt, last_code, error_info, attempt
                 )
+                full_response = retry_prompt + "\n\n" + "=" * 80 + "\nRESPONSE:\n" + "=" * 80 + "\n" + triton_code
 
             last_code = triton_code
+
+            # Save raw response
+            with open(raw_file, 'w') as f:
+                f.write(full_response)
 
             # Save Triton code
             with open(triton_file, 'w') as f:
                 f.write(triton_code)
             print(f"  Saved Triton code to: {triton_file}")
             results["triton_generated"] = True
+
+            # Generate correctness test for this attempt
+            test_code = generate_correctness_test(func_name, func_spec, attempt)
+            with open(test_file, 'w') as f:
+                f.write(test_code)
+            test_file.chmod(0o755)
+            results["test_generated"] = True
 
             # Run test
             print(f"  Running correctness test (attempt {attempt}/{MAX_ATTEMPTS})...")
