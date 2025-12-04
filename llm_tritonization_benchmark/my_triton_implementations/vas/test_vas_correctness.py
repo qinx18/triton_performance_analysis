@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vas_baseline import vas_pytorch
-    from test9.llm_triton.vas.attempt3 import vas_triton
+    from test10.llm_triton.vas.attempt3 import vas_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

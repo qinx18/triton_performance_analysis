@@ -835,7 +835,7 @@ import torch
 
 try:
     from baselines.{func_name}_baseline import {func_name}_pytorch
-    from test9.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test10.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1002,14 +1002,14 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"{'=' * 70}")
 
     baselines_dir = Path("baselines")
-    test9_dir = Path("test9")
-    llm_triton_dir = test9_dir / "llm_triton"
+    test10_dir = Path("test10")
+    llm_triton_dir = test10_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
     test_dir = Path("my_triton_implementations") / func_name
 
     baselines_dir.mkdir(exist_ok=True)
-    test9_dir.mkdir(exist_ok=True)
+    test10_dir.mkdir(exist_ok=True)
     llm_triton_dir.mkdir(exist_ok=True)
     func_code_dir.mkdir(exist_ok=True)
     (llm_triton_dir / "raw_responses").mkdir(exist_ok=True)
@@ -1017,7 +1017,7 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     test_dir.mkdir(exist_ok=True, parents=True)
 
     # Create __init__.py files to make directories importable
-    (test9_dir / "__init__.py").touch()
+    (test10_dir / "__init__.py").touch()
     (llm_triton_dir / "__init__.py").touch()
     (func_code_dir / "__init__.py").touch()
 
