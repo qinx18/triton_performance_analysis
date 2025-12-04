@@ -37,6 +37,30 @@ except ImportError:
     HAS_WAR_ANALYSIS = False
     analyze_kernel_war = None
 
+try:
+    from compute_statement_overwrites import analyze_kernel_overwrites, format_overwrite_for_prompt
+    HAS_OVERWRITE_ANALYSIS = True
+except ImportError:
+    HAS_OVERWRITE_ANALYSIS = False
+    analyze_kernel_overwrites = None
+    format_overwrite_for_prompt = None
+
+try:
+    from compute_stream_compaction import analyze_kernel_stream_compaction, format_stream_compaction_for_prompt
+    HAS_STREAM_COMPACTION_ANALYSIS = True
+except ImportError:
+    HAS_STREAM_COMPACTION_ANALYSIS = False
+    analyze_kernel_stream_compaction = None
+    format_stream_compaction_for_prompt = None
+
+try:
+    from compute_pointer_aliasing import analyze_kernel_aliasing, format_aliasing_for_prompt
+    HAS_POINTER_ALIASING_ANALYSIS = True
+except ImportError:
+    HAS_POINTER_ALIASING_ANALYSIS = False
+    analyze_kernel_aliasing = None
+    format_aliasing_for_prompt = None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 
@@ -64,6 +88,30 @@ HELPER_FUNCTIONS = {
     return a*b;
 }""",
         "description": "Returns the product of a and b (a*b)"
+    },
+    "s151s": {
+        "code": """void s151s(real_t a[LEN_1D], real_t b[LEN_1D], int m)
+{
+    for (int i = 0; i < LEN_1D-1; i++) {
+        a[i] = a[i + m] + b[i];
+    }
+}""",
+        "description": "For each i in 0..LEN_1D-2: a[i] = a[i+m] + b[i]. Shifts and adds."
+    },
+    "s152s": {
+        "code": """void s152s(real_t a[LEN_1D], real_t b[LEN_1D], real_t c[LEN_1D], int i)
+{
+    a[i] += b[i] * c[i];
+}""",
+        "description": "Updates single element: a[i] += b[i] * c[i]"
+    },
+    "s471s": {
+        "code": """int s471s(void)
+{
+// --  dummy subroutine call made in s471
+    return 0;
+}""",
+        "description": "Dummy subroutine call, returns 0. Used to test call overhead."
     }
 }
 
@@ -352,6 +400,97 @@ def {kernel_name}_triton(...):
     return instructions
 
 
+def load_overwrite_analysis(kernel_name: str) -> Optional[dict]:
+    """Load statement overwrite analysis for a kernel."""
+    if not HAS_OVERWRITE_ANALYSIS or analyze_kernel_overwrites is None:
+        return None
+
+    kernel_file = os.path.join(KERNELS_DIR, f"{kernel_name}.c")
+    if not os.path.exists(kernel_file):
+        return None
+
+    try:
+        return analyze_kernel_overwrites(kernel_file)
+    except Exception:
+        return None
+
+
+def build_overwrite_instructions(kernel_name: str, overwrite_result: dict) -> str:
+    """Build specific instructions for handling statement overwrite patterns."""
+    if not overwrite_result or not overwrite_result.get('applicable'):
+        return ""
+
+    # Use the formatted advice from the module
+    if format_overwrite_for_prompt:
+        formatted = format_overwrite_for_prompt(overwrite_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
+def load_stream_compaction_analysis(kernel_name: str) -> Optional[dict]:
+    """Load stream compaction analysis for a kernel."""
+    if not HAS_STREAM_COMPACTION_ANALYSIS or analyze_kernel_stream_compaction is None:
+        return None
+
+    kernel_file = os.path.join(KERNELS_DIR, f"{kernel_name}.c")
+    if not os.path.exists(kernel_file):
+        return None
+
+    try:
+        return analyze_kernel_stream_compaction(kernel_file)
+    except Exception:
+        return None
+
+
+def build_stream_compaction_instructions(kernel_name: str, compaction_result: dict) -> str:
+    """Build specific instructions for handling stream compaction patterns."""
+    if not compaction_result or not compaction_result.get('applicable'):
+        return ""
+
+    # Use the formatted advice from the module
+    if format_stream_compaction_for_prompt:
+        formatted = format_stream_compaction_for_prompt(compaction_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
+def load_pointer_aliasing_analysis(kernel_name: str) -> Optional[dict]:
+    """Load pointer aliasing analysis for a kernel."""
+    if not HAS_POINTER_ALIASING_ANALYSIS or analyze_kernel_aliasing is None:
+        return None
+
+    kernel_file = os.path.join(KERNELS_DIR, f"{kernel_name}.c")
+    if not os.path.exists(kernel_file):
+        return None
+
+    try:
+        return analyze_kernel_aliasing(kernel_file)
+    except Exception:
+        return None
+
+
+def build_pointer_aliasing_instructions(kernel_name: str, aliasing_result: dict) -> str:
+    """Build specific instructions for handling pointer aliasing patterns."""
+    if not aliasing_result:
+        return ""
+
+    # Only include instructions for non-fully-parallel patterns
+    if aliasing_result.get('pattern_type') == 'fully_parallel':
+        return ""
+
+    # Use the formatted advice from the module
+    if format_aliasing_for_prompt:
+        formatted = format_aliasing_for_prompt(aliasing_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
 def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict]) -> str:
     """Build specific instructions for parallelization strategy."""
     if not analysis:
@@ -438,7 +577,8 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
 
 
 def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
-                      war_section: str, par_section: str) -> str:
+                      war_section: str, par_section: str, overwrite_section: str = "",
+                      compaction_section: str = "", aliasing_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -471,7 +611,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{war_section}{par_section}
+{helper_section}{war_section}{par_section}{overwrite_section}{compaction_section}{aliasing_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -637,8 +777,14 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     war_section = build_war_instructions(kernel_name, war_result)
     par_analysis = load_parallelization_analysis(kernel_name)
     par_section = build_parallelization_instructions(kernel_name, par_analysis)
+    overwrite_result = load_overwrite_analysis(kernel_name)
+    overwrite_section = build_overwrite_instructions(kernel_name, overwrite_result)
+    compaction_result = load_stream_compaction_analysis(kernel_name)
+    compaction_section = build_stream_compaction_instructions(kernel_name, compaction_result)
+    aliasing_result = load_pointer_aliasing_analysis(kernel_name)
+    aliasing_section = build_pointer_aliasing_instructions(kernel_name, aliasing_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
@@ -759,7 +905,8 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
     for arr, mode in sorted(arrays.items()):
         if mode in ['r', 'rw', 'w']:
             if arr == 'ip':
-                array_inits.append(f"            {arr} = torch.randint(0, {size_expr}, ({size_expr},), device='cuda', dtype=torch.long)")
+                # TSVC uses permutation (unique indices) - see common.c init()
+                array_inits.append(f"            {arr} = torch.randperm({size_expr}, device='cuda', dtype=torch.long)")
             elif has_2d and len(arr) == 2 and arr[0] == arr[1]:
                 array_inits.append(f"            {arr} = torch.randn({size_expr}, {size_expr}, device='cuda', dtype=torch.float32)")
             elif arr == 'flat_2d_array':
@@ -767,12 +914,16 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
                     array_inits.append(f"            {arr} = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)")
                 else:
                     array_inits.append(f"            {arr} = torch.randn(N * N, device='cuda', dtype=torch.float32)")
+            elif arr == 'd' and func_name == 's481':
+                # s481: d must be non-negative to avoid exit(0) in original C code
+                array_inits.append(f"            {arr} = torch.abs(torch.randn({size_expr}, device='cuda', dtype=torch.float32))")
             else:
                 array_inits.append(f"            {arr} = torch.randn({size_expr}, device='cuda', dtype=torch.float32)")
 
     for scalar_name in sorted(scalar_params.keys()):
         if scalar_name == 'k':
-            array_inits.append(f"            {scalar_name} = 5")
+            # Note: TSVC s431 uses k = 2*k1 - k2 = 2*1 - 2 = 0
+            array_inits.append(f"            {scalar_name} = 0")
         elif scalar_name == 't':
             array_inits.append(f"            {scalar_name} = 0.5")
         elif scalar_name in ['n1', 'n3']:

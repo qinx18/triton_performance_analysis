@@ -42,11 +42,11 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            a = torch.randn(N, device='cuda', dtype=torch.float32)
+            b = torch.randn(N, device='cuda', dtype=torch.float32)
+            c = torch.randn(N, device='cuda', dtype=torch.float32)
             iterations = 1
-            m = 1
+            # Note: m = LEN_1D/2 is computed internally, not passed as parameter
 
             a_pt = a.clone()
             b_pt = b.clone()
@@ -58,7 +58,7 @@ def test_correctness():
 
             pt_tensors = {"a": a_pt, "b": b_pt, "c": c_pt}
             tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr}
-            scalars = {"iterations": iterations, "m": m}
+            scalars = {"iterations": iterations}
 
             pt_args = build_args(s176_pytorch, pt_tensors, scalars)
             tr_args = build_args(s176_triton, tr_tensors, scalars)

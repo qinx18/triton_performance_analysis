@@ -3,28 +3,22 @@ import torch
 def s152_pytorch(a, b, c, d, e):
     """
     PyTorch implementation of TSVC s152 kernel.
-    
+
     Original C code:
     for (int nl = 0; nl < iterations; nl++) {
         for (int i = 0; i < LEN_1D; i++) {
             b[i] = d[i] * e[i];
-            s152s(a, b, c, i);
+            s152s(a, b, c, i);  // s152s does: a[i] += b[i] * c[i]
         }
     }
-    
-    Note: This implementation assumes s152s function behavior needs to be inferred
-    from context or implemented separately.
+
+    Helper function s152s:
+    void s152s(real_t a[LEN_1D], real_t b[LEN_1D], real_t c[LEN_1D], int i) {
+        a[i] += b[i] * c[i];
+    }
     """
-    a = a.contiguous()
-    b = b.contiguous()
-    c = c.contiguous()
-    d = d.contiguous()
-    e = e.contiguous()
-    
-    LEN_1D = b.size(0)
-    
-    for i in range(LEN_1D):
-        b[i] = d[i] * e[i]
-        # s152s(a, b, c, i) - function call not implemented
-        # This would need the actual implementation of s152s function
-        pass
+    # First compute b = d * e
+    b[:] = d * e
+
+    # Then a += b * c (this is what s152s does for each element)
+    a[:] = a + b * c

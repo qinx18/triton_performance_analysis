@@ -45,7 +45,8 @@ def test_correctness():
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             c = torch.randn(N, device='cuda', dtype=torch.float32)
-            d = torch.randn(N, device='cuda', dtype=torch.float32)
+            # d must be non-negative to avoid exit(0) in original C code
+            d = torch.abs(torch.randn(N, device='cuda', dtype=torch.float32))
             iterations = 1
 
             a_pt = a.clone()

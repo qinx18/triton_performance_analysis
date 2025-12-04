@@ -45,7 +45,7 @@ def test_correctness():
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             iterations = 1
-            k = 5
+            k = N // 2  # Original TSVC: k = LEN_1D/2
 
             a_pt = a.clone()
             b_pt = b.clone()

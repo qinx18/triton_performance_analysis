@@ -547,7 +547,7 @@ for (int nl = 0; nl < 4*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r', 'd': 'r', 'e': 'r', 'x': 'r'},
+        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r', 'd': 'r', 'e': 'r'},  # x is local scalar, not parameter
         "has_offset": False,
         "has_conditional": False,
         "has_reduction": False,
@@ -1271,7 +1271,7 @@ for (int nl = 0; nl < iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'r', 'x': 'r'},
+        "arrays": {'a': 'rw', 'b': 'r'},  # x and y are local scalars, not parameters
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -1628,7 +1628,7 @@ for (int nl = 0; nl < iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r', 'x': 'r'},
+        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r'},  # x is local scalar, not parameter
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,

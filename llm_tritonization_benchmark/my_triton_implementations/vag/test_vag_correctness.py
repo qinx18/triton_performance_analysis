@@ -44,7 +44,7 @@ def test_correctness():
         try:
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
-            ip = torch.randint(0, N, (N,), device='cuda', dtype=torch.long)
+            ip = torch.randperm(N, device='cuda', dtype=torch.long)
             iterations = 1
 
             a_pt = a.clone()
