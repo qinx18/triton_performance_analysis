@@ -61,16 +61,46 @@ except ImportError:
     analyze_kernel_aliasing = None
     format_aliasing_for_prompt = None
 
+try:
+    from compute_parallel_dims import analyze_kernel_parallelization
+    HAS_PARALLELIZATION_ANALYSIS = True
+except ImportError:
+    HAS_PARALLELIZATION_ANALYSIS = False
+    analyze_kernel_parallelization = None
+
+try:
+    from compute_crossing_threshold import analyze_kernel_crossing_threshold, format_crossing_threshold_for_prompt
+    HAS_CROSSING_THRESHOLD_ANALYSIS = True
+except ImportError:
+    HAS_CROSSING_THRESHOLD_ANALYSIS = False
+    analyze_kernel_crossing_threshold = None
+    format_crossing_threshold_for_prompt = None
+
+try:
+    from compute_loop_unrolling import analyze_kernel_loop_unrolling, format_unrolling_for_prompt
+    HAS_LOOP_UNROLLING_ANALYSIS = True
+except ImportError:
+    HAS_LOOP_UNROLLING_ANALYSIS = False
+    analyze_kernel_loop_unrolling = None
+    format_unrolling_for_prompt = None
+
+try:
+    from compute_early_exit import analyze_kernel_early_exit, format_early_exit_for_prompt
+    HAS_EARLY_EXIT_ANALYSIS = True
+except ImportError:
+    HAS_EARLY_EXIT_ANALYSIS = False
+    analyze_kernel_early_exit = None
+    format_early_exit_for_prompt = None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 
 # Paths
 TSVC_SOURCE = "/home/qinxiao/workspace/TSVC_2/src/archive/tsvc_orig.c"
 KERNELS_DIR = "/home/qinxiao/workspace/pet/isl_analysis/kernels"
-PARALLEL_DIMS_ANALYSIS_FILE = "/home/qinxiao/workspace/pet/isl_analysis/results/parallel_dims_analysis.txt"
 BASELINES_DIR = Path("baselines")
 
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 10
 
 # Helper functions defined in TSVC
 HELPER_FUNCTIONS = {
@@ -265,82 +295,11 @@ def get_exact_function_signature(kernel_name: str) -> Optional[str]:
 
 
 def load_parallelization_analysis(kernel_name: str) -> Optional[dict]:
-    """Load parallelization analysis for a kernel."""
-    if not os.path.exists(PARALLEL_DIMS_ANALYSIS_FILE):
+    """Run parallelization analysis for a kernel on-the-fly."""
+    if not HAS_PARALLELIZATION_ANALYSIS or analyze_kernel_parallelization is None:
         return None
 
-    with open(PARALLEL_DIMS_ANALYSIS_FILE, 'r') as f:
-        content = f.read()
-
-    eq40 = '=' * 40
-    eq80 = '=' * 80
-    pattern = rf'{re.escape(eq40)}\nKernel: {re.escape(kernel_name)}\n{re.escape(eq40)}\n(.*?)(?=\n{re.escape(eq40)}\nKernel:|\n\n{re.escape(eq80)}|$)'
-    match = re.search(pattern, content, re.DOTALL)
-
-    if not match:
-        return None
-
-    section = match.group(1).strip()
-    result = {
-        'kernel': kernel_name,
-        'c_code': '',
-        'dims': [],
-        'is_triangular': False,
-        'triangular_info': None,
-        'self_dependencies': [],
-        'options': [],
-        'summary': ''
-    }
-
-    c_match = re.search(r'C Code: (.*?)(?=\n\nStatement|\n\n|$)', section, re.DOTALL)
-    if c_match:
-        result['c_code'] = c_match.group(1).strip()
-
-    dims_match = re.search(r'Dimensions: \[(.*?)\]', section)
-    if dims_match:
-        result['dims'] = [d.strip().strip("'") for d in dims_match.group(1).split(',')]
-
-    tri_match = re.search(r'Triangular bounds: (\w+) < (\w+)', section)
-    if tri_match:
-        result['is_triangular'] = True
-        result['triangular_info'] = {'smaller': tri_match.group(1), 'larger': tri_match.group(2)}
-
-    deps_match = re.findall(r'- (\w+): write \[(.*?)\], read \[(.*?)\]', section)
-    for arr, write_expr, read_expr in deps_match:
-        result['self_dependencies'].append({
-            'array': arr,
-            'write_expr': write_expr,
-            'read_expr': read_expr
-        })
-
-    opts_section = re.search(r'Parallelization Options:(.*?)(?=\n\n  SUMMARY|\n\n\n|\n\n$)', section, re.DOTALL)
-    if opts_section:
-        opt_lines = opts_section.group(1).split('\n')
-        current_opt = None
-
-        for line in opt_lines:
-            opt_match = re.match(r'\s*(\w+)-sequential,\s*(\w+)-parallel:\s*(VALID|INVALID)\s*\((\w+)\)', line)
-            if opt_match:
-                current_opt = {
-                    'sequential_dim': opt_match.group(1),
-                    'parallel_dim': opt_match.group(2),
-                    'valid': opt_match.group(3) == 'VALID',
-                    'parallelism_type': opt_match.group(4),
-                    'triton_strategy': None,
-                    'issues': [],
-                    'explanations': []
-                }
-                result['options'].append(current_opt)
-            elif current_opt and 'Triton Strategy:' in line:
-                strat_match = re.search(r'Triton Strategy:\s*(\S+)', line)
-                if strat_match:
-                    current_opt['triton_strategy'] = strat_match.group(1)
-
-    summary_match = re.search(r'SUMMARY: (.+)', section)
-    if summary_match:
-        result['summary'] = summary_match.group(1).strip()
-
-    return result
+    return analyze_kernel_parallelization(kernel_name)
 
 
 def load_war_analysis(kernel_name: str) -> Optional[dict]:
@@ -491,6 +450,81 @@ def build_pointer_aliasing_instructions(kernel_name: str, aliasing_result: dict)
     return ""
 
 
+def load_crossing_threshold_analysis(kernel_name: str) -> Optional[dict]:
+    """Load crossing threshold analysis for a kernel."""
+    if not HAS_CROSSING_THRESHOLD_ANALYSIS or analyze_kernel_crossing_threshold is None:
+        return None
+
+    try:
+        return analyze_kernel_crossing_threshold(kernel_name)
+    except Exception:
+        return None
+
+
+def build_crossing_threshold_instructions(kernel_name: str, threshold_result: dict) -> str:
+    """Build specific instructions for handling crossing threshold patterns."""
+    if not threshold_result or not threshold_result.get('applicable'):
+        return ""
+
+    # Use the formatted advice from the module
+    if format_crossing_threshold_for_prompt:
+        formatted = format_crossing_threshold_for_prompt(threshold_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
+def load_loop_unrolling_analysis(kernel_name: str) -> Optional[dict]:
+    """Load loop unrolling analysis for a kernel."""
+    if not HAS_LOOP_UNROLLING_ANALYSIS or analyze_kernel_loop_unrolling is None:
+        return None
+
+    try:
+        return analyze_kernel_loop_unrolling(kernel_name)
+    except Exception:
+        return None
+
+
+def build_loop_unrolling_instructions(kernel_name: str, unrolling_result: dict) -> str:
+    """Build specific instructions for handling loop unrolling patterns."""
+    if not unrolling_result or not unrolling_result.get('applicable'):
+        return ""
+
+    # Use the formatted advice from the module
+    if format_unrolling_for_prompt:
+        formatted = format_unrolling_for_prompt(unrolling_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
+def load_early_exit_analysis(kernel_name: str) -> Optional[dict]:
+    """Load early exit analysis for a kernel."""
+    if not HAS_EARLY_EXIT_ANALYSIS or analyze_kernel_early_exit is None:
+        return None
+
+    try:
+        return analyze_kernel_early_exit(kernel_name)
+    except Exception:
+        return None
+
+
+def build_early_exit_instructions(kernel_name: str, early_exit_result: dict) -> str:
+    """Build specific instructions for handling early exit patterns."""
+    if not early_exit_result or not early_exit_result.get('applicable'):
+        return ""
+
+    # Use the formatted advice from the module
+    if format_early_exit_for_prompt:
+        formatted = format_early_exit_for_prompt(early_exit_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
 def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict]) -> str:
     """Build specific instructions for parallelization strategy."""
     if not analysis:
@@ -578,7 +612,9 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
 
 def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       war_section: str, par_section: str, overwrite_section: str = "",
-                      compaction_section: str = "", aliasing_section: str = "") -> str:
+                      compaction_section: str = "", aliasing_section: str = "",
+                      crossing_threshold_section: str = "", loop_unrolling_section: str = "",
+                      early_exit_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -611,7 +647,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{war_section}{par_section}{overwrite_section}{compaction_section}{aliasing_section}
+{helper_section}{war_section}{par_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{loop_unrolling_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -783,8 +819,14 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     compaction_section = build_stream_compaction_instructions(kernel_name, compaction_result)
     aliasing_result = load_pointer_aliasing_analysis(kernel_name)
     aliasing_section = build_pointer_aliasing_instructions(kernel_name, aliasing_result)
+    crossing_threshold_result = load_crossing_threshold_analysis(kernel_name)
+    crossing_threshold_section = build_crossing_threshold_instructions(kernel_name, crossing_threshold_result)
+    loop_unrolling_result = load_loop_unrolling_analysis(kernel_name)
+    loop_unrolling_section = build_loop_unrolling_instructions(kernel_name, loop_unrolling_result)
+    early_exit_result = load_early_exit_analysis(kernel_name)
+    early_exit_section = build_early_exit_instructions(kernel_name, early_exit_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
@@ -1256,8 +1298,15 @@ def process_function(func_name: str, func_spec: dict) -> dict:
                 print(f"    {error_msg[:100]}...")
                 results["final_error"] = error_info
 
-                if attempt < MAX_ATTEMPTS:
-                    print(f"  Will retry with error feedback...")
+                # From attempt 3 onwards: stop on numerical errors, continue on compilation errors
+                if attempt >= 3 and error_type == 'numerical':
+                    print(f"  Numerical error after {attempt} attempts. Moving to next function.")
+                    break
+                elif attempt < MAX_ATTEMPTS:
+                    if error_type == 'numerical':
+                        print(f"  Will retry with error feedback (numerical error)...")
+                    else:
+                        print(f"  Will retry with error feedback ({error_type})...")
                 else:
                     print(f"  Max attempts ({MAX_ATTEMPTS}) reached. Moving to next function.")
 

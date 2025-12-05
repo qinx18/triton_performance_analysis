@@ -1,14 +1,110 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-04 (Integrated generate_and_test.py - test10)
-**Previous Tests:** test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-05 (Integrated generate_and_test.py - test11)
+**Previous Tests:** test10, test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 LLM Triton v3 with Retry Mechanism (2025-12-04) - test10 - LATEST RUN
+## 🔬 LLM Triton v3 with Retry Mechanism (2025-12-05) - test11 - LATEST RUN
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 137 | 90.7% |
+| ❌ **FAILING** | 14 | 9.3% |
+
+### Key Finding: Highest Pass Rate Yet
+
+**Integrated pipeline (`generate_and_test.py`) with automatic retry mechanism:**
+- Max 3 attempts per function
+- On failure, provides error feedback to LLM for retry
+- Distinguishes between numerical and non-numerical errors
+
+### Pass Rate by Attempt
+| Attempt | Passed | Cumulative |
+|---------|--------|------------|
+| Attempt 1 | 114 | 114 (75.5%) |
+| Attempt 2 | +17 | 131 (86.8%) |
+| Attempt 3 | +6 | 137 (90.7%) |
+
+**Key Insight:** 23 additional functions passed after error feedback. All three attempts contributed meaningful improvements, showing the retry mechanism remains effective.
+
+### Comparison with test10
+
+| Metric | test10 | test11 | Change |
+|--------|--------|--------|--------|
+| Passing | 128 (84.8%) | 137 (90.7%) | **+9** |
+| Failing | 23 (15.2%) | 14 (9.3%) | **-9** |
+
+### Functions FIXED by Retry (23 functions total):
+
+**Passed on Attempt 2 (17 functions):**
+| Function | Notes |
+|----------|-------|
+| **s112** | Fixed after 1 retry |
+| **s1213** | Fixed after 1 retry |
+| **s122** | Fixed after 1 retry |
+| **s141** | Fixed after 1 retry |
+| **s161** | Fixed after 1 retry |
+| **s2102** | Fixed after 1 retry |
+| **s2251** | Fixed after 1 retry |
+| **s242** | Fixed after 1 retry |
+| **s258** | Fixed after 1 retry |
+| **s291** | Fixed after 1 retry |
+| **s323** | Fixed after 1 retry |
+| **s3251** | Fixed after 1 retry |
+| **s331** | Fixed after 1 retry |
+| **s332** | Fixed after 1 retry |
+| **s351** | Fixed after 1 retry |
+| **s421** | Fixed after 1 retry |
+| **s453** | Fixed after 1 retry |
+
+**Passed on Attempt 3 (6 functions):**
+| Function | Notes |
+|----------|-------|
+| **s241** | Fixed after 2 retries |
+| **s252** | Fixed after 2 retries |
+| **s255** | Fixed after 2 retries |
+| **s3112** | Fixed after 2 retries |
+| **s312** | Fixed after 2 retries |
+| **s352** | Fixed after 2 retries |
+
+### Failed Functions (14) - Error Breakdown
+
+| Function | Error Type |
+|----------|-----------|
+| s116 | compilation |
+| s119 | numerical |
+| s123 | numerical |
+| s13110 | compilation |
+| s176 | timeout |
+| s211 | numerical |
+| s256 | numerical |
+| s257 | numerical |
+| s277 | compilation |
+| s281 | numerical |
+| s322 | numerical |
+| s342 | compilation |
+| s353 | numerical |
+| s482 | numerical |
+
+**Error Type Summary:**
+- Numerical errors: 9 functions (s119, s123, s211, s256, s257, s281, s322, s353, s482)
+- Compilation errors: 4 functions (s116, s13110, s277, s342)
+- Timeout: 1 function (s176)
+
+### Passing Functions (137):
+s000, s111, s1111, s1112, s1113, s1115, s1119, s112, s113, s114, s115, s1161, s118, s121, s1213, s122, s1221, s1232, s124, s1244, s125, s1251, s126, s127, s1279, s128, s1281, s131, s132, s1351, s141, s1421, s151, s152, s161, s162, s171, s172, s173, s174, s175, s2101, s2102, s2111, s212, s221, s222, s2233, s2244, s2251, s2275, s231, s232, s233, s235, s241, s242, s243, s244, s251, s252, s253, s254, s255, s258, s261, s271, s2710, s2711, s2712, s272, s273, s274, s275, s276, s278, s279, s291, s292, s293, s311, s3110, s3111, s31111, s3112, s3113, s312, s313, s314, s315, s316, s317, s318, s319, s321, s323, s3251, s331, s332, s341, s343, s351, s352, s4112, s4113, s4114, s4115, s4116, s4117, s4121, s421, s422, s423, s424, s431, s441, s442, s443, s451, s452, s453, s471, s481, s491, va, vag, vas, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Failing Functions (14):
+s116, s119, s123, s13110, s176, s211, s256, s257, s277, s281, s322, s342, s353, s482
+
+---
+
+## 🔬 LLM Triton v3 with Retry Mechanism (2025-12-04) - test10
 
 ### Summary
 | Metric | Count | Percentage |
