@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s255_baseline import s255_pytorch
-    from test10.llm_triton.s255.attempt3 import s255_triton
+    from test11.llm_triton.s255.attempt3 import s255_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -44,19 +44,16 @@ def test_correctness():
         try:
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            x = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1
 
             a_pt = a.clone()
             b_pt = b.clone()
-            x_pt = x.clone()
 
             a_tr = a.clone()
             b_tr = b.clone()
-            x_tr = x.clone()
 
-            pt_tensors = {"a": a_pt, "b": b_pt, "x": x_pt}
-            tr_tensors = {"a": a_tr, "b": b_tr, "x": x_tr}
+            pt_tensors = {"a": a_pt, "b": b_pt}
+            tr_tensors = {"a": a_tr, "b": b_tr}
             scalars = {"iterations": iterations}
 
             pt_args = build_args(s255_pytorch, pt_tensors, scalars)

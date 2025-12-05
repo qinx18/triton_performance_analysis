@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s281_baseline import s281_pytorch
-    from test10.llm_triton.s281.attempt3 import s281_triton
+    from test11.llm_triton.s281.attempt3 import s281_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -45,21 +45,18 @@ def test_correctness():
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            x = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1
 
             a_pt = a.clone()
             b_pt = b.clone()
             c_pt = c.clone()
-            x_pt = x.clone()
 
             a_tr = a.clone()
             b_tr = b.clone()
             c_tr = c.clone()
-            x_tr = x.clone()
 
-            pt_tensors = {"a": a_pt, "b": b_pt, "c": c_pt, "x": x_pt}
-            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "x": x_tr}
+            pt_tensors = {"a": a_pt, "b": b_pt, "c": c_pt}
+            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr}
             scalars = {"iterations": iterations}
 
             pt_args = build_args(s281_pytorch, pt_tensors, scalars)

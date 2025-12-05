@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s1281_baseline import s1281_pytorch
-    from test10.llm_triton.s1281.attempt1 import s1281_triton
+    from test11.llm_triton.s1281.attempt1 import s1281_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -47,7 +47,6 @@ def test_correctness():
             c = torch.randn(N, device='cuda', dtype=torch.float32)
             d = torch.randn(N, device='cuda', dtype=torch.float32)
             e = torch.randn(N, device='cuda', dtype=torch.float32)
-            x = torch.randn(N, device='cuda', dtype=torch.float32)
             iterations = 1
 
             a_pt = a.clone()
@@ -55,17 +54,15 @@ def test_correctness():
             c_pt = c.clone()
             d_pt = d.clone()
             e_pt = e.clone()
-            x_pt = x.clone()
 
             a_tr = a.clone()
             b_tr = b.clone()
             c_tr = c.clone()
             d_tr = d.clone()
             e_tr = e.clone()
-            x_tr = x.clone()
 
-            pt_tensors = {"a": a_pt, "b": b_pt, "c": c_pt, "d": d_pt, "e": e_pt, "x": x_pt}
-            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "d": d_tr, "e": e_tr, "x": x_tr}
+            pt_tensors = {"a": a_pt, "b": b_pt, "c": c_pt, "d": d_pt, "e": e_pt}
+            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "d": d_tr, "e": e_tr}
             scalars = {"iterations": iterations}
 
             pt_args = build_args(s1281_pytorch, pt_tensors, scalars)

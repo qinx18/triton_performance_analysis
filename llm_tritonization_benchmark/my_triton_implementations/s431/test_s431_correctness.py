@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s431_baseline import s431_pytorch
-    from test10.llm_triton.s431.attempt3 import s431_triton
+    from test11.llm_triton.s431.attempt1 import s431_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -45,7 +45,7 @@ def test_correctness():
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             iterations = 1
-            k = 0  # Original TSVC: k = 2*k1-k2 = 2*1-2 = 0
+            k = 0
 
             a_pt = a.clone()
             b_pt = b.clone()

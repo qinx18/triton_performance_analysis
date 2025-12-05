@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s481_baseline import s481_pytorch
-    from test10.llm_triton.s481.attempt3 import s481_triton
+    from test11.llm_triton.s481.attempt1 import s481_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -45,7 +45,6 @@ def test_correctness():
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             c = torch.randn(N, device='cuda', dtype=torch.float32)
-            # d must be non-negative to avoid exit(0) in original C code
             d = torch.abs(torch.randn(N, device='cuda', dtype=torch.float32))
             iterations = 1
 
