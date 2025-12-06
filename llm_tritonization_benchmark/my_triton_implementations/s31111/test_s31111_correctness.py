@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s31111_baseline import s31111_pytorch
-    from test11.llm_triton.s31111.attempt1 import s31111_triton
+    from test12.llm_triton.s31111.attempt1 import s31111_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
