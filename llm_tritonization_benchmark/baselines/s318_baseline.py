@@ -40,5 +40,5 @@ def s318_pytorch(a, inc):
             max_val = current_abs
         k += inc
     
-    chksum = max_val + index
-    return chksum
+    # TSVC returns: max + index + 1
+    return max_val + index + 1

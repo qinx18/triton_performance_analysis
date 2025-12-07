@@ -3,42 +3,33 @@
 
 Your last attempt failed with a compilation or runtime error:
 
-**Error type**: compilation
+**Error type**: runtime
 **Error message**:
 ```
-ast):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s312/test_s312_correctness.py", line 60, in test_correctness
-    triton_result = s312_triton(*tr_args)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test14/llm_triton/s312/attempt7.py", line 34, in s312_triton
-    s312_kernel[grid](
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 15:38:
-    block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    current_offsets = block_start + offsets
-
-    mask = current_offsets < n_elements
-    vals = tl.load(a_ptr + current_offsets, mask=mask, other=1.0)
-
-    # Compute product within this block
-    block_prod = 1.0
-    for i in range(BLOCK_SIZE):
-        if i < BLOCK_SIZE:
-            block_prod = block_prod * vals[i]
-                                      ^
-ValueError('Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)')
+======================================================================
+Correctness Testing: s312
+======================================================================
+Testing N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'
+Testing N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'
+Testing N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'
+======================================================================
+Some tests FAILED!
+======================================================================
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s312/test_s312_correctness.py", line 68, in test_correctness
+    pt_val = float(pytorch_result)
+             ^^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'NoneType'
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s312/test_s312_correctness.py", line 68, in test_correctness
+    pt_val = float(pytorch_result)
+             ^^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'NoneType'
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s312/test_s312_correctness.py", line 68, in test_correctness
+    pt_val = float(pytorch_result)
+             ^^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'NoneType'
 
 ```
 
@@ -54,42 +45,39 @@ import triton
 import triton.language as tl
 
 @triton.jit
+def _prod_combine(a, b):
+    return a * b
+
+@triton.jit
 def s312_kernel(a_ptr, partial_results_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    
-    block_start = pid * BLOCK_SIZE
+    block_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_SIZE)
-    current_offsets = block_start + offsets
+    current_offsets = block_id * BLOCK_SIZE + offsets
     
     mask = current_offsets < n_elements
     vals = tl.load(a_ptr + current_offsets, mask=mask, other=1.0)
     
-    # Compute product within this block
-    block_prod = 1.0
-    for i in range(BLOCK_SIZE):
-        if i < BLOCK_SIZE:
-            block_prod = block_prod * vals[i]
+    block_prod = tl.reduce(vals, axis=0, combine_fn=_prod_combine)
     
-    # Store partial result
-    tl.store(partial_results_ptr + pid, block_prod)
+    tl.store(partial_results_ptr + block_id, block_prod)
 
 def s312_triton(a):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
     BLOCK_SIZE = 256
     
-    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
+    if n_elements == 0:
+        return torch.tensor(1.0, dtype=a.dtype, device=a.device)
     
-    partial_results = torch.ones(grid_size, dtype=a.dtype, device=a.device)
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    partial_results = torch.ones(num_blocks, dtype=a.dtype, device=a.device)
     
-    grid = (grid_size,)
+    grid = (num_blocks,)
     s312_kernel[grid](
-        a, partial_results, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, partial_results, n_elements, BLOCK_SIZE
     )
     
-    # Combine partial results on CPU
-    final_product = torch.prod(partial_results)
-    return final_product.item()
+    final_result = torch.prod(partial_results)
+    return final_result
 ```
 
 
@@ -134,6 +122,28 @@ real_t s312(struct args_t * func_args)
             prod *= a[i];
         }
 ```
+
+## Reduction Pattern Analysis
+
+**Detected: Product Reduction** (`*=` operator)
+
+**CRITICAL: Triton does NOT have `tl.prod()` or `tl.mul`!**
+
+You MUST use `tl.reduce()` with a **separate @triton.jit combiner function**.
+Lambdas are NOT supported in Triton JIT code.
+
+```python
+@triton.jit
+def _prod_combine(a, b):
+    return a * b
+
+@triton.jit
+def kernel(...):
+    vals = tl.load(a_ptr + offsets, mask=mask, other=1.0)  # Identity=1.0 for product
+    block_prod = tl.reduce(vals, axis=0, combine_fn=_prod_combine)
+```
+
+For large arrays, compute partial products per block, then combine with `torch.prod()`
 
 
 ## Array Information:
@@ -221,37 +231,36 @@ import triton
 import triton.language as tl
 
 @triton.jit
+def _prod_combine(a, b):
+    return a * b
+
+@triton.jit
 def s312_kernel(a_ptr, partial_results_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    
-    block_start = pid * BLOCK_SIZE
+    block_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_SIZE)
-    current_offsets = block_start + offsets
+    current_offsets = block_id * BLOCK_SIZE + offsets
     
     mask = current_offsets < n_elements
     vals = tl.load(a_ptr + current_offsets, mask=mask, other=1.0)
     
-    # Compute product within this block using reduction
-    block_prod = tl.reduce(vals, axis=0, op=tl.math.prod)
+    block_prod = tl.reduce(vals, axis=0, combine_fn=_prod_combine)
     
-    # Store partial result
-    if tl.program_id(axis=0) == pid:
-        tl.store(partial_results_ptr + pid, block_prod)
+    tl.store(partial_results_ptr + block_id, block_prod)
 
 def s312_triton(a):
-    n_elements = a.shape[0]
+    n_elements = a.numel()
     BLOCK_SIZE = 256
     
-    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
+    if n_elements == 0:
+        return torch.tensor(1.0, dtype=a.dtype, device=a.device)
     
-    partial_results = torch.ones(grid_size, dtype=a.dtype, device=a.device)
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    partial_results = torch.ones(num_blocks, dtype=a.dtype, device=a.device)
     
-    grid = (grid_size,)
+    grid = (num_blocks,)
     s312_kernel[grid](
-        a, partial_results, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, partial_results, n_elements, BLOCK_SIZE
     )
     
-    # Combine partial results
-    final_product = torch.prod(partial_results)
-    return final_product.item()
+    result = torch.prod(partial_results)
+    return result

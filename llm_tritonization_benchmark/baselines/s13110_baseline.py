@@ -34,7 +34,8 @@ def s13110_pytorch(aa):
     xindex = max_indices // len_2d
     yindex = max_indices % len_2d
     
-    # Calculate checksum (equivalent to the C code's final computation)
+    # Calculate checksum (matches C code: chksum = max + xindex + yindex)
     chksum = max_val + xindex.float() + yindex.float()
-    
-    return chksum
+
+    # Return matches C code: return max + xindex+1 + yindex+1
+    return max_val + xindex.float() + 1 + yindex.float() + 1

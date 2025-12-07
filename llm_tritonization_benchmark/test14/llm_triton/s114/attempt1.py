@@ -3,69 +3,39 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s114_kernel(aa_ptr, bb_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Sequential processing of triangular region
-    # Process elements where j < i in row-major order
+def s114_kernel(aa_ptr, bb_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_base = pid * BLOCK_SIZE
+    j_indices = j_base + j_offsets
     
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
-    
-    # Convert linear indices to (i, j) coordinates for triangular region
-    # We need to map linear index to valid (i, j) pairs where j < i
-    
-    # Load elements in blocks
-    for idx in range(BLOCK_SIZE):
-        linear_idx = block_start + idx
-        if linear_idx >= n_elements:
-            break
+    for i in range(LEN_2D):
+        j_mask = (j_indices < i) & (j_indices >= 0)
+        
+        if tl.sum(j_mask.to(tl.int32)) > 0:
+            # Load aa[j][i] (transpose access)
+            aa_ji_ptrs = aa_ptr + j_indices * LEN_2D + i
+            aa_ji_vals = tl.load(aa_ji_ptrs, mask=j_mask, other=0.0)
             
-        # Convert linear index to triangular coordinates
-        # For triangular region with j < i, we have sum from i=1 to N of i elements
-        # So position k maps to some (i, j) where j < i
-        
-        # Find i by solving: k = i*(i-1)/2 + j where j < i
-        # This means k < i*(i+1)/2
-        i = 1
-        cumsum = 0
-        remaining = linear_idx
-        
-        # Find the row i
-        while cumsum + i <= linear_idx:
-            cumsum += i
-            i += 1
-        
-        # j is the remainder
-        j = linear_idx - cumsum
-        
-        # Bounds check
-        if i < 256 and j < i:
-            # Load aa[j][i] and bb[i][j]
-            aa_ji_offset = j * 256 + i
-            bb_ij_offset = i * 256 + j
-            aa_ij_offset = i * 256 + j
+            # Load bb[i][j]
+            bb_ij_ptrs = aa_ptr + i * LEN_2D + j_indices  # Use aa_ptr base, offset for bb
+            bb_ij_vals = tl.load(bb_ptr + i * LEN_2D + j_indices, mask=j_mask, other=0.0)
             
-            aa_ji_val = tl.load(aa_ptr + aa_ji_offset)
-            bb_ij_val = tl.load(bb_ptr + bb_ij_offset)
+            # Compute aa[i][j] = aa[j][i] + bb[i][j]
+            result_vals = aa_ji_vals + bb_ij_vals
             
-            # Compute and store result
-            result = aa_ji_val + bb_ij_val
-            tl.store(aa_ptr + aa_ij_offset, result)
+            # Store aa[i][j]
+            aa_ij_ptrs = aa_ptr + i * LEN_2D + j_indices
+            tl.store(aa_ij_ptrs, result_vals, mask=j_mask)
 
 def s114_triton(aa, bb):
-    # Calculate number of elements in triangular region (j < i)
-    n = aa.shape[0]  # 256
-    n_elements = n * (n - 1) // 2  # Number of elements where j < i
+    LEN_2D = aa.shape[0]
+    BLOCK_SIZE = 64
     
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
     
     s114_kernel[grid](
-        aa, bb, n_elements,
+        aa, bb,
+        LEN_2D=LEN_2D,
         BLOCK_SIZE=BLOCK_SIZE
     )
-    
-    return aa

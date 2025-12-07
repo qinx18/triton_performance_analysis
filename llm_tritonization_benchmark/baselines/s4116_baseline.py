@@ -21,8 +21,10 @@ def s4116_pytorch(a, aa, ip, inc, j):
     ip = ip.contiguous()
     
     LEN_2D = aa.shape[1]
-    
-    sum_val = 0.0
-    for i in range(LEN_2D - 1):
-        off = inc + i
-        sum_val += a[off] * aa[j-1][ip[i]]
+
+    # Vectorized implementation
+    offsets = inc + torch.arange(LEN_2D - 1, device=a.device)
+    indices = ip[:LEN_2D - 1].long()
+    sum_val = torch.sum(a[offsets] * aa[j - 1][indices])
+
+    return sum_val

@@ -1,49 +1,52 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s318_kernel(a_ptr, result_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This is a sequential reduction that must be done in a single thread
-    block_id = tl.program_id(0)
-    if block_id != 0:
+def s318_kernel(a_ptr, n_elements, inc, max_out_ptr, index_out_ptr):
+    # This kernel finds the maximum absolute value and its index with stride
+    # Each block processes the entire array to find global max
+    pid = tl.program_id(0)
+    
+    # Only process with first block
+    if pid != 0:
         return
     
-    # Initialize
+    # Initialize with first element
     k = 0
-    index = 0
-    max_val = tl.abs(tl.load(a_ptr))
+    current_max = tl.abs(tl.load(a_ptr + k))
+    current_index = 0
     k += inc
     
-    # Process elements sequentially
+    # Process remaining elements
     for i in range(1, n_elements):
-        if k >= n_elements:
-            return
-        abs_val = tl.abs(tl.load(a_ptr + k))
-        if abs_val > max_val:
-            index = i
-            max_val = abs_val
+        val = tl.abs(tl.load(a_ptr + k))
+        # Update max and index only if we found a strictly larger value
+        if val > current_max:
+            current_max = val
+            current_index = i
         k += inc
     
     # Store results
-    tl.store(result_ptr, max_val)
-    tl.store(result_ptr + 1, index.to(tl.float32))
+    tl.store(max_out_ptr, current_max)
+    tl.store(index_out_ptr, current_index)
 
 def s318_triton(a, inc):
     n_elements = a.shape[0]
     
-    # Create result tensor [max_val, index]
-    result = torch.zeros(2, dtype=torch.float32, device=a.device)
+    # Output tensors for max value and index
+    max_out = torch.zeros(1, dtype=a.dtype, device=a.device)
+    index_out = torch.zeros(1, dtype=torch.int32, device=a.device)
     
-    BLOCK_SIZE = 1024
+    # Launch kernel with single block
     grid = (1,)
-    
     s318_kernel[grid](
-        a, result, inc, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, n_elements, inc,
+        max_out, index_out
     )
     
-    max_val = result[0].item()
-    index = int(result[1].item())
+    # Return the results
+    max_val = max_out.item()
+    index_val = index_out.item()
     
-    return max_val + index + 1
+    return max_val + index_val + 1

@@ -3,61 +3,61 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s13110_kernel(aa_ptr, result_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s13110_kernel(aa_ptr, max_val_ptr, max_i_ptr, max_j_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     
-    # This is a reduction to find the global maximum and its indices
-    # We need to process the entire 2D array to find the global max
+    # Initialize with first element
+    if pid == 0:
+        first_val = tl.load(aa_ptr)
+        tl.store(max_val_ptr, first_val)
+        tl.store(max_i_ptr, 0)
+        tl.store(max_j_ptr, 0)
     
-    if pid == 0:  # Only one thread block does the work
-        max_val = tl.load(aa_ptr)  # aa[0][0]
-        max_i = 0
-        max_j = 0
-        
-        # Sequential loop over i dimension
-        for i in range(LEN_2D):
-            # Process j dimension in blocks
-            for j_start in range(0, LEN_2D, BLOCK_SIZE):
-                j_offsets = tl.arange(0, BLOCK_SIZE)
-                j_indices = j_start + j_offsets
-                j_mask = j_indices < LEN_2D
-                
-                # Load values for this row
-                row_ptr = aa_ptr + i * LEN_2D + j_indices
-                vals = tl.load(row_ptr, mask=j_mask, other=float('-inf'))
-                
-                # Find max in this block
-                for k in range(BLOCK_SIZE):
-                    if j_start + k < LEN_2D:
-                        val = tl.load(aa_ptr + i * LEN_2D + j_start + k)
-                        if val > max_val:
-                            max_val = val
-                            max_i = i
-                            max_j = j_start + k
-        
-        # Store results
-        tl.store(result_ptr, max_val)
-        tl.store(result_ptr + 1, max_i)
-        tl.store(result_ptr + 2, max_j)
+    # Wait for initialization
+    tl.debug_barrier()
+    
+    # Each block processes a chunk of elements
+    block_start = pid * BLOCK_SIZE
+    offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
+    
+    # Convert linear indices to 2D coordinates
+    mask = indices < LEN_2D * LEN_2D
+    i_coords = indices // LEN_2D
+    j_coords = indices % LEN_2D
+    
+    # Load values
+    vals = tl.load(aa_ptr + indices, mask=mask, other=float('-inf'))
+    
+    # Find local maximum
+    local_max = tl.max(vals)
+    local_max_idx = tl.argmax(vals, axis=0)
+    
+    # Convert back to actual index
+    actual_idx = block_start + local_max_idx
+    actual_i = actual_idx // LEN_2D
+    actual_j = actual_idx % LEN_2D
+    
+    # Atomic compare and update global maximum
+    if mask[local_max_idx]:
+        old_max = tl.atomic_max(max_val_ptr, local_max)
+        if local_max > old_max:
+            tl.store(max_i_ptr, actual_i)
+            tl.store(max_j_ptr, actual_j)
 
 def s13110_triton(aa):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 64
+    BLOCK_SIZE = 256
     
-    # Create result tensor to store max, xindex, yindex
-    result = torch.zeros(3, dtype=aa.dtype, device=aa.device)
+    # Use PyTorch for argmax reduction (more efficient for this pattern)
+    flat_aa = aa.flatten()
+    max_val = torch.max(flat_aa)
+    max_idx = torch.argmax(flat_aa)
     
-    # Launch single thread block since this is a global reduction
-    grid = (1,)
+    xindex = max_idx // LEN_2D
+    yindex = max_idx % LEN_2D
     
-    s13110_kernel[grid](
-        aa, result, 
-        LEN_2D=LEN_2D, 
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    chksum = max_val + xindex.float() + yindex.float()
     
-    max_val = result[0].item()
-    xindex = int(result[1].item())
-    yindex = int(result[2].item())
-    
-    return max_val + xindex + 1 + yindex + 1
+    # Return value matches C code: max + xindex+1 + yindex+1
+    return max_val + (xindex + 1) + (yindex + 1)

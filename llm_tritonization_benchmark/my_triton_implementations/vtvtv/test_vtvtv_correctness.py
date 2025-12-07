@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vtvtv_baseline import vtvtv_pytorch
-    from test14.llm_triton.vtvtv.attempt1 import vtvtv_triton
+    from test15.llm_triton.vtvtv.attempt1 import vtvtv_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

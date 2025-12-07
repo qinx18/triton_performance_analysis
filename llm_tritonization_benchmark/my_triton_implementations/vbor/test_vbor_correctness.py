@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vbor_baseline import vbor_pytorch
-    from test14.llm_triton.vbor.attempt1 import vbor_triton
+    from test15.llm_triton.vbor.attempt1 import vbor_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

@@ -3,70 +3,70 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s4116_kernel(a_ptr, aa_ptr, ip_ptr, inc, j, n_elements, output_ptr,
+def s4116_kernel(a_ptr, aa_ptr, ip_ptr, inc, j, 
+                 len_2d, aa_stride0, aa_stride1, result_ptr,
                  BLOCK_SIZE: tl.constexpr):
-    # Get program ID
+    
+    # Get program ID for this block
     pid = tl.program_id(0)
     
-    # Calculate block start
+    # Calculate the range of elements this block will process
     block_start = pid * BLOCK_SIZE
-    
-    # Create offset vector
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
+    i_offsets = block_start + offsets
     
-    # Create mask for valid indices
-    mask = indices < n_elements
+    # Mask for valid elements
+    mask = i_offsets < (len_2d - 1)
     
-    # Load indirect indices
-    ip_vals = tl.load(ip_ptr + indices, mask=mask, other=0)
+    # Load indices
+    ip_vals = tl.load(ip_ptr + i_offsets, mask=mask, other=0)
     
     # Calculate offsets for array a
-    a_offsets = inc + indices
+    a_offsets = inc + i_offsets
     
     # Load values from array a
     a_vals = tl.load(a_ptr + a_offsets, mask=mask, other=0.0)
     
     # Calculate 2D indices for aa array
-    aa_row = j - 1
-    aa_indices = aa_row * 256 + ip_vals  # Assuming LEN_2D = 256
+    row_idx = j - 1
+    aa_offsets = row_idx * aa_stride0 + ip_vals * aa_stride1
     
-    # Load values from aa array (using flat indexing)
-    aa_vals = tl.load(aa_ptr + aa_indices, mask=mask, other=0.0)
+    # Load values from aa array
+    aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask, other=0.0)
     
     # Compute products
     products = a_vals * aa_vals
     
-    # Apply mask to products
-    masked_products = tl.where(mask, products, 0.0)
+    # Compute partial sum for this block
+    partial_sum = tl.sum(products)
     
-    # Sum the products
-    block_sum = tl.sum(masked_products)
-    
-    # Store the result
-    tl.store(output_ptr + pid, block_sum)
+    # Use atomic add to accumulate partial sums
+    tl.atomic_add(result_ptr, partial_sum)
 
 def s4116_triton(a, aa, ip, inc, j):
-    # Get dimensions
-    n_elements = 256 - 1  # LEN_2D - 1
+    len_2d = aa.shape[0]
+    n_elements = len_2d - 1
     
-    # Choose block size
-    BLOCK_SIZE = 64
+    # Create a result tensor
+    result = torch.zeros(1, device=a.device, dtype=a.dtype)
     
-    # Calculate number of blocks
-    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
-    
-    # Create output tensor for partial sums
-    partial_sums = torch.zeros(num_blocks, dtype=torch.float32, device=a.device)
+    # Block size
+    BLOCK_SIZE = 256
+    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
     
     # Launch kernel
-    grid = (num_blocks,)
-    s4116_kernel[grid](
-        a, aa, ip, inc, j, n_elements, partial_sums,
+    s4116_kernel[(grid_size,)](
+        a,
+        aa,
+        ip,
+        inc,
+        j,
+        len_2d,
+        aa.stride(0),
+        aa.stride(1),
+        result,
         BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Sum the partial results
-    total_sum = torch.sum(partial_sums)
-    
-    return total_sum.item()
+    # Return the sum
+    return result.item()

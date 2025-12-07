@@ -1,51 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
 
-**Error type**: compilation
-**Error message**:
-```
-semantic.py", line 503, in arange
-    raise ValueError("arange's arguments must be of type tl.constexpr")
-ValueError: arange's arguments must be of type tl.constexpr
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 1.16e+00
 
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s113/test_s113_correctness.py", line 63, in test_correctness
-    triton_result = s113_triton(*tr_args)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test14/llm_triton/s113/attempt1.py", line 49, in s113_triton
-    s113_kernel_phase2[grid](a, b, n)
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 7:14:
-def s113_kernel_phase2(a_ptr, b_ptr, n):
-    # Phase 2: Update a[1:] using the updated a[0]
-    BLOCK_SIZE = 256
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE + 1  # Start from index 1
-
-    offsets = tl.arange(0, BLOCK_SIZE)
-              ^
-
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -54,50 +19,37 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s113_kernel(a_ptr, b_ptr, n):
-    # Phase 1: Save original a[0] and update it
-    if tl.program_id(0) == 0:
-        orig_a0 = tl.load(a_ptr)
-        b0 = tl.load(b_ptr)
-        new_a0 = orig_a0 + b0
-        tl.store(a_ptr, new_a0)
-
-@triton.jit  
-def s113_kernel_phase2(a_ptr, b_ptr, n):
-    # Phase 2: Update a[1:] using the updated a[0]
-    BLOCK_SIZE = 256
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE + 1  # Start from index 1
+def s113_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n
+    mask = offsets < n_elements
     
-    # Load updated a[0]
-    a0_val = tl.load(a_ptr)
+    # Load a[0] (scalar)
+    a_0 = tl.load(a_ptr)
     
-    # Load b values
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    # Load b[i] values
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
-    # Compute and store results
-    results = a0_val + b_vals
-    tl.store(a_ptr + indices, results, mask=mask)
+    # Compute a[i] = a[0] + b[i]
+    result = a_0 + b_vals
+    
+    # Store result to a[i]
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s113_triton(a, b):
-    n = a.shape[0]
+    n_elements = a.shape[0] - 1  # Process from index 1 to end
     
-    if n <= 1:
-        return
-    
-    # Phase 1: Handle i = 0 (sequential)
-    grid = (1,)
-    s113_kernel[grid](a, b, n)
-    
-    # Phase 2: Handle i = 1 to n-1 (parallel)
     BLOCK_SIZE = 256
-    remaining = n - 1
-    grid = (triton.cdiv(remaining, BLOCK_SIZE),)
-    s113_kernel_phase2[grid](a, b, n)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    s113_kernel[grid](
+        a[1:],  # Start from index 1
+        b[1:],  # Start from index 1
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```
 
 
@@ -135,60 +87,6 @@ real_t s113(struct args_t * func_args)
             a[i] = a[0] + b[i];
         }
 ```
-
-============================================================
-CROSSING THRESHOLD DEPENDENCY DETECTED
-============================================================
-
-CROSSING THRESHOLD PATTERN DETECTED
-
-This loop reads from and writes to the same array with different indices.
-At some point in the loop, the read index matches a previously-written index,
-creating a 'crossing threshold' where the loop behavior changes.
-
-Pattern(s) detected:
-
-  Array: a
-  Read index: a[0]
-  Write index: a[i]
-  Pattern type: constant_read
-  Threshold: i = 0
-  Read index is constant 0, written at i=0
-
-CRITICAL IMPLEMENTATION REQUIREMENTS:
-
-The loop MUST be split into two phases:
-
-Phase 1 (i = 0 to 0, inclusive):
-  - Uses ORIGINAL a[0]
-  - Can be parallelized
-  - Clone a[0] before this phase
-
-Phase 2 (i = 1 to end):
-  - Uses UPDATED a[0] (from Phase 1)
-  - Can be parallelized separately
-  - Read a[0] after Phase 1 completes
-
-IMPLEMENTATION TEMPLATE:
-```python
-def kernel_triton(a, b, ...):
-    n = a.shape[0]
-    threshold = 0
-
-    # Save original value before it gets modified
-    orig_a_at_threshold = a[threshold].clone()
-
-    # Phase 1: i = 0 to threshold (uses original value)
-    a[:threshold+1] = orig_a_at_threshold + ...  # parallel
-
-    # Phase 2: i = threshold+1 to end (uses updated value)
-    a[threshold+1:] = a[threshold] + ...  # parallel
-```
-
-WARNING: Simple parallel implementation will give WRONG results!
-The two phases MUST be executed separately with synchronization between them.
-
-============================================================
 
 
 ## Array Information:
@@ -276,44 +174,38 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s113_kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
-    # Get program ID
-    pid = tl.program_id(0)
+def s113_kernel(a_ptr, b_ptr, a_0_val, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Calculate starting index for this block (skip index 0)
-    block_start = pid * BLOCK_SIZE + 1
+    mask = offsets < n_elements
     
-    # Create offset vector
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
+    # Load b[i+1] values (since we're processing from index 1)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
-    # Create mask for valid indices
-    mask = indices < n
+    # Compute a[i+1] = a[0] + b[i+1]
+    result = a_0_val + b_vals
     
-    # Load a[0] (updated value)
-    a0_val = tl.load(a_ptr)
-    
-    # Load b values
-    b_vals = tl.load(b_ptr + indices, mask=mask)
-    
-    # Compute results: a[i] = a[0] + b[i]
-    results = a0_val + b_vals
-    
-    # Store results
-    tl.store(a_ptr + indices, results, mask=mask)
+    # Store result to a[i+1]
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s113_triton(a, b):
-    n = a.shape[0]
+    n_elements = a.shape[0] - 1  # Process from index 1 to end
     
-    if n <= 1:
+    if n_elements <= 0:
         return
     
-    # Phase 1: Update a[0] = a[0] + b[0] (handled on CPU since it's just one element)
-    a[0] = a[0] + b[0]
+    # Get a[0] value as scalar
+    a_0_val = a[0].item()
     
-    # Phase 2: Handle i = 1 to n-1 in parallel using updated a[0]
     BLOCK_SIZE = 256
-    remaining = n - 1
-    if remaining > 0:
-        grid = (triton.cdiv(remaining, BLOCK_SIZE),)
-        s113_kernel[grid](a, b, n, BLOCK_SIZE)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    s113_kernel[grid](
+        a[1:],  # Start from index 1
+        b[1:],  # Start from index 1
+        a_0_val,  # Pass a[0] as scalar
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

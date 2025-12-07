@@ -18,6 +18,5 @@ def s312_pytorch(a):
     
     # Compute the product of all elements in array a
     prod = torch.prod(a)
-    
-    # Note: prod is computed but not stored anywhere as in the original C code
-    # The original code just computes the product without using it
+
+    return prod

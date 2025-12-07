@@ -35,7 +35,8 @@ def s3110_pytorch(aa):
     xindex = max_idx // LEN_2D
     yindex = max_idx % LEN_2D
     
-    # Calculate checksum (equivalent to C code behavior)
+    # Calculate checksum (matches C code: chksum = max + xindex + yindex)
     chksum = max_val + xindex.float() + yindex.float()
-    
-    return chksum
+
+    # Return matches C code: return max + xindex+1 + yindex+1
+    return max_val + xindex.float() + 1 + yindex.float() + 1

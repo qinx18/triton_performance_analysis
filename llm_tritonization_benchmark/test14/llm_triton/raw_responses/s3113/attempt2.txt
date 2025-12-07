@@ -6,30 +6,29 @@ Your last attempt failed with a compilation or runtime error:
 **Error type**: runtime
 **Error message**:
 ```
-======================================================================
-Correctness Testing: s3113
-======================================================================
-Testing N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-======================================================================
-Some tests FAILED!
-======================================================================
+^
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test14/llm_triton/s3113/attempt1.py", line 27, in s3113_triton
+    s3113_kernel[(1,)](
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 618, in run
+    bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
+                                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: dynamic_func() got multiple values for argument 'BLOCK_SIZE'
 Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 69, in test_correctness
-    pt_val = float(pytorch_result)
-             ^^^^^^^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 69, in test_correctness
-    pt_val = float(pytorch_result)
-             ^^^^^^^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 69, in test_correctness
-    pt_val = float(pytorch_result)
-             ^^^^^^^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 60, in test_correctness
+    triton_result = s3113_triton(*tr_args)
+                    ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test14/llm_triton/s3113/attempt1.py", line 27, in s3113_triton
+    s3113_kernel[(1,)](
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 618, in run
+    bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
+                                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: dynamic_func() got multiple values for argument 'BLOCK_SIZE'
 
 ```
 
@@ -45,44 +44,32 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Block-level reduction to find maximum absolute value
+def s3113_kernel(a_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize block maximum with negative infinity
-    block_max = float('-inf')
-    
-    # Process all elements in blocks
+    block_max_abs = float('-inf')
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
-        
-        # Load values and compute absolute values
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         abs_vals = tl.abs(vals)
-        
-        # Find maximum in this block
-        local_max = tl.max(abs_vals, axis=0)
-        block_max = tl.maximum(block_max, local_max)
+        current_max = tl.max(abs_vals)
+        block_max_abs = tl.maximum(block_max_abs, current_max)
     
-    # Store result (only first thread writes)
-    if tl.program_id(0) == 0:
-        tl.store(result_ptr, block_max)
+    tl.store(tl.program_id(0) + tl.zeros([1], dtype=tl.int32), block_max_abs)
 
-def s3113_triton(a, abs):
-    n_elements = a.shape[0]
+def s3113_triton(a):
+    n_elements = a.numel()
+    BLOCK_SIZE = 256
     
-    # Create output tensor
-    result = torch.zeros(1, dtype=a.dtype, device=a.device)
-    
-    # Launch kernel with single block to handle reduction properly
-    BLOCK_SIZE = triton.next_power_of_2(min(n_elements, 1024))
+    # Single program version since we need global max
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
     s3113_kernel[(1,)](
-        a, result, n_elements, BLOCK_SIZE=BLOCK_SIZE
+        a, n_elements, output, BLOCK_SIZE=BLOCK_SIZE
     )
     
-    return result.item()
+    return output.item()
 ```
 
 
@@ -132,6 +119,23 @@ real_t s3113(struct args_t * func_args)
         }
 ```
 
+## Reduction Pattern Analysis
+
+**⚠️ CRITICAL: Exact Return Value Required**
+
+The C function returns: `return max;`
+
+Your Triton function MUST return **exactly** this value.
+Pay close attention - the return may differ from intermediate computations (e.g., `chksum`)!
+
+**Detected: Max-Absolute Reduction**
+
+Use `tl.abs()` then `tl.max()`:
+```python
+vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+block_max_abs = tl.max(tl.abs(vals), axis=0)
+```
+
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -153,7 +157,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s3113_triton(a, abs):
+def s3113_triton(a):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -218,40 +222,28 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s3113_kernel(a_ptr, n_elements, output_ptr, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize with first element's absolute value
-    first_val = tl.load(a_ptr, mask=True)
-    block_max = tl.abs(first_val)
-    
-    # Process all elements in blocks
+    block_max_abs = float('-inf')
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
-        
-        # Load values and compute absolute values
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         abs_vals = tl.abs(vals)
-        
-        # Find maximum in this block
-        local_max = tl.max(abs_vals)
-        block_max = tl.maximum(block_max, local_max)
+        current_max = tl.max(abs_vals)
+        block_max_abs = tl.maximum(block_max_abs, current_max)
     
-    # Store result
-    tl.store(result_ptr, block_max)
+    tl.store(output_ptr, block_max_abs)
 
-def s3113_triton(a, abs):
-    n_elements = a.shape[0]
+def s3113_triton(a):
+    n_elements = a.numel()
+    BLOCK_SIZE = 256
     
-    # Create output tensor
-    result = torch.zeros(1, dtype=a.dtype, device=a.device)
-    
-    # Launch kernel with single block to handle reduction properly
-    BLOCK_SIZE = triton.next_power_of_2(min(n_elements, 1024))
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
     s3113_kernel[(1,)](
-        a, result, n_elements, BLOCK_SIZE=BLOCK_SIZE
+        a, n_elements, output, BLOCK_SIZE=BLOCK_SIZE
     )
     
-    return result.item()
+    return output.item()

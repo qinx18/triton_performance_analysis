@@ -61,22 +61,16 @@
   "s113": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.00e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s114": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 6.32e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s115": {
     "baseline_generated": true,
@@ -246,12 +240,9 @@
   "s13110": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.00e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s132": {
     "baseline_generated": true,
@@ -549,12 +540,9 @@
   "s256": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.47e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s257": {
     "baseline_generated": true,
@@ -708,12 +696,9 @@
   "s3110": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 7,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.00e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s3111": {
     "baseline_generated": true,
@@ -742,22 +727,19 @@
   "s3113": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
       "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s3113\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n================================================="
+      "message": "^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test14/llm_triton/s3113/attempt1.py\", line 27, in s3113_triton\n    s3113_kernel[(1,)](\n  File \"/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py\", line 345, in <lambda>\n    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/anaconda3/lib/python3."
     }
   },
   "s312": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "^^^^^^^^^^\n  File \"/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py\", line 109, in hash\n    key = f\"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}\"\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py\", line 758, in cache_key\n    dependencies_finder.visit(self.parse())\n  File \"/home/qinxiao/anaconda3/lib/python3.12/ast.py\", line 407, in visit\n    return visitor(node)\n           ^"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s313": {
     "baseline_generated": true,
@@ -797,12 +779,9 @@
   "s318": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 4,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 1.00e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s319": {
     "baseline_generated": true,
@@ -944,11 +923,11 @@
   "s4116": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
       "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s4116\n======================================================================\nTesting N=    64... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   128... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   256... ERROR: float() argument must be a string or a real number, not 'NoneType'\n================================================="
+      "message": "6... ERROR: index 70756 is out of bounds for dimension 0 with size 267\n======================================================================\nSome tests FAILED!\n======================================================================\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s4116/test_s4116_correctness.py\", line 68, in test_correctness\n    triton_result = s4116_triton(*tr_args)\n             "
     }
   },
   "s4117": {

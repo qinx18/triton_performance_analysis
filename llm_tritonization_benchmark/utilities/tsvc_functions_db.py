@@ -1808,7 +1808,7 @@ for (int nl = 0; nl < iterations*4; nl++) {
         "has_conditional": True,
         "has_reduction": True,
         "has_2d_arrays": False,
-        "scalar_params": {'abs': 'scalar', 'iterations': 'scalar'},
+        "scalar_params": {'iterations': 'scalar'},
     },
     "s312": {
         "name": "s312",

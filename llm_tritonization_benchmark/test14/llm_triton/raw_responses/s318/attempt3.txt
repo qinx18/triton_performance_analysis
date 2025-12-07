@@ -1,114 +1,72 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
 
-**Error type**: compilation
-**Error message**:
-```
- = 0
-    index = 0
-    max_val = tl.abs(tl.load(a_ptr))
-    k += inc
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 1.00e+00
 
-    # Process elements sequentially
-    for i in range(1, n_elements):
-        if k >= n_elements:
-            break
-            ^
-unsupported AST node type: Break
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s318/test_s318_correctness.py", line 61, in test_correctness
-    triton_result = s318_triton(*tr_args)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test14/llm_triton/s318/attempt2.py", line 41, in s318_triton
-    s318_kernel[grid](
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.UnsupportedLanguageConstruct: at 16:12:
-        return
-
-    # Initialize
-    k = 0
-    index = 0
-    max_val = tl.abs(tl.load(a_ptr))
-    k += inc
-
-    # Process elements sequentially
-    for i in range(1, n_elements):
-        if k >= n_elements:
-            break
-            ^
-unsupported AST node type: Break
-
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s318_kernel(a_ptr, result_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This is a sequential reduction that must be done in a single thread
-    block_id = tl.program_id(0)
-    if block_id != 0:
+def s318_kernel(a_ptr, n_elements, inc, max_out_ptr, index_out_ptr):
+    # This kernel finds the maximum absolute value and its index with stride
+    # Each block processes the entire array to find global max
+    pid = tl.program_id(0)
+    
+    # Only process with first block
+    if pid != 0:
         return
     
-    # Initialize
+    # Initialize with first element
     k = 0
-    index = 0
-    max_val = tl.abs(tl.load(a_ptr))
+    current_max = tl.abs(tl.load(a_ptr + k))
+    current_index = 0
     k += inc
     
-    # Process elements sequentially
+    # Process remaining elements
     for i in range(1, n_elements):
-        if k >= n_elements:
-            break
-        abs_val = tl.abs(tl.load(a_ptr + k))
-        if abs_val > max_val:
-            index = i
-            max_val = abs_val
+        if k < n_elements * inc:  # Check bounds properly
+            val = tl.abs(tl.load(a_ptr + k))
+            # Update max and index only if we found a strictly larger value
+            if val > current_max:
+                current_max = val
+                current_index = i
         k += inc
     
     # Store results
-    tl.store(result_ptr, max_val)
-    tl.store(result_ptr + 1, index.to(tl.float32))
+    tl.store(max_out_ptr, current_max)
+    tl.store(index_out_ptr, current_index)
 
 def s318_triton(a, inc):
     n_elements = a.shape[0]
     
-    # Create result tensor [max_val, index]
-    result = torch.zeros(2, dtype=torch.float32, device=a.device)
+    # Output tensors for max value and index
+    max_out = torch.zeros(1, dtype=a.dtype, device=a.device)
+    index_out = torch.zeros(1, dtype=torch.int32, device=a.device)
     
-    BLOCK_SIZE = 1024
+    # Launch kernel with single block
     grid = (1,)
-    
     s318_kernel[grid](
-        a, result, inc, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, n_elements, inc,
+        max_out, index_out
     )
     
-    max_val = result[0].item()
-    index = int(result[1].item())
+    # Return the results
+    max_val = max_out.item()
+    index_val = index_out.item()
     
-    return max_val + index + 1
+    return max_val + index_val + 1
 ```
 
 
@@ -177,6 +135,9 @@ L5:
         }
         chksum = max + (real_t) index;
 ```
+
+## Reduction Pattern Analysis
+
 
 
 ## Array Information:
@@ -259,52 +220,55 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s318_kernel(a_ptr, result_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This is a sequential reduction that must be done in a single thread
-    block_id = tl.program_id(0)
-    if block_id != 0:
+def s318_kernel(a_ptr, n_elements, inc, max_out_ptr, index_out_ptr):
+    # This kernel finds the maximum absolute value and its index with stride
+    # Each block processes the entire array to find global max
+    pid = tl.program_id(0)
+    
+    # Only process with first block
+    if pid != 0:
         return
     
-    # Initialize
+    # Initialize with first element
     k = 0
-    index = 0
-    max_val = tl.abs(tl.load(a_ptr))
+    current_max = tl.abs(tl.load(a_ptr + k))
+    current_index = 0
     k += inc
     
-    # Process elements sequentially
+    # Process remaining elements
     for i in range(1, n_elements):
-        if k >= n_elements:
-            return
-        abs_val = tl.abs(tl.load(a_ptr + k))
-        if abs_val > max_val:
-            index = i
-            max_val = abs_val
+        val = tl.abs(tl.load(a_ptr + k))
+        # Update max and index only if we found a strictly larger value
+        if val > current_max:
+            current_max = val
+            current_index = i
         k += inc
     
     # Store results
-    tl.store(result_ptr, max_val)
-    tl.store(result_ptr + 1, index.to(tl.float32))
+    tl.store(max_out_ptr, current_max)
+    tl.store(index_out_ptr, current_index)
 
 def s318_triton(a, inc):
     n_elements = a.shape[0]
     
-    # Create result tensor [max_val, index]
-    result = torch.zeros(2, dtype=torch.float32, device=a.device)
+    # Output tensors for max value and index
+    max_out = torch.zeros(1, dtype=a.dtype, device=a.device)
+    index_out = torch.zeros(1, dtype=torch.int32, device=a.device)
     
-    BLOCK_SIZE = 1024
+    # Launch kernel with single block
     grid = (1,)
-    
     s318_kernel[grid](
-        a, result, inc, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, n_elements, inc,
+        max_out, index_out
     )
     
-    max_val = result[0].item()
-    index = int(result[1].item())
+    # Return the results
+    max_val = max_out.item()
+    index_val = index_out.item()
     
-    return max_val + index + 1
+    return max_val + index_val + 1

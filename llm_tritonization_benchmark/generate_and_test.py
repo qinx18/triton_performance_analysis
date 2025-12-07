@@ -100,6 +100,14 @@ except ImportError:
     analyze_kernel_reordering = None
     format_reordering_for_prompt = None
 
+try:
+    from compute_reduction_type import analyze_kernel_reduction, build_reduction_instructions
+    HAS_REDUCTION_ANALYSIS = True
+except ImportError:
+    HAS_REDUCTION_ANALYSIS = False
+    analyze_kernel_reduction = None
+    build_reduction_instructions = None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 
@@ -558,6 +566,31 @@ def build_statement_reordering_instructions(kernel_name: str, reordering_result:
     return ""
 
 
+def load_reduction_analysis(kernel_name: str) -> Optional[dict]:
+    """Load reduction type analysis for a kernel."""
+    if not HAS_REDUCTION_ANALYSIS or analyze_kernel_reduction is None:
+        return None
+
+    try:
+        return analyze_kernel_reduction(kernel_name)
+    except Exception:
+        return None
+
+
+def build_reduction_type_instructions(kernel_name: str, reduction_result: dict) -> str:
+    """Build specific instructions for handling reduction patterns."""
+    if not reduction_result or not reduction_result.get('is_reduction'):
+        return ""
+
+    # Use the formatted instructions from the module
+    if build_reduction_instructions:
+        formatted = build_reduction_instructions(reduction_result)
+        if formatted:
+            return formatted
+
+    return ""
+
+
 def detect_identity_matrix_pattern(c_code: str, seq_dim: str, par_dim: str) -> bool:
     """
     Detect identity matrix initialization pattern:
@@ -749,7 +782,8 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       war_section: str, par_section: str, overwrite_section: str = "",
                       compaction_section: str = "", aliasing_section: str = "",
                       crossing_threshold_section: str = "", loop_unrolling_section: str = "",
-                      early_exit_section: str = "", statement_reordering_section: str = "") -> str:
+                      early_exit_section: str = "", statement_reordering_section: str = "",
+                      reduction_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -782,7 +816,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{loop_unrolling_section}{statement_reordering_section}{war_section}{par_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
+{helper_section}{loop_unrolling_section}{statement_reordering_section}{war_section}{par_section}{reduction_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -962,8 +996,10 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     early_exit_section = build_early_exit_instructions(kernel_name, early_exit_result)
     statement_reordering_result = load_statement_reordering_analysis(kernel_name)
     statement_reordering_section = build_statement_reordering_instructions(kernel_name, statement_reordering_result)
+    reduction_result = load_reduction_analysis(kernel_name)
+    reduction_section = build_reduction_type_instructions(kernel_name, reduction_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, reduction_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
@@ -1189,7 +1225,7 @@ import torch
 
 try:
     from baselines.{func_name}_baseline import {func_name}_pytorch
-    from test14.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test15.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1356,14 +1392,14 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"{'=' * 70}")
 
     baselines_dir = Path("baselines")
-    test14_dir = Path("test14")
-    llm_triton_dir = test14_dir / "llm_triton"
+    test15_dir = Path("test15")
+    llm_triton_dir = test15_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
     test_dir = Path("my_triton_implementations") / func_name
 
     baselines_dir.mkdir(exist_ok=True)
-    test14_dir.mkdir(exist_ok=True)
+    test15_dir.mkdir(exist_ok=True)
     llm_triton_dir.mkdir(exist_ok=True)
     func_code_dir.mkdir(exist_ok=True)
     (llm_triton_dir / "raw_responses").mkdir(exist_ok=True)
@@ -1371,7 +1407,7 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     test_dir.mkdir(exist_ok=True, parents=True)
 
     # Create __init__.py files to make directories importable
-    (test14_dir / "__init__.py").touch()
+    (test15_dir / "__init__.py").touch()
     (llm_triton_dir / "__init__.py").touch()
     (func_code_dir / "__init__.py").touch()
 
@@ -1549,7 +1585,7 @@ def main():
 
     # Save results to JSON file
     import json
-    results_file = Path("test14") / "results.json"
+    results_file = Path("test15") / "results.json"
 
     # Load existing results if file exists
     existing_results = {}
@@ -1579,7 +1615,7 @@ def main():
         }
 
     # Save updated results
-    Path("test14").mkdir(exist_ok=True)
+    Path("test15").mkdir(exist_ok=True)
     with open(results_file, 'w') as f:
         json.dump(existing_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")

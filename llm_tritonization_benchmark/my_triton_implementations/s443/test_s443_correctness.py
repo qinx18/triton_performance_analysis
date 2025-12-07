@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s443_baseline import s443_pytorch
-    from test14.llm_triton.s443.attempt1 import s443_triton
+    from test15.llm_triton.s443.attempt1 import s443_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

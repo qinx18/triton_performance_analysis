@@ -3,44 +3,38 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s113_kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
-    # Get program ID
-    pid = tl.program_id(0)
+def s113_kernel(a_ptr, b_ptr, a_0_val, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Calculate starting index for this block (skip index 0)
-    block_start = pid * BLOCK_SIZE + 1
+    mask = offsets < n_elements
     
-    # Create offset vector
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
+    # Load b[i+1] values (since we're processing from index 1)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
-    # Create mask for valid indices
-    mask = indices < n
+    # Compute a[i+1] = a[0] + b[i+1]
+    result = a_0_val + b_vals
     
-    # Load a[0] (updated value)
-    a0_val = tl.load(a_ptr)
-    
-    # Load b values
-    b_vals = tl.load(b_ptr + indices, mask=mask)
-    
-    # Compute results: a[i] = a[0] + b[i]
-    results = a0_val + b_vals
-    
-    # Store results
-    tl.store(a_ptr + indices, results, mask=mask)
+    # Store result to a[i+1]
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s113_triton(a, b):
-    n = a.shape[0]
+    n_elements = a.shape[0] - 1  # Process from index 1 to end
     
-    if n <= 1:
+    if n_elements <= 0:
         return
     
-    # Phase 1: Update a[0] = a[0] + b[0] (handled on CPU since it's just one element)
-    a[0] = a[0] + b[0]
+    # Get a[0] value as scalar
+    a_0_val = a[0].item()
     
-    # Phase 2: Handle i = 1 to n-1 in parallel using updated a[0]
     BLOCK_SIZE = 256
-    remaining = n - 1
-    if remaining > 0:
-        grid = (triton.cdiv(remaining, BLOCK_SIZE),)
-        s113_kernel[grid](a, b, n, BLOCK_SIZE)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    s113_kernel[grid](
+        a[1:],  # Start from index 1
+        b[1:],  # Start from index 1
+        a_0_val,  # Pass a[0] as scalar
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

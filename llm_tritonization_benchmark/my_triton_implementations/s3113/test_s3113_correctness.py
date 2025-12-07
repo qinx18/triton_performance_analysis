@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s3113_baseline import s3113_pytorch
-    from test14.llm_triton.s3113.attempt10 import s3113_triton
+    from test15.llm_triton.s3113.attempt2 import s3113_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -43,7 +43,6 @@ def test_correctness():
 
         try:
             a = torch.randn(N, device='cuda', dtype=torch.float32)
-            abs = 1
             iterations = 1
 
             a_pt = a.clone()
@@ -52,7 +51,7 @@ def test_correctness():
 
             pt_tensors = {"a": a_pt}
             tr_tensors = {"a": a_tr}
-            scalars = {"abs": abs, "iterations": iterations}
+            scalars = {"iterations": iterations}
 
             pt_args = build_args(s3113_pytorch, pt_tensors, scalars)
             tr_args = build_args(s3113_triton, tr_tensors, scalars)
