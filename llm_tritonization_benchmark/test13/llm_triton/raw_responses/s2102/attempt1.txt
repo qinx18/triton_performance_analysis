@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s2102
-# Generated: 2025-12-07 12:00:42
+# Generated: 2025-12-07 14:06:32
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -75,25 +75,38 @@ for (int i = 0; i < LEN_2D; i++) {
 - Triton kernel: use `for i in range(...)` loop INSIDE the kernel
 - Triton kernel: parallelize `j` values using VECTORIZED operations within each block
 
-**Why in-kernel loop is safe:**
-- The sequential dimension `i` has dependencies that require ordering
-- But within each `i` iteration, all `j` values are independent
-- Reading from previous `i` iteration is safe because the in-kernel loop ensures ordering
+**⚠️ CRITICAL: Identity Matrix / Diagonal Race Condition**
 
-**Example structure:**
+This code has TWO statements that can write to the same position:
+1. `arr[j][i] = 0` - zeros all elements (parallel over j)
+2. `arr[i][i] = 1` - sets diagonal (depends only on i)
+
+**RACE CONDITION**: When j == i, both statements write to the same element!
+If one block sets the diagonal while another block zeros the same position, you get wrong results.
+
+**SOLUTION**: Each block should only set diagonal elements within its j range using MASKED stores:
 ```python
 @triton.jit
-def kernel(...):
+def kernel(arr_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     j_offsets = tl.arange(0, BLOCK_SIZE)
     j_idx = pid * BLOCK_SIZE + j_offsets
-    for i in range(start, end):  # Sequential loop INSIDE kernel
-        # Load, compute, store for this i iteration
-        ...
+    j_mask = j_idx < N
 
-# Wrapper: single kernel launch!
-grid = (triton.cdiv(j_size, BLOCK_SIZE),)
-kernel[grid](...)
+    for i in range(N):  # Sequential loop
+        # Zero all elements in this block's range
+        ptrs = arr_ptr + j_idx * N + i
+        tl.store(ptrs, 0.0, mask=j_mask)
+
+        # Set diagonal ONLY if i is in this block's j range
+        # Use MASKED store - each block only sets its own diagonals
+        diag_mask = j_mask & (j_idx == i)
+        diag_ptrs = arr_ptr + j_idx * N + j_idx  # diagonal positions
+        tl.store(diag_ptrs, 1.0, mask=diag_mask)
 ```
+
+**Key insight**: `diag_mask = j_mask & (j_idx == i)` ensures only ONE thread
+in ONE block sets each diagonal element - the thread where j_idx equals i.
 
 
 ## Array Information:
@@ -179,32 +192,31 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s2102_kernel(aa_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s2102_kernel(aa_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     j_offsets = tl.arange(0, BLOCK_SIZE)
     j_idx = pid * BLOCK_SIZE + j_offsets
-    j_mask = j_idx < LEN_2D
-    
-    for i in range(LEN_2D):
-        # Zero out the entire column for this i
-        aa_ptrs = aa_ptr + j_idx * LEN_2D + i
-        zeros = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-        tl.store(aa_ptrs, zeros, mask=j_mask)
+    j_mask = j_idx < N
+
+    for i in range(N):
+        # Zero all elements in this block's range
+        ptrs = aa_ptr + j_idx * N + i
+        tl.store(ptrs, 0.0, mask=j_mask)
         
-        # Set diagonal element aa[i][i] = 1.0 (only one thread does this)
-        if pid == 0:
-            diagonal_ptr = aa_ptr + i * LEN_2D + i
-            tl.store(diagonal_ptr, 1.0)
+        # Set diagonal ONLY if i is in this block's j range
+        diag_mask = j_mask & (j_idx == i)
+        diag_ptrs = aa_ptr + j_idx * N + j_idx
+        tl.store(diag_ptrs, 1.0, mask=diag_mask)
 
 def s2102_triton(aa):
-    LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 128
+    N = aa.shape[0]
+    BLOCK_SIZE = 64
     
-    grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
     s2102_kernel[grid](
-        aa,
-        LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
+        aa, N, BLOCK_SIZE
     )
+    
+    return aa
 ```

@@ -558,6 +558,27 @@ def build_statement_reordering_instructions(kernel_name: str, reordering_result:
     return ""
 
 
+def detect_identity_matrix_pattern(c_code: str, seq_dim: str, par_dim: str) -> bool:
+    """
+    Detect identity matrix initialization pattern:
+    - One statement zeros a column/row: aa[j][i] = 0 (j is parallel)
+    - Another statement sets diagonal: aa[i][i] = 1 (i is sequential)
+
+    This pattern has a race condition: when j==i, both statements write to aa[i][i].
+    The fix is to have each block only set diagonals within its j-range using masked stores.
+    """
+    import re
+    # Look for pattern: arr[seq][seq] = value (diagonal write)
+    diagonal_pattern = rf'\w+\s*\[\s*{seq_dim}\s*\]\s*\[\s*{seq_dim}\s*\]\s*='
+    # Look for pattern: arr[par][seq] = value (column write with par dim)
+    column_pattern = rf'\w+\s*\[\s*{par_dim}\s*\]\s*\[\s*{seq_dim}\s*\]\s*='
+
+    has_diagonal = bool(re.search(diagonal_pattern, c_code))
+    has_column = bool(re.search(column_pattern, c_code))
+
+    return has_diagonal and has_column
+
+
 def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict]) -> str:
     """Build specific instructions for parallelization strategy."""
     if not analysis:
@@ -637,32 +658,73 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
         lines.append("")
 
         if triton_strategy == 'SINGLE_KERNEL_INLOOP':
+            # Check for identity matrix pattern
+            c_code = analysis.get('c_code', '')
+            is_identity_matrix = detect_identity_matrix_pattern(c_code, seq_dim, par_dim)
+
             # Prefer in-kernel loop - more efficient, single kernel launch
             lines.append("**Implementation Pattern (SINGLE KERNEL with in-kernel loop):**")
             lines.append(f"- Python wrapper: launch ONE kernel with `grid = (triton.cdiv({par_dim}_size, BLOCK_SIZE),)`")
             lines.append(f"- Triton kernel: use `for {seq_dim} in range(...)` loop INSIDE the kernel")
             lines.append(f"- Triton kernel: parallelize `{par_dim}` values using VECTORIZED operations within each block")
             lines.append("")
-            lines.append("**Why in-kernel loop is safe:**")
-            lines.append(f"- The sequential dimension `{seq_dim}` has dependencies that require ordering")
-            lines.append(f"- But within each `{seq_dim}` iteration, all `{par_dim}` values are independent")
-            lines.append(f"- Reading from previous `{seq_dim}` iteration is safe because the in-kernel loop ensures ordering")
-            lines.append("")
-            lines.append("**Example structure:**")
-            lines.append("```python")
-            lines.append("@triton.jit")
-            lines.append(f"def kernel(...):")
-            lines.append(f"    {par_dim}_offsets = tl.arange(0, BLOCK_SIZE)")
-            lines.append(f"    {par_dim}_idx = pid * BLOCK_SIZE + {par_dim}_offsets")
-            lines.append(f"    for {seq_dim} in range(start, end):  # Sequential loop INSIDE kernel")
-            lines.append(f"        # Load, compute, store for this {seq_dim} iteration")
-            lines.append("        ...")
-            lines.append("")
-            lines.append(f"# Wrapper: single kernel launch!")
-            lines.append(f"grid = (triton.cdiv({par_dim}_size, BLOCK_SIZE),)")
-            lines.append("kernel[grid](...)")
-            lines.append("```")
-            lines.append("")
+
+            if is_identity_matrix:
+                # Add specific guidance for identity matrix pattern
+                lines.append("**⚠️ CRITICAL: Identity Matrix / Diagonal Race Condition**")
+                lines.append("")
+                lines.append(f"This code has TWO statements that can write to the same position:")
+                lines.append(f"1. `arr[{par_dim}][{seq_dim}] = 0` - zeros all elements (parallel over {par_dim})")
+                lines.append(f"2. `arr[{seq_dim}][{seq_dim}] = 1` - sets diagonal (depends only on {seq_dim})")
+                lines.append("")
+                lines.append(f"**RACE CONDITION**: When {par_dim} == {seq_dim}, both statements write to the same element!")
+                lines.append(f"If one block sets the diagonal while another block zeros the same position, you get wrong results.")
+                lines.append("")
+                lines.append(f"**SOLUTION**: Each block should only set diagonal elements within its {par_dim} range using MASKED stores:")
+                lines.append("```python")
+                lines.append("@triton.jit")
+                lines.append(f"def kernel(arr_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):")
+                lines.append(f"    pid = tl.program_id(0)")
+                lines.append(f"    {par_dim}_offsets = tl.arange(0, BLOCK_SIZE)")
+                lines.append(f"    {par_dim}_idx = pid * BLOCK_SIZE + {par_dim}_offsets")
+                lines.append(f"    {par_dim}_mask = {par_dim}_idx < N")
+                lines.append("")
+                lines.append(f"    for {seq_dim} in range(N):  # Sequential loop")
+                lines.append(f"        # Zero all elements in this block's range")
+                lines.append(f"        ptrs = arr_ptr + {par_dim}_idx * N + {seq_dim}")
+                lines.append(f"        tl.store(ptrs, 0.0, mask={par_dim}_mask)")
+                lines.append("")
+                lines.append(f"        # Set diagonal ONLY if {seq_dim} is in this block's {par_dim} range")
+                lines.append(f"        # Use MASKED store - each block only sets its own diagonals")
+                lines.append(f"        diag_mask = {par_dim}_mask & ({par_dim}_idx == {seq_dim})")
+                lines.append(f"        diag_ptrs = arr_ptr + {par_dim}_idx * N + {par_dim}_idx  # diagonal positions")
+                lines.append(f"        tl.store(diag_ptrs, 1.0, mask=diag_mask)")
+                lines.append("```")
+                lines.append("")
+                lines.append(f"**Key insight**: `diag_mask = {par_dim}_mask & ({par_dim}_idx == {seq_dim})` ensures only ONE thread")
+                lines.append(f"in ONE block sets each diagonal element - the thread where {par_dim}_idx equals {seq_dim}.")
+                lines.append("")
+            else:
+                lines.append("**Why in-kernel loop is safe:**")
+                lines.append(f"- The sequential dimension `{seq_dim}` has dependencies that require ordering")
+                lines.append(f"- But within each `{seq_dim}` iteration, all `{par_dim}` values are independent")
+                lines.append(f"- Reading from previous `{seq_dim}` iteration is safe because the in-kernel loop ensures ordering")
+                lines.append("")
+                lines.append("**Example structure:**")
+                lines.append("```python")
+                lines.append("@triton.jit")
+                lines.append(f"def kernel(...):")
+                lines.append(f"    {par_dim}_offsets = tl.arange(0, BLOCK_SIZE)")
+                lines.append(f"    {par_dim}_idx = pid * BLOCK_SIZE + {par_dim}_offsets")
+                lines.append(f"    for {seq_dim} in range(start, end):  # Sequential loop INSIDE kernel")
+                lines.append(f"        # Load, compute, store for this {seq_dim} iteration")
+                lines.append("        ...")
+                lines.append("")
+                lines.append(f"# Wrapper: single kernel launch!")
+                lines.append(f"grid = (triton.cdiv({par_dim}_size, BLOCK_SIZE),)")
+                lines.append("kernel[grid](...)")
+                lines.append("```")
+                lines.append("")
         else:
             # Fallback to sequential kernel launches
             lines.append("**Implementation Pattern (Sequential kernel launches):**")
@@ -1012,6 +1074,11 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
     has_offset = func_spec['has_offset']
     has_2d = func_spec.get('has_2d_arrays', False)
     scalar_params = func_spec.get('scalar_params', {})
+    has_reduction = func_spec.get('has_reduction', False)
+
+    # Check if this is a pure reduction (all arrays are read-only and function returns scalar)
+    all_arrays_readonly = all(mode == 'r' for mode in arrays.values())
+    is_pure_reduction = has_reduction and all_arrays_readonly
 
     if has_offset:
         size_expr = "N + 10"
@@ -1071,7 +1138,26 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
         triton_clones.append(f"            {arr}_tr = {arr}.clone()")
     triton_clone_str = '\n'.join(triton_clones) if triton_clones else "            pass"
 
-    if len(output_arrays) == 1:
+    # For pure reductions (all arrays read-only, returns scalar), compare return values
+    if is_pure_reduction:
+        compare_str = """            # Pure reduction: compare return values
+            if isinstance(pytorch_result, (int, float)):
+                pt_val = pytorch_result
+            elif isinstance(pytorch_result, torch.Tensor):
+                pt_val = pytorch_result.item() if pytorch_result.numel() == 1 else pytorch_result.sum().item()
+            else:
+                pt_val = float(pytorch_result)
+
+            if isinstance(triton_result, (int, float)):
+                tr_val = triton_result
+            elif isinstance(triton_result, torch.Tensor):
+                tr_val = triton_result.item() if triton_result.numel() == 1 else triton_result.sum().item()
+            else:
+                tr_val = float(triton_result)
+
+            max_error = abs(pt_val - tr_val)"""
+        passed_check_str = "passed = max_error < 1e-3 or (abs(pt_val) > 1e-6 and max_error / abs(pt_val) < 1e-3)"
+    elif len(output_arrays) == 1:
         compare_str = f"            max_error = torch.max(torch.abs({output_arrays[0]}_pt - {output_arrays[0]}_tr)).item()"
         passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({output_arrays[0]}_pt, {output_arrays[0]}_tr, rtol=1e-3, atol=1e-3)"
     elif len(output_arrays) > 1:
@@ -1148,7 +1234,7 @@ def test_correctness():
             tr_args = build_args({func_name}_triton, tr_tensors, scalars)
 
             pytorch_result = {func_name}_pytorch(*pt_args)
-            {func_name}_triton(*tr_args)
+            triton_result = {func_name}_triton(*tr_args)
 
 {compare_str}
 

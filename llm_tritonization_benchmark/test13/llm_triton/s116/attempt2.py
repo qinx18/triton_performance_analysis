@@ -8,37 +8,25 @@ def s116_kernel(a_ptr, a_copy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load original values from read-only copy
-    a_i = tl.load(a_copy_ptr + offsets, mask=mask, other=0.0)
-    a_i1 = tl.load(a_copy_ptr + offsets + 1, mask=mask, other=0.0)
-    a_i2 = tl.load(a_copy_ptr + offsets + 2, mask=mask, other=0.0)
-    a_i3 = tl.load(a_copy_ptr + offsets + 3, mask=mask, other=0.0)
-    a_i4 = tl.load(a_copy_ptr + offsets + 4, mask=mask, other=0.0)
-    a_i5 = tl.load(a_copy_ptr + offsets + 5, mask=mask, other=0.0)
+    # Load from read-only copy for all reads
+    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)
+    a_vals_next = tl.load(a_copy_ptr + offsets + 1, mask=mask)
     
-    # Check which positions to update based on i % 5
-    mod5 = offsets % 5
+    # Compute: a[i] = a[i + 1] * a[i]
+    result = a_vals_next * a_vals
     
-    # Compute results for each case
-    result = tl.where(mod5 == 0, a_i1 * a_i,
-             tl.where(mod5 == 1, a_i2 * a_i1,
-             tl.where(mod5 == 2, a_i3 * a_i2,
-             tl.where(mod5 == 3, a_i4 * a_i3,
-                      a_i5 * a_i4))))  # mod5 == 4
-    
-    # Store results
+    # Store to original array
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s116_triton(a):
     n_elements = a.shape[0] - 5
+    
+    # Create read-only copy to avoid WAR race conditions
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s116_kernel[grid](
-        a,
-        a_copy,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, a_copy, n_elements, BLOCK_SIZE
     )

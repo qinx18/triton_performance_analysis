@@ -1,14 +1,14 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-06 (Integrated generate_and_test.py - test12)
-**Previous Tests:** test11, test10, test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-07 (Integrated generate_and_test.py - test13)
+**Previous Tests:** test12, test11, test10, test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 LLM Triton v3 with Retry Mechanism (2025-12-06) - test12 - LATEST RUN
+## 🔬 LLM Triton v3 with Enhanced Analysis (2025-12-07) - test13 - LATEST RUN
 
 ### Summary
 | Metric | Count | Percentage |
@@ -16,7 +16,89 @@
 | ✅ **PASSING** | 141 | 93.4% |
 | ❌ **FAILING** | 10 | 6.6% |
 
-### Key Finding: New Highest Pass Rate
+### Key Improvements in test13
+
+**Enhanced Analysis Tools Integrated:**
+1. **Wavefront Pattern Detection (s2111)**: Added detection and guidance for 2D wavefront parallelism where both dimensions have dependencies
+2. **Stream Compaction (s343)**: Now passes with proper guidance about prefix sum pattern
+3. **Crossing Threshold (s281)**: Added explicit warning about NOT using sliced arrays in Phase 2
+4. **Statement Reordering (s211)**: Integrated analysis into prompt generation
+5. **Loop Stride Detection (s116)**: Fixed overwrite detection for strided loops
+6. **Fixed s277 baseline**: Baseline was buggy (incorrectly parallelized), now uses sequential processing
+
+### Pass Rate by Attempt
+| Attempt | Passed | Cumulative |
+|---------|--------|------------|
+| Attempt 1 | 107 | 107 (70.9%) |
+| Attempt 2 | +24 | 131 (86.8%) |
+| Attempt 3 | +5 | 136 (90.1%) |
+| Attempt 4 | +3 | 139 (92.1%) |
+| Attempt 5 | +1 | 140 (92.7%) |
+| Attempt 6 | +1 | 141 (93.4%) |
+
+### Comparison with test12
+
+| Metric | test12 | test13 | Change |
+|--------|--------|--------|--------|
+| Passing | 141 (93.4%) | 141 (93.4%) | Same |
+| Failing | 10 (6.6%) | 10 (6.6%) | Same |
+
+**Note:** Same pass rate, but different functions passing/failing due to analysis improvements:
+- ✅ **s343 NOW PASSES**: Stream compaction analysis integrated
+- ✅ **s277 NOW PASSES**: Fixed buggy baseline (was incorrectly parallelized)
+- ✅ **s281 NOW PASSES**: Added warning about sliced array bug
+- ❌ **s161 NOW FAILS**: Regression (needs investigation)
+- ❌ **s175 NOW FAILS**: Regression (needs investigation)
+- ❌ **s31111 NOW FAILS**: Regression (needs investigation)
+- ❌ **s323 NOW FAILS**: Regression (needs investigation)
+
+### Failed Functions (10) - Error Breakdown
+
+| Function | Attempts | Error Type | Notes |
+|----------|----------|-----------|-------|
+| s116 | 3 | numerical | Manually unrolled loop (stride 5) |
+| s161 | 4 | numerical | Offset + conditional pattern |
+| s175 | 3 | numerical | Forward dependency pattern |
+| s176 | 10 | timeout | Sequential computation |
+| s2102 | 3 | numerical | 2D array pattern |
+| s211 | 4 | numerical | Statement reordering (has analysis but still fails) |
+| s257 | 3 | numerical | Various patterns |
+| s31111 | 3 | numerical | Various patterns |
+| s322 | 3 | numerical | Various patterns |
+| s323 | 3 | numerical | Various patterns |
+
+**Error Type Summary:**
+- Numerical errors: 9 functions
+- Timeout: 1 function (s176)
+
+### Passing Functions (141):
+s000, s111, s1111, s1112, s1113, s1115, s1119, s112, s113, s114, s115, s1161, s118, s119, s121, s1213, s122, s1221, s123, s1232, s124, s1244, s125, s1251, s126, s127, s1279, s128, s1281, s131, s13110, s132, s1351, s141, s1421, s151, s152, s162, s171, s172, s173, s174, s2101, s2102, s2111, s212, s221, s222, s2233, s2244, s2251, s2275, s231, s232, s233, s235, s241, s242, s243, s244, s251, s252, s253, s254, s255, s256, s258, s261, s271, s2710, s2711, s2712, s272, s273, s274, s275, s276, s277, s278, s279, s281, s291, s292, s293, s311, s3110, s3111, s3112, s3113, s312, s313, s314, s315, s316, s317, s318, s319, s321, s3251, s331, s332, s341, s343, s351, s352, s353, s4112, s4113, s4114, s4115, s4116, s4117, s4121, s421, s422, s423, s424, s431, s441, s442, s443, s451, s452, s453, s471, s481, s482, s491, va, vag, vas, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+### Analysis Tools Used
+
+| Tool | Purpose |
+|------|---------|
+| compute_parallel_dims.py | Detect parallelizable dimensions and invalid parallelization |
+| compute_war_analysis.py | Detect WAR (Write-After-Read) anti-dependencies |
+| compute_statement_overwrites.py | Detect statement overwrite patterns |
+| compute_stream_compaction.py | Detect stream compaction (conditional copy) patterns |
+| compute_crossing_threshold.py | Detect crossing threshold / reverse access patterns |
+| compute_loop_unrolling.py | Detect manually unrolled loop patterns |
+| compute_statement_reordering.py | Detect statement reordering optimizations |
+| compute_pointer_aliasing.py | Detect pointer aliasing patterns |
+| compute_early_exit.py | Detect early exit patterns |
+
+---
+
+## 🔬 LLM Triton v3 with Retry Mechanism (2025-12-06) - test12
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 141 | 93.4% |
+| ❌ **FAILING** | 10 | 6.6% |
+
+### Key Finding: Highest Pass Rate at the Time
 
 **Integrated pipeline (`generate_and_test.py`) with automatic retry mechanism:**
 - Max 10 attempts per function

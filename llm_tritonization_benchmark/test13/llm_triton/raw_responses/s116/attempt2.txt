@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 5.78e+00
+**Max error observed**: 1.28e+00
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -26,54 +26,27 @@ def s116_kernel(a_ptr, a_copy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
         
-        # Load from read-only copy
+        # Load from read-only copy for all reads
         a_vals = tl.load(a_copy_ptr + current_offsets, mask=mask)
-        a_plus1 = tl.load(a_copy_ptr + current_offsets + 1, mask=mask & ((current_offsets + 1) < n_elements))
-        a_plus2 = tl.load(a_copy_ptr + current_offsets + 2, mask=mask & ((current_offsets + 2) < n_elements))
-        a_plus3 = tl.load(a_copy_ptr + current_offsets + 3, mask=mask & ((current_offsets + 3) < n_elements))
-        a_plus4 = tl.load(a_copy_ptr + current_offsets + 4, mask=mask & ((current_offsets + 4) < n_elements))
-        a_plus5 = tl.load(a_copy_ptr + current_offsets + 5, mask=mask & ((current_offsets + 5) < n_elements))
+        a_vals_next = tl.load(a_copy_ptr + current_offsets + 1, mask=mask & ((current_offsets + 1) < n_elements))
         
-        # Compute results
-        result_0 = a_plus1 * a_vals
-        result_1 = a_plus2 * a_plus1
-        result_2 = a_plus3 * a_plus2
-        result_3 = a_plus4 * a_plus3
-        result_4 = a_plus5 * a_plus4
+        # Compute: a[i] = a[i + 1] * a[i]
+        result = a_vals_next * a_vals
         
         # Store to original array
-        # For i positions
-        store_mask_0 = mask & ((current_offsets % 5) == 0)
-        tl.store(a_ptr + current_offsets, result_0, mask=store_mask_0)
-        
-        # For i+1 positions  
-        store_mask_1 = mask & ((current_offsets % 5) == 1)
-        tl.store(a_ptr + current_offsets, result_1, mask=store_mask_1)
-        
-        # For i+2 positions
-        store_mask_2 = mask & ((current_offsets % 5) == 2)
-        tl.store(a_ptr + current_offsets, result_2, mask=store_mask_2)
-        
-        # For i+3 positions
-        store_mask_3 = mask & ((current_offsets % 5) == 3)
-        tl.store(a_ptr + current_offsets, result_3, mask=store_mask_3)
-        
-        # For i+4 positions
-        store_mask_4 = mask & ((current_offsets % 5) == 4)
-        tl.store(a_ptr + current_offsets, result_4, mask=store_mask_4)
+        tl.store(a_ptr + current_offsets, result, mask=mask)
 
 def s116_triton(a):
     n_elements = a.shape[0] - 5
+    
+    # Create read-only copy to avoid WAR race conditions
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s116_kernel[grid](
-        a,
-        a_copy,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, a_copy, n_elements, BLOCK_SIZE
     )
 ```
 
@@ -171,66 +144,6 @@ for i in range(0, BLOCK_SIZE, 5):  # WRONG!
 
 The unrolling in the original C code is a manual optimization for CPU.
 For GPU/Triton, ignore the unrolling and parallelize per-element.
-
-============================================================
-
-============================================================
-STATEMENT REORDERING OPPORTUNITY DETECTED
-============================================================
-
-STATEMENT REORDERING TRANSFORMATION AVAILABLE
-
-Dependency pattern detected:
-  - Consumer (S0): reads a[i-1] (from previous iteration)
-  - Producer (S1): writes a[i]
-
-This creates a loop-carried dependency: iteration i needs a[i-1] from iteration i-1.
-
-TRANSFORMATION: Reorder to compute a[i] FIRST, then use it for the NEXT iteration:
-
-```python
-# PROLOGUE: First consumer iteration (uses original a[0])
-a[1] = ... + a_orig[0]  # i=1, reads original a[0]
-
-# MAIN LOOP: Reordered - producer THEN shifted consumer (parallelizable)
-for i in range(1, N-1):  # parallel
-    # Step 1: Compute a[i] (producer)
-    a[i] = ...  # S1
-    # Step 2: Use a[i] for NEXT position (shifted consumer)
-    a[i+1] = ... + a[i]  # S0 shifted to i+1
-
-# EPILOGUE: Last producer iteration
-a[N-1] = ...  # i=N-1, no consumer uses this
-```
-
-After reordering, each iteration computes a[i] and immediately uses it
-for position i+1, eliminating the inter-iteration dependency.
-
-WAR RACE CONDITION WARNING:
-Arrays needing read-only copy: ['a']
-Clone these arrays BEFORE the parallel loop to preserve original values.
-
-Additional arrays read with forward offset (need original values):
-  - a[i+2] in S1
-  - a[i+1] in S1
-  - a[i+3] in S2
-  - a[i+2] in S2
-  - a[i+3] in S2
-  - a[i+2] in S2
-  - a[i+4] in S3
-  - a[i+3] in S3
-  - a[i+4] in S3
-  - a[i+3] in S3
-  - a[i+4] in S3
-  - a[i+3] in S3
-  - a[i+5] in S4
-  - a[i+4] in S4
-  - a[i+5] in S4
-  - a[i+4] in S4
-  - a[i+5] in S4
-  - a[i+4] in S4
-  - a[i+5] in S4
-  - a[i+4] in S4
 
 ============================================================
 
@@ -350,37 +263,25 @@ def s116_kernel(a_ptr, a_copy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load original values from read-only copy
-    a_i = tl.load(a_copy_ptr + offsets, mask=mask, other=0.0)
-    a_i1 = tl.load(a_copy_ptr + offsets + 1, mask=mask, other=0.0)
-    a_i2 = tl.load(a_copy_ptr + offsets + 2, mask=mask, other=0.0)
-    a_i3 = tl.load(a_copy_ptr + offsets + 3, mask=mask, other=0.0)
-    a_i4 = tl.load(a_copy_ptr + offsets + 4, mask=mask, other=0.0)
-    a_i5 = tl.load(a_copy_ptr + offsets + 5, mask=mask, other=0.0)
+    # Load from read-only copy for all reads
+    a_vals = tl.load(a_copy_ptr + offsets, mask=mask)
+    a_vals_next = tl.load(a_copy_ptr + offsets + 1, mask=mask)
     
-    # Check which positions to update based on i % 5
-    mod5 = offsets % 5
+    # Compute: a[i] = a[i + 1] * a[i]
+    result = a_vals_next * a_vals
     
-    # Compute results for each case
-    result = tl.where(mod5 == 0, a_i1 * a_i,
-             tl.where(mod5 == 1, a_i2 * a_i1,
-             tl.where(mod5 == 2, a_i3 * a_i2,
-             tl.where(mod5 == 3, a_i4 * a_i3,
-                      a_i5 * a_i4))))  # mod5 == 4
-    
-    # Store results
+    # Store to original array
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s116_triton(a):
     n_elements = a.shape[0] - 5
+    
+    # Create read-only copy to avoid WAR race conditions
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s116_kernel[grid](
-        a,
-        a_copy,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, a_copy, n_elements, BLOCK_SIZE
     )

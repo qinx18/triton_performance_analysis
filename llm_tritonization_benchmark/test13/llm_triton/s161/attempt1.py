@@ -3,54 +3,54 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s161_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    strip_id = tl.program_id(0)
-    strip_start = strip_id
+def s161_kernel_else(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    if strip_start >= n_elements:
-        return
+    mask = offsets < n_elements
     
-    # Each strip processes exactly 1 element
-    offsets = tl.arange(0, 1)
-    idx = strip_start + offsets
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    else_mask = (b_vals < 0.0) & mask
     
-    # Load values
-    mask = idx < n_elements
-    b_val = tl.load(b_ptr + idx, mask=mask)
-    a_val = tl.load(a_ptr + idx, mask=mask)
-    c_val = tl.load(c_ptr + idx, mask=mask)
-    d_val = tl.load(d_ptr + idx, mask=mask)
-    e_val = tl.load(e_ptr + idx, mask=mask)
+    a_vals = tl.load(a_ptr + offsets, mask=else_mask)
+    d_vals = tl.load(d_ptr + offsets, mask=else_mask)
     
-    # Conditional logic: if (b[i] < 0.0)
-    condition = b_val < 0.0
+    c_new = a_vals + d_vals * d_vals
     
-    # Path 1: a[i] = c[i] + d[i] * e[i]
-    result_a = c_val + d_val * e_val
+    tl.store(c_ptr + offsets + 1, c_new, mask=else_mask)
+
+@triton.jit
+def s161_kernel_if(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Path 2: c[i+1] = a[i] + d[i] * d[i]
-    result_c = a_val + d_val * d_val
+    mask = offsets < n_elements
     
-    # Store results based on condition
-    # Always update a[i] when condition is False
-    tl.store(a_ptr + idx, tl.where(condition, a_val, result_a), mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    if_mask = (b_vals >= 0.0) & mask
     
-    # Update c[i+1] when condition is True (and i+1 is valid)
-    next_idx = idx + 1
-    next_mask = (next_idx < (n_elements + 1)) & condition & mask
-    if tl.sum(next_mask.to(tl.int32)) > 0:
-        tl.store(c_ptr + next_idx, result_c, mask=next_mask)
+    c_vals = tl.load(c_ptr + offsets, mask=if_mask)
+    d_vals = tl.load(d_ptr + offsets, mask=if_mask)
+    e_vals = tl.load(e_ptr + offsets, mask=if_mask)
+    
+    a_new = c_vals + d_vals * e_vals
+    
+    tl.store(a_ptr + offsets, a_new, mask=if_mask)
 
 def s161_triton(a, b, c, d, e):
-    n_elements = a.shape[0] - 1  # LEN_1D - 1
+    n = a.shape[0] - 1
     
-    # Must process strips sequentially due to RAW dependency
-    BLOCK_SIZE = 1
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n, BLOCK_SIZE),)
     
-    for strip_start in range(0, n_elements, BLOCK_SIZE):
-        grid = (1,)
-        s161_kernel[grid](
-            a, b, c, d, e,
-            n_elements,
-            BLOCK_SIZE=BLOCK_SIZE
-        )
+    # Step 1: Process else branch first (c[i+1] = a[i] + d[i] * d[i])
+    s161_kernel_else[grid](
+        a, b, c, d, n, BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    # Step 2: Process if branch after else completes (a[i] = c[i] + d[i] * e[i])
+    s161_kernel_if[grid](
+        a, b, c, d, e, n, BLOCK_SIZE=BLOCK_SIZE
+    )

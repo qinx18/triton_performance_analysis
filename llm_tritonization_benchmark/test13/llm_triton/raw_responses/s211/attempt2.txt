@@ -1,107 +1,74 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
 
-**Error type**: runtime
-**Error message**:
-```
-aconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 758, in cache_key
-    dependencies_finder.visit(self.parse())
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 407, in visit
-    return visitor(node)
-           ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 415, in generic_visit
-    self.visit(item)
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 407, in visit
-    return visitor(node)
-           ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 167, in visit_FunctionDef
-    self.generic_visit(node)
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 415, in generic_visit
-    self.visit(item)
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 407, in visit
-    return visitor(node)
-           ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 233, in visit_For
-    self.generic_visit(node)
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 415, in generic_visit
-    self.visit(item)
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 407, in visit
-    return visitor(node)
-           ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 417, in generic_visit
-    self.visit(value)
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 407, in visit
-    return visitor(node)
-           ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 127, in visit_Call
-    func = self.visit(node.func)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/ast.py", line 407, in visit
-    return visitor(node)
-           ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 117, in visit_Attribute
-    return getattr(lhs, node.attr)
-           ^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: module 'triton.language' has no attribute 'any'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 5.07e-01
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s211_kernel(
-    a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # Get block offsets
+def s211_kernel(a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Process prologue: a[1] uses original b[0]
+    # Prologue: a[1] = b[0] + c[1] * d[1]
     if tl.program_id(0) == 0:
-        # Load original b[0] for a[1]
-        b_0 = tl.load(b_copy_ptr)
-        c_1 = tl.load(c_ptr + 1)
-        d_1 = tl.load(d_ptr + 1)
-        a_1 = b_0 + c_1 * d_1
-        tl.store(a_ptr + 1, a_1)
+        c_val = tl.load(c_ptr + 1)
+        d_val = tl.load(d_ptr + 1)
+        b_val = tl.load(b_copy_ptr + 0)
+        result = b_val + c_val * d_val
+        tl.store(a_ptr + 1, result)
     
-    # Main loop: reordered computation
-    for block_start in range(1, n_elements - 1, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < (n_elements - 1)
+    # Main parallel loop: i from 1 to n_elements-3
+    main_loop_size = n_elements - 3
+    for block_start in range(0, main_loop_size, BLOCK_SIZE):
+        current_offsets = block_start + offsets + 1  # i starts from 1
+        mask = current_offsets < (main_loop_size + 1)
         
-        # Step 1: Compute b[i] (producer)
-        b_vals = tl.load(b_copy_ptr + current_offsets + 1, mask=mask)
+        # b[i] = b_copy[i+1] - e[i] * d[i]
+        b_read_offsets = current_offsets + 1
         e_vals = tl.load(e_ptr + current_offsets, mask=mask)
         d_vals = tl.load(d_ptr + current_offsets, mask=mask)
-        new_b = b_vals - e_vals * d_vals
-        tl.store(b_ptr + current_offsets, new_b, mask=mask)
+        b_read_vals = tl.load(b_copy_ptr + b_read_offsets, mask=mask)
+        b_results = b_read_vals - e_vals * d_vals
+        tl.store(b_ptr + current_offsets, b_results, mask=mask)
         
-        # Step 2: Compute a[i+1] using b[i] (shifted consumer)
-        next_offsets = current_offsets + 1
-        next_mask = (next_offsets < n_elements) & mask
-        if tl.any(next_mask):
-            c_next = tl.load(c_ptr + next_offsets, mask=next_mask)
-            d_next = tl.load(d_ptr + next_offsets, mask=next_mask)
-            new_a = new_b + c_next * d_next
-            tl.store(a_ptr + next_offsets, new_a, mask=next_mask)
+        # a[i+1] = b[i] + c[i+1] * d[i+1]
+        a_write_offsets = current_offsets + 1
+        c_read_offsets = current_offsets + 1
+        d_read_offsets = current_offsets + 1
+        a_mask = a_write_offsets < n_elements
+        
+        c_vals = tl.load(c_ptr + c_read_offsets, mask=a_mask)
+        d_vals_shifted = tl.load(d_ptr + d_read_offsets, mask=a_mask)
+        a_results = b_results + c_vals * d_vals_shifted
+        tl.store(a_ptr + a_write_offsets, a_results, mask=a_mask)
+    
+    # Epilogue: b[n_elements-2] = b_copy[n_elements-1] - e[n_elements-2] * d[n_elements-2]
+    if tl.program_id(0) == 0:
+        epilogue_idx = n_elements - 2
+        if epilogue_idx >= 1:
+            e_val = tl.load(e_ptr + epilogue_idx)
+            d_val = tl.load(d_ptr + epilogue_idx)
+            b_val = tl.load(b_copy_ptr + epilogue_idx + 1)
+            result = b_val - e_val * d_val
+            tl.store(b_ptr + epilogue_idx, result)
 
 def s211_triton(a, b, c, d, e):
     n_elements = a.shape[0]
     
-    # Create read-only copy to handle WAR dependency
+    # Create read-only copy for WAR safety
     b_copy = b.clone()
     
     BLOCK_SIZE = 256
@@ -110,7 +77,7 @@ def s211_triton(a, b, c, d, e):
     s211_kernel[grid](
         a, b, b_copy, c, d, e,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE
     )
 ```
 
@@ -164,25 +131,35 @@ Dependency pattern detected:
 
 This creates a loop-carried dependency: iteration i needs b[i-1] from iteration i-1.
 
-TRANSFORMATION: Reorder to compute b[i] FIRST, then use it for the NEXT iteration:
+TRANSFORMATION: Reorder statements and shift consumer index by 1.
 
-```python
-# PROLOGUE: First consumer iteration (uses original b[0])
-a[1] = ... + b_orig[0]  # i=1, reads original b[0]
-
-# MAIN LOOP: Reordered - producer THEN shifted consumer (parallelizable)
-for i in range(1, N-1):  # parallel
-    # Step 1: Compute b[i] (producer)
-    b[i] = ...  # S1
-    # Step 2: Use b[i] for NEXT position (shifted consumer)
-    a[i+1] = ... + b[i]  # S0 shifted to i+1
-
-# EPILOGUE: Last producer iteration
-b[N-1] = ...  # i=N-1, no consumer uses this
+BEFORE (original - NOT parallelizable due to loop-carried dependency):
+```c
+for (int i = 1; i < N-1; i++) {
+    a[i] = b[i-1] + c[i] * d[i];  // S0: needs b[i-1] from previous iteration
+    b[i] = b[i+1] - e[i] * d[i];                 // S1: produces b[i]
+}
 ```
 
-After reordering, each iteration computes b[i] and immediately uses it
-for position i+1, eliminating the inter-iteration dependency.
+AFTER (reordered - parallelizable, each iteration independent):
+```c
+// PROLOGUE: First consumer uses original b[0]
+a[1] = b[0] + c[1] * d[1];
+
+// MAIN LOOP: Producer first, then shifted consumer (uses b[i] just computed)
+for (int i = 1; i < N-2; i++) {  // PARALLEL - each iteration independent!
+    b[i] = b_copy[i+1] - e[i] * d[i];           // S1: compute b[i]
+    a[i+1] = b[i] + c[i+1] * d[i+1];  // S0 shifted: use b[i] immediately
+}
+
+// EPILOGUE: Last producer has no consumer
+b[N-2] = b_copy[N-1] - e[N-2] * d[N-2];
+```
+
+Key insight: After reordering, b[i] is computed and used in the SAME iteration,
+eliminating the inter-iteration dependency. The loop becomes parallelizable.
+
+NOTE: b_copy is needed for WAR safety (S1 reads b[i+1] while writing b[i]).
 
 WAR RACE CONDITION WARNING:
 Arrays needing read-only copy: ['b']
@@ -296,61 +273,72 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s211_kernel(
-    a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # Get block offsets
+def s211_kernel(a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Process prologue: a[1] uses original b[0]
-    if tl.program_id(0) == 0:
-        # Load original b[0] for a[1]
-        b_0 = tl.load(b_copy_ptr)
-        c_1 = tl.load(c_ptr + 1)
-        d_1 = tl.load(d_ptr + 1)
-        a_1 = b_0 + c_1 * d_1
-        tl.store(a_ptr + 1, a_1)
+    # Prologue: a[1] = b[0] + c[1] * d[1]
+    if pid == 0:
+        c_val = tl.load(c_ptr + 1)
+        d_val = tl.load(d_ptr + 1)
+        b_val = tl.load(b_copy_ptr + 0)
+        result = b_val + c_val * d_val
+        tl.store(a_ptr + 1, result)
     
-    # Main loop: reordered computation
-    for block_start in range(1, n_elements - 1, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < (n_elements - 1)
+    # Main parallel loop: i from 1 to n_elements-3
+    main_loop_size = n_elements - 3
+    block_start = pid * BLOCK_SIZE
+    
+    if block_start < main_loop_size:
+        current_offsets = block_start + offsets + 1  # i starts from 1
+        mask = current_offsets <= main_loop_size
         
-        # Step 1: Compute b[i] (producer)
-        b_vals = tl.load(b_copy_ptr + current_offsets + 1, mask=mask)
+        # b[i] = b_copy[i+1] - e[i] * d[i]
+        b_read_offsets = current_offsets + 1
         e_vals = tl.load(e_ptr + current_offsets, mask=mask)
         d_vals = tl.load(d_ptr + current_offsets, mask=mask)
-        new_b = b_vals - e_vals * d_vals
-        tl.store(b_ptr + current_offsets, new_b, mask=mask)
+        b_read_vals = tl.load(b_copy_ptr + b_read_offsets, mask=mask)
+        b_results = b_read_vals - e_vals * d_vals
+        tl.store(b_ptr + current_offsets, b_results, mask=mask)
         
-        # Step 2: Compute a[i+1] using b[i] (shifted consumer)
-        next_offsets = current_offsets + 1
-        next_mask = next_offsets < n_elements
-        combined_mask = mask & next_mask
+        # a[i+1] = b[i] + c[i+1] * d[i+1]
+        a_write_offsets = current_offsets + 1
+        c_read_offsets = current_offsets + 1
+        d_read_offsets = current_offsets + 1
+        a_mask = mask & (a_write_offsets < n_elements)
         
-        c_next = tl.load(c_ptr + next_offsets, mask=combined_mask)
-        d_next = tl.load(d_ptr + next_offsets, mask=combined_mask)
-        new_a = new_b + c_next * d_next
-        tl.store(a_ptr + next_offsets, new_a, mask=combined_mask)
+        c_vals = tl.load(c_ptr + c_read_offsets, mask=a_mask)
+        d_vals_shifted = tl.load(d_ptr + d_read_offsets, mask=a_mask)
+        a_results = b_results + c_vals * d_vals_shifted
+        tl.store(a_ptr + a_write_offsets, a_results, mask=a_mask)
+    
+    # Epilogue: b[n_elements-2] = b_copy[n_elements-1] - e[n_elements-2] * d[n_elements-2]
+    if pid == 0:
+        epilogue_idx = n_elements - 2
+        if epilogue_idx >= 1:
+            e_val = tl.load(e_ptr + epilogue_idx)
+            d_val = tl.load(d_ptr + epilogue_idx)
+            b_val = tl.load(b_copy_ptr + epilogue_idx + 1)
+            result = b_val - e_val * d_val
+            tl.store(b_ptr + epilogue_idx, result)
 
 def s211_triton(a, b, c, d, e):
     n_elements = a.shape[0]
     
-    # Create read-only copy to handle WAR dependency
+    # Create read-only copy for WAR safety
     b_copy = b.clone()
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    main_loop_size = n_elements - 3
+    grid = (triton.cdiv(main_loop_size, BLOCK_SIZE),)
     
     s211_kernel[grid](
         a, b, b_copy, c, d, e,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE
     )

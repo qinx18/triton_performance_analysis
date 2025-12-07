@@ -3,39 +3,39 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s323_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, strip_start: tl.constexpr, strip_size: tl.constexpr, n_elements: tl.constexpr):
-    offsets = tl.arange(0, strip_size)
-    idx = strip_start + offsets + 1  # +1 because original loop starts at i=1
+def s323_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This kernel must process sequentially due to loop-carried dependency
+    # Use single thread to process all elements
+    thread_id = tl.program_id(0)
     
-    mask = idx < n_elements + 1
+    if thread_id != 0:
+        return
     
-    # Load values
-    b_prev = tl.load(b_ptr + idx - 1, mask=mask)
-    c_vals = tl.load(c_ptr + idx, mask=mask)
-    d_vals = tl.load(d_ptr + idx, mask=mask)
-    e_vals = tl.load(e_ptr + idx, mask=mask)
-    
-    # Compute a[i] = b[i-1] + c[i] * d[i]
-    a_vals = b_prev + c_vals * d_vals
-    
-    # Compute b[i] = a[i] + c[i] * e[i]
-    b_vals = a_vals + c_vals * e_vals
-    
-    # Store results
-    tl.store(a_ptr + idx, a_vals, mask=mask)
-    tl.store(b_ptr + idx, b_vals, mask=mask)
+    # Process sequentially from i=1 to n_elements-1
+    for i in range(1, n_elements):
+        # Load required values
+        b_prev = tl.load(b_ptr + (i - 1))
+        c_i = tl.load(c_ptr + i)
+        d_i = tl.load(d_ptr + i)
+        e_i = tl.load(e_ptr + i)
+        
+        # Compute a[i] = b[i-1] + c[i] * d[i]
+        a_val = b_prev + c_i * d_i
+        tl.store(a_ptr + i, a_val)
+        
+        # Compute b[i] = a[i] + c[i] * e[i]
+        b_val = a_val + c_i * e_i
+        tl.store(b_ptr + i, b_val)
 
 def s323_triton(a, b, c, d, e):
-    n_elements = a.shape[0] - 1  # Loop goes from 1 to LEN_1D-1
-    STRIP_SIZE = 1  # Must be 1 due to loop-carried dependency
+    n_elements = a.shape[0]
+    BLOCK_SIZE = 128
     
-    # Process strips sequentially
-    for strip_start in range(0, n_elements, STRIP_SIZE):
-        remaining = min(STRIP_SIZE, n_elements - strip_start)
-        
-        s323_kernel[(1,)](
-            a, b, c, d, e,
-            strip_start=strip_start,
-            strip_size=remaining,
-            n_elements=n_elements
-        )
+    # Launch with single block since we need sequential processing
+    grid = (1,)
+    
+    s323_kernel[grid](
+        a, b, c, d, e,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

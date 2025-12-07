@@ -101,11 +101,11 @@
   "s116": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
       "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.79e+00"
+      "message": "Numerical mismatch: max_error = 1.28e+00"
     }
   },
   "s1161": {
@@ -311,12 +311,9 @@
   "s161": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 4,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.71e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s162": {
     "baseline_generated": true,
@@ -356,12 +353,9 @@
   "s175": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 1.33e+01"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s176": {
     "baseline_generated": true,
@@ -383,21 +377,18 @@
   "s2102": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 1.00e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s211": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 4,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
       "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.56e+00"
+      "message": "Numerical mismatch: max_error = 5.07e-01"
     }
   },
   "s2111": {
@@ -759,11 +750,11 @@
   "s31111": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 1.47e+00"
+      "type": "compilation",
+      "message": "r(\"'Name' object has no attribute 'func'\")\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s31111/test_s31111_correctness.py\", line 60, in test_correctness\n    triton_result = s31111_triton(*tr_args)\n                    ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test13/llm_triton/s31111/attempt1.py\", line 31, in s31111_triton\n  "
     }
   },
   "s3112": {
@@ -849,22 +840,19 @@
   "s322": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
       "type": "numerical",
-      "message": "Numerical mismatch: max_error = 1.68e+01"
+      "message": "Numerical mismatch: max_error = 3.95e+11"
     }
   },
   "s323": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 1.43e+01"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "s3251": {
     "baseline_generated": true,
