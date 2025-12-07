@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vif_baseline import vif_pytorch
-    from test13.llm_triton.vif.attempt1 import vif_triton
+    from test14.llm_triton.vif.attempt1 import vif_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -60,7 +60,7 @@ def test_correctness():
             tr_args = build_args(vif_triton, tr_tensors, scalars)
 
             pytorch_result = vif_pytorch(*pt_args)
-            vif_triton(*tr_args)
+            triton_result = vif_triton(*tr_args)
 
             max_error = torch.max(torch.abs(a_pt - a_tr)).item()
 

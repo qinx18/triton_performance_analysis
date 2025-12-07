@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s3110_baseline import s3110_pytorch
-    from test13.llm_triton.s3110.attempt2 import s3110_triton
+    from test14.llm_triton.s3110.attempt7 import s3110_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -57,11 +57,26 @@ def test_correctness():
             tr_args = build_args(s3110_triton, tr_tensors, scalars)
 
             pytorch_result = s3110_pytorch(*pt_args)
-            s3110_triton(*tr_args)
+            triton_result = s3110_triton(*tr_args)
 
-            max_error = torch.max(torch.abs(aa_pt - aa_tr)).item()
+            # Pure reduction: compare return values
+            if isinstance(pytorch_result, (int, float)):
+                pt_val = pytorch_result
+            elif isinstance(pytorch_result, torch.Tensor):
+                pt_val = pytorch_result.item() if pytorch_result.numel() == 1 else pytorch_result.sum().item()
+            else:
+                pt_val = float(pytorch_result)
 
-            passed = max_error < 1e-3 or torch.allclose(aa_pt, aa_tr, rtol=1e-3, atol=1e-3)
+            if isinstance(triton_result, (int, float)):
+                tr_val = triton_result
+            elif isinstance(triton_result, torch.Tensor):
+                tr_val = triton_result.item() if triton_result.numel() == 1 else triton_result.sum().item()
+            else:
+                tr_val = float(triton_result)
+
+            max_error = abs(pt_val - tr_val)
+
+            passed = max_error < 1e-3 or (abs(pt_val) > 1e-6 and max_error / abs(pt_val) < 1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

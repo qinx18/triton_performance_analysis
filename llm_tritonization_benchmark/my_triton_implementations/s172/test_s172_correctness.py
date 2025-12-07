@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s172_baseline import s172_pytorch
-    from test13.llm_triton.s172.attempt1 import s172_triton
+    from test14.llm_triton.s172.attempt1 import s172_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -62,7 +62,7 @@ def test_correctness():
             tr_args = build_args(s172_triton, tr_tensors, scalars)
 
             pytorch_result = s172_pytorch(*pt_args)
-            s172_triton(*tr_args)
+            triton_result = s172_triton(*tr_args)
 
             max_error = torch.max(torch.abs(a_pt - a_tr)).item()
 

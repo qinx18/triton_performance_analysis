@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vbor_baseline import vbor_pytorch
-    from test13.llm_triton.vbor.attempt1 import vbor_triton
+    from test14.llm_triton.vbor.attempt1 import vbor_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -75,7 +75,7 @@ def test_correctness():
             tr_args = build_args(vbor_triton, tr_tensors, scalars)
 
             pytorch_result = vbor_pytorch(*pt_args)
-            vbor_triton(*tr_args)
+            triton_result = vbor_triton(*tr_args)
 
             max_error = torch.max(torch.abs(x_pt - x_tr)).item()
 
