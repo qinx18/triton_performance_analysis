@@ -92,6 +92,14 @@ except ImportError:
     analyze_kernel_early_exit = None
     format_early_exit_for_prompt = None
 
+try:
+    from compute_statement_reordering import analyze_kernel_reordering, format_reordering_for_prompt
+    HAS_STATEMENT_REORDERING_ANALYSIS = True
+except ImportError:
+    HAS_STATEMENT_REORDERING_ANALYSIS = False
+    analyze_kernel_reordering = None
+    format_reordering_for_prompt = None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 
@@ -525,6 +533,31 @@ def build_early_exit_instructions(kernel_name: str, early_exit_result: dict) -> 
     return ""
 
 
+def load_statement_reordering_analysis(kernel_name: str) -> Optional[dict]:
+    """Load statement reordering analysis for a kernel."""
+    if not HAS_STATEMENT_REORDERING_ANALYSIS or analyze_kernel_reordering is None:
+        return None
+
+    try:
+        return analyze_kernel_reordering(kernel_name)
+    except Exception:
+        return None
+
+
+def build_statement_reordering_instructions(kernel_name: str, reordering_result: dict) -> str:
+    """Build specific instructions for handling statement reordering patterns."""
+    if not reordering_result or not reordering_result.get('applicable'):
+        return ""
+
+    # Use the formatted advice from the module
+    if format_reordering_for_prompt:
+        formatted = format_reordering_for_prompt(reordering_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
 def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict]) -> str:
     """Build specific instructions for parallelization strategy."""
     if not analysis:
@@ -552,6 +585,46 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
         for dep in analysis['self_dependencies']:
             lines.append(f"- Array `{dep['array']}`: write to `[{dep['write_expr']}]`, read from `[{dep['read_expr']}]`")
         lines.append("")
+
+    # Handle wavefront pattern: both dimensions have dependencies, no simple parallelization
+    if len(valid_options) == 0 and len(invalid_options) == 2:
+        dims = analysis['dims']
+        lines.append("### ⚠️ WAVEFRONT PATTERN - NO SIMPLE PARALLELIZATION POSSIBLE")
+        lines.append("")
+        lines.append("**CRITICAL**: This loop has dependencies in BOTH dimensions:")
+        for dep in analysis.get('self_dependencies', []):
+            lines.append(f"- Read `{dep['array']}[{dep['read_expr']}]` depends on previous iterations in both `{dims[0]}` and `{dims[1]}`")
+        lines.append("")
+        lines.append("**DO NOT** parallelize either dimension directly - this will cause race conditions!")
+        lines.append("")
+        lines.append("**Recommended approaches:**")
+        lines.append("")
+        lines.append("**Option 1: Sequential Processing (Simplest)**")
+        lines.append("Process all elements sequentially in nested loops:")
+        lines.append("```python")
+        lines.append("def wrapper(aa):")
+        lines.append(f"    for {dims[0]} in range(1, N):")
+        lines.append(f"        for {dims[1]} in range(1, N):")
+        lines.append(f"            # Sequential computation")
+        lines.append("            aa[{}, {}] = ...".format(dims[0], dims[1]))
+        lines.append("```")
+        lines.append("")
+        lines.append("**Option 2: Wavefront/Anti-diagonal Parallelism (Advanced)**")
+        lines.append(f"Elements where `{dims[0]} + {dims[1]} = k` (same anti-diagonal) are independent.")
+        lines.append("Process anti-diagonals sequentially, parallelize within each:")
+        lines.append("```python")
+        lines.append("def wrapper(aa):")
+        lines.append("    N = aa.shape[0]")
+        lines.append("    # Iterate over anti-diagonals")
+        lines.append("    for diag in range(2, 2*N - 1):  # diag = i + j")
+        lines.append(f"        # Elements on this diagonal: ({dims[0]}, {dims[1]}) where {dims[0]}+{dims[1]}=diag")
+        lines.append(f"        start_{dims[0]} = max(1, diag - N + 1)")
+        lines.append(f"        end_{dims[0]} = min(diag, N)")
+        lines.append(f"        # All elements on this diagonal can be computed in parallel")
+        lines.append(f"        kernel[grid](aa, diag, start_{dims[0]}, end_{dims[0]}, ...)")
+        lines.append("```")
+        lines.append("")
+        return "\n".join(lines)
 
     if len(valid_options) >= 1:
         opt = valid_options[0]
@@ -614,7 +687,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       war_section: str, par_section: str, overwrite_section: str = "",
                       compaction_section: str = "", aliasing_section: str = "",
                       crossing_threshold_section: str = "", loop_unrolling_section: str = "",
-                      early_exit_section: str = "") -> str:
+                      early_exit_section: str = "", statement_reordering_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -647,7 +720,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{war_section}{par_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{loop_unrolling_section}{early_exit_section}
+{helper_section}{loop_unrolling_section}{statement_reordering_section}{war_section}{par_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -825,8 +898,10 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     loop_unrolling_section = build_loop_unrolling_instructions(kernel_name, loop_unrolling_result)
     early_exit_result = load_early_exit_analysis(kernel_name)
     early_exit_section = build_early_exit_instructions(kernel_name, early_exit_result)
+    statement_reordering_result = load_statement_reordering_analysis(kernel_name)
+    statement_reordering_section = build_statement_reordering_instructions(kernel_name, statement_reordering_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
