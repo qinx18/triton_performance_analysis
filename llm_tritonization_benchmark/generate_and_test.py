@@ -1103,7 +1103,7 @@ import torch
 
 try:
     from baselines.{func_name}_baseline import {func_name}_pytorch
-    from test12.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test13.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1270,14 +1270,14 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"{'=' * 70}")
 
     baselines_dir = Path("baselines")
-    test12_dir = Path("test12")
-    llm_triton_dir = test12_dir / "llm_triton"
+    test13_dir = Path("test13")
+    llm_triton_dir = test13_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
     test_dir = Path("my_triton_implementations") / func_name
 
     baselines_dir.mkdir(exist_ok=True)
-    test12_dir.mkdir(exist_ok=True)
+    test13_dir.mkdir(exist_ok=True)
     llm_triton_dir.mkdir(exist_ok=True)
     func_code_dir.mkdir(exist_ok=True)
     (llm_triton_dir / "raw_responses").mkdir(exist_ok=True)
@@ -1285,7 +1285,7 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     test_dir.mkdir(exist_ok=True, parents=True)
 
     # Create __init__.py files to make directories importable
-    (test12_dir / "__init__.py").touch()
+    (test13_dir / "__init__.py").touch()
     (llm_triton_dir / "__init__.py").touch()
     (func_code_dir / "__init__.py").touch()
 
@@ -1460,6 +1460,43 @@ def main():
     print(f"  - Passed on first try: {first_try}")
     print(f"  - Passed after retry: {retried}")
     print(f"{'=' * 70}")
+
+    # Save results to JSON file
+    import json
+    results_file = Path("test13") / "results.json"
+
+    # Load existing results if file exists
+    existing_results = {}
+    if results_file.exists():
+        try:
+            with open(results_file, 'r') as f:
+                existing_results = json.load(f)
+        except:
+            pass
+
+    # Update with new results
+    for func_name, results in all_results.items():
+        # Convert error info to serializable format
+        error_info = results.get("final_error")
+        if error_info:
+            error_info = {
+                'type': error_info.get('type', 'unknown'),
+                'message': str(error_info.get('message', ''))[:500]
+            }
+
+        existing_results[func_name] = {
+            "baseline_generated": results["baseline_generated"],
+            "triton_generated": results["triton_generated"],
+            "test_passed": results["test_passed"],
+            "attempts": results["attempts"],
+            "final_error": error_info
+        }
+
+    # Save updated results
+    Path("test13").mkdir(exist_ok=True)
+    with open(results_file, 'w') as f:
+        json.dump(existing_results, f, indent=2)
+    print(f"\nResults saved to: {results_file}")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vsumr_baseline import vsumr_pytorch
-    from test12.llm_triton.vsumr.attempt1 import vsumr_triton
+    from test13.llm_triton.vsumr.attempt1 import vsumr_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

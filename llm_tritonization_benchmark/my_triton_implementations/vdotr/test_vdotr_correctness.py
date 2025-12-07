@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vdotr_baseline import vdotr_pytorch
-    from test12.llm_triton.vdotr.attempt1 import vdotr_triton
+    from test13.llm_triton.vdotr.attempt1 import vdotr_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vif_baseline import vif_pytorch
-    from test12.llm_triton.vif.attempt1 import vif_triton
+    from test13.llm_triton.vif.attempt1 import vif_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
