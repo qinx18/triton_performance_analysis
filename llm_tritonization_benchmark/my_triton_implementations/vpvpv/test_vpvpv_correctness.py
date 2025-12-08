@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.vpvpv_baseline import vpvpv_pytorch
-    from test15.llm_triton.vpvpv.attempt1 import vpvpv_triton
+    from test16.llm_triton.vpvpv.attempt1 import vpvpv_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

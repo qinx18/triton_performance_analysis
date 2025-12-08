@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s232_baseline import s232_pytorch
-    from test15.llm_triton.s232.attempt3 import s232_triton
+    from test16.llm_triton.s232.attempt1 import s232_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
