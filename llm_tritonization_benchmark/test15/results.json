@@ -477,11 +477,11 @@
   "s241": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
       "type": "numerical",
-      "message": "Numerical mismatch: max_error = 5.28e+13"
+      "message": "Numerical mismatch: max_error = 7.07e+15"
     }
   },
   "s242": {

@@ -1,6 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s241_kernel(
@@ -12,33 +12,33 @@ def s241_kernel(
     
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
+        next_offsets = current_offsets + 1
+        
         mask = current_offsets < n_elements
+        next_mask = next_offsets < n_elements
         
         # Load values
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask)
-        c_vals = tl.load(c_ptr + current_offsets, mask=mask)
-        d_vals = tl.load(d_ptr + current_offsets, mask=mask)
-        a_copy_vals = tl.load(a_copy_ptr + current_offsets, mask=mask)
+        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
+        c_vals = tl.load(c_ptr + current_offsets, mask=mask, other=0.0)
+        d_vals = tl.load(d_ptr + current_offsets, mask=mask, other=0.0)
+        a_next_vals = tl.load(a_copy_ptr + next_offsets, mask=next_mask, other=0.0)
         
-        # Load a[i+1] values
-        next_offsets = current_offsets + 1
-        next_mask = mask & (next_offsets < (n_elements + 1))
-        a_copy_next_vals = tl.load(a_copy_ptr + next_offsets, mask=next_mask)
-        
-        # Compute a[i] = b[i] * c[i] * d[i]
+        # First computation: a[i] = b[i] * c[i] * d[i]
         a_new = b_vals * c_vals * d_vals
         
-        # Compute b[i] = a[i] * a[i+1] * d[i]
-        b_new = a_new * a_copy_next_vals * d_vals
-        
-        # Store results
+        # Store a values
         tl.store(a_ptr + current_offsets, a_new, mask=mask)
+        
+        # Second computation: b[i] = a[i] * a[i+1] * d[i]
+        b_new = a_new * a_next_vals * d_vals
+        
+        # Store b values
         tl.store(b_ptr + current_offsets, b_new, mask=mask)
 
 def s241_triton(a, b, c, d):
     n_elements = a.shape[0] - 1
     
-    # Create read-only copy to handle WAR dependency
+    # Create read-only copy for WAR dependency handling
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
