@@ -1,52 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
 
-**Error type**: compilation
-**Error message**:
-```
-g exception:
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 6.64e+00
 
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s257/test_s257_correctness.py", line 66, in test_correctness
-    triton_result = s257_triton(*tr_args)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test16/llm_triton/s257/attempt1.py", line 43, in s257_triton
-    s257_kernel[(1,)](
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 24:8:
-        # Load aa[j][i] and bb[j][i]
-        aa_offsets = current_j_offsets * LEN_2D + i_val
-        bb_offsets = current_j_offsets * LEN_2D + i_val
-
-        aa_vals = tl.load(aa_ptr + aa_offsets, mask=current_j_mask)
-        bb_vals = tl.load(bb_ptr + bb_offsets, mask=current_j_mask)
-
-        # Compute a[i] = aa[j][i] - a[i-1]
-        a_i_val = aa_vals - a_i_minus_1
-
-        # Store a[i] (last j iteration wins due to overwrite)
-        tl.store(a_ptr + i_val, a_i_val, mask=current_j_mask)
-        ^
-
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -55,46 +19,68 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s257_kernel(a_ptr, aa_ptr, bb_ptr, i_val, LEN_2D, BLOCK_SIZE: tl.constexpr):
-    j_offsets = tl.arange(0, BLOCK_SIZE)
-    j_mask = j_offsets < LEN_2D
-    
-    # Read a[i-1]
-    a_i_minus_1 = tl.load(a_ptr + (i_val - 1))
-    
-    # Process all j values in parallel
-    for j_block_start in range(0, LEN_2D, BLOCK_SIZE):
-        current_j_offsets = j_block_start + j_offsets
-        current_j_mask = current_j_offsets < LEN_2D
+def s257_kernel(
+    a_ptr,
+    a_copy_ptr,
+    aa_ptr,
+    bb_ptr,
+    LEN_2D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr
+):
+    # Sequential processing of i dimension
+    for i in range(1, LEN_2D):
+        # Parallel processing of j dimension
+        j_offsets = tl.arange(0, BLOCK_SIZE)
         
-        # Load aa[j][i] and bb[j][i]
-        aa_offsets = current_j_offsets * LEN_2D + i_val
-        bb_offsets = current_j_offsets * LEN_2D + i_val
-        
-        aa_vals = tl.load(aa_ptr + aa_offsets, mask=current_j_mask)
-        bb_vals = tl.load(bb_ptr + bb_offsets, mask=current_j_mask)
-        
-        # Compute a[i] = aa[j][i] - a[i-1]
-        a_i_val = aa_vals - a_i_minus_1
-        
-        # Store a[i] (last j iteration wins due to overwrite)
-        tl.store(a_ptr + i_val, a_i_val, mask=current_j_mask)
-        
-        # Compute aa[j][i] = a[i] + bb[j][i]
-        new_aa_vals = a_i_val + bb_vals
-        
-        # Store aa[j][i]
-        tl.store(aa_ptr + aa_offsets, new_aa_vals, mask=current_j_mask)
+        for j_start in range(0, LEN_2D, BLOCK_SIZE):
+            current_j = j_start + j_offsets
+            j_mask = current_j < LEN_2D
+            
+            # Load a[i-1] from read-only copy
+            a_prev = tl.load(a_copy_ptr + (i - 1))
+            
+            # Load aa[j][i] values
+            aa_offsets = current_j * LEN_2D + i
+            aa_vals = tl.load(aa_ptr + aa_offsets, mask=j_mask)
+            
+            # Compute a[i] = aa[j][i] - a[i-1]
+            # Note: This is computed for each j, but result is same for all j
+            a_new = aa_vals - a_prev
+            
+            # Load bb[j][i] values
+            bb_offsets = current_j * LEN_2D + i
+            bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask)
+            
+            # Compute aa[j][i] = a[i] + bb[j][i]
+            # Use the first valid a_new value for consistency
+            if j_start == 0:
+                # Store a[i] using first computed value
+                tl.store(a_ptr + i, tl.sum(a_new) / tl.sum(j_mask.to(tl.float32)))
+            
+            # Load the stored a[i] value
+            a_stored = tl.load(a_ptr + i)
+            
+            # Compute and store aa[j][i] = a[i] + bb[j][i]
+            aa_new = a_stored + bb_vals
+            tl.store(aa_ptr + aa_offsets, aa_new, mask=j_mask)
 
 def s257_triton(a, aa, bb):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = triton.next_power_of_2(min(LEN_2D, 1024))
+    BLOCK_SIZE = 64
     
-    # Sequential loop over i
-    for i in range(1, LEN_2D):
-        s257_kernel[(1,)](
-            a, aa, bb, i, LEN_2D, BLOCK_SIZE
-        )
+    # Create read-only copy of array a to handle WAR dependency
+    a_copy = a.clone()
+    
+    # Launch kernel with single thread block (sequential processing required)
+    grid = (1,)
+    s257_kernel[grid](
+        a,
+        a_copy,
+        aa,
+        bb,
+        LEN_2D,
+        BLOCK_SIZE
+    )
 ```
 
 
@@ -139,6 +125,31 @@ real_t s257(struct args_t * func_args)
         }
 ```
 
+## CRITICAL: WAR Race Condition Handling Required
+
+This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
+**Arrays requiring read-only copy**: ['a']
+
+### Required Solution: Read-Only Copy Pattern
+Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
+and store results to the original array.
+
+### Implementation Template
+```python
+# In wrapper function - create read-only copy BEFORE launching kernel:
+def s257_triton(...):
+    a_copy = a.clone()  # Read-only copy
+
+    # Pass BOTH original (for writes) AND copy (for reads) to kernel
+    s257_kernel[grid](
+        a,        # Write destination (original)
+        a_copy,   # Read source (immutable copy)
+        ...other_args...
+    )
+```
+
+**CRITICAL: Use forward iteration** - ALWAYS use forward iteration with ascending offsets.
+
 ## CRITICAL: Parallelization Strategy
 
 **Loop structure**: `#define LEN_1D 32000
@@ -172,11 +183,49 @@ for (int i = 1; i < LEN_2D; i++) {
 - Python wrapper: loop over `i` sequentially, launching kernel each iteration
 - Triton kernel: parallelize ALL `j` values using VECTORIZED operations
 
-**Overwrite pattern:** Each j iteration overwrites the same location - last value wins
-**Implementation:** The final value will be from the last j iteration that executes
+**Reduction pattern:** Use `tl.sum()` to reduce across j dimension
 
 ### INVALID Parallelization (DO NOT USE)
 **j-sequential, i-parallel**: INCORRECT - causes race conditions
+
+============================================================
+POINTER ALIASING PATTERN DETECTED
+============================================================
+
+
+Same-array read/write pairs (after resolving aliases):
+  Array: a
+    Write: [a] -> offset 0
+    Read:  [a] -> offset -1
+  Array: a
+    Write: [a] -> offset 0
+    Read:  [a] -> offset 0
+
+Pattern type: sequential
+Safe strip size: 1
+
+⚠️ STRICTLY SEQUENTIAL - NO PARALLELIZATION POSSIBLE
+
+Pattern: a[i+0] = a[i+-1] + ...
+Write offset: 0, Read offset: -1
+Offset difference: 1
+
+This pattern has a DIRECT loop-carried RAW dependency:
+- Each iteration reads the value written in the PREVIOUS iteration
+- Iterations CANNOT be parallelized or vectorized
+
+IMPLEMENTATION: Process ALL iterations strictly sequentially:
+```python
+# SEQUENTIAL ONLY - no parallelization!
+for i in range(start, end):
+    # Load a[i-1] (from previous iteration)
+    # Compute a[i] = ...
+    # Store a[i]
+```
+
+For Triton: Use a single thread with a sequential loop inside the kernel.
+
+============================================================
 
 
 ## Array Information:
@@ -193,9 +242,6 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -267,48 +313,62 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s257_kernel(a_ptr, aa_ptr, bb_ptr, i_val, LEN_2D, BLOCK_SIZE: tl.constexpr):
-    j_offsets = tl.arange(0, BLOCK_SIZE)
-    
-    # Read a[i-1]
-    a_i_minus_1 = tl.load(a_ptr + (i_val - 1))
-    
-    # Process all j values in parallel
-    for j_block_start in range(0, LEN_2D, BLOCK_SIZE):
-        current_j_offsets = j_block_start + j_offsets
-        current_j_mask = current_j_offsets < LEN_2D
+def s257_kernel(
+    a_ptr,
+    a_copy_ptr,
+    aa_ptr,
+    bb_ptr,
+    LEN_2D: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr
+):
+    # Sequential processing of i dimension (strict requirement due to dependency)
+    for i in range(1, LEN_2D):
+        # Parallel processing of j dimension
+        j_offsets = tl.arange(0, BLOCK_SIZE)
         
-        # Load aa[j][i] and bb[j][i]
-        aa_offsets = current_j_offsets * LEN_2D + i_val
-        bb_offsets = current_j_offsets * LEN_2D + i_val
+        # Load a[i-1] once (scalar value)
+        a_prev = tl.load(a_copy_ptr + (i - 1))
         
-        aa_vals = tl.load(aa_ptr + aa_offsets, mask=current_j_mask)
-        bb_vals = tl.load(bb_ptr + bb_offsets, mask=current_j_mask)
-        
-        # Compute a[i] = aa[j][i] - a[i-1]
-        a_i_val = aa_vals - a_i_minus_1
-        
-        # Store a[i] for each valid j (last j iteration wins due to overwrite)
-        valid_mask = current_j_mask
-        for k in range(BLOCK_SIZE):
-            if k + j_block_start < LEN_2D:
-                single_a_val = tl.load(aa_ptr + (k + j_block_start) * LEN_2D + i_val) - a_i_minus_1
-                tl.store(a_ptr + i_val, single_a_val)
-        
-        # Compute aa[j][i] = a[i] + bb[j][i]
-        # Need to reload a[i] after it's been stored
-        a_i_final = tl.load(a_ptr + i_val)
-        new_aa_vals = a_i_final + bb_vals
-        
-        # Store aa[j][i]
-        tl.store(aa_ptr + aa_offsets, new_aa_vals, mask=current_j_mask)
+        # Process j dimension in blocks
+        for j_start in range(0, LEN_2D, BLOCK_SIZE):
+            current_j = j_start + j_offsets
+            j_mask = current_j < LEN_2D
+            
+            # Load aa[j][i] values for current block
+            aa_offsets = current_j * LEN_2D + i
+            aa_vals = tl.load(aa_ptr + aa_offsets, mask=j_mask)
+            
+            # Compute a[i] = aa[j][i] - a[i-1]
+            # Since a[i] should be same for all j, use first valid j
+            if j_start == 0:
+                a_new = tl.load(aa_ptr + i) - a_prev
+                tl.store(a_ptr + i, a_new)
+            
+            # Load the computed a[i]
+            a_current = tl.load(a_ptr + i)
+            
+            # Load bb[j][i] values
+            bb_offsets = current_j * LEN_2D + i
+            bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask)
+            
+            # Compute and store aa[j][i] = a[i] + bb[j][i]
+            aa_new = a_current + bb_vals
+            tl.store(aa_ptr + aa_offsets, aa_new, mask=j_mask)
 
 def s257_triton(a, aa, bb):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = triton.next_power_of_2(min(LEN_2D, 1024))
+    BLOCK_SIZE = 64
     
-    # Sequential loop over i
-    for i in range(1, LEN_2D):
-        s257_kernel[(1,)](
-            a, aa, bb, i, LEN_2D, BLOCK_SIZE
-        )
+    # Create read-only copy of array a to handle WAR dependency
+    a_copy = a.clone()
+    
+    # Launch kernel with single thread block (sequential processing required)
+    grid = (1,)
+    s257_kernel[grid](
+        a,
+        a_copy,
+        aa,
+        bb,
+        LEN_2D,
+        BLOCK_SIZE
+    )

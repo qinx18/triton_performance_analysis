@@ -3,39 +3,49 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s252_kernel(a_ptr, b_ptr, c_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # This kernel cannot be effectively parallelized due to the WAR dependency
-    # where each iteration depends on the previous value of t
-    # We'll process sequentially in a single thread
+def s252_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    block_id = tl.program_id(0)
     
-    pid = tl.program_id(0)
-    if pid != 0:  # Only use the first thread block
+    # Each block processes elements sequentially
+    block_start = block_id * BLOCK_SIZE
+    
+    if block_start >= n_elements:
         return
     
+    block_end = tl.minimum(block_start + BLOCK_SIZE, n_elements)
+    
+    # Initialize t = 0 for this block
     t = 0.0
     
-    # Process each element sequentially
-    for i in range(N):
-        # Load scalar values for sequential processing
-        b_val = tl.load(b_ptr + i)
-        c_val = tl.load(c_ptr + i)
+    # Process elements one by one sequentially
+    for offset in range(BLOCK_SIZE):
+        idx = block_start + offset
+        if idx >= block_end:
+            break
+            
+        # Load b[i] and c[i]
+        b_val = tl.load(b_ptr + idx)
+        c_val = tl.load(c_ptr + idx)
         
+        # s = b[i] * c[i]
         s = b_val * c_val
+        
+        # a[i] = s + t
         a_val = s + t
+        tl.store(a_ptr + idx, a_val)
         
-        # Store result
-        tl.store(a_ptr + i, a_val)
-        
-        # Update t for next iteration
+        # t = s for next iteration
         t = s
 
 def s252_triton(a, b, c):
-    N = a.shape[0]
+    n_elements = a.numel()
     
-    BLOCK_SIZE = 256
-    grid = (1,)  # Use only one thread block due to sequential dependency
+    # Use small block size since we need sequential processing
+    BLOCK_SIZE = 1024
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s252_kernel[grid](
-        a, b, c, N,
+        a, b, c,
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )

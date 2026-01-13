@@ -3,53 +3,50 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s252_kernel(a_ptr, b_ptr, c_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # This kernel cannot be effectively parallelized due to the WAR dependency
-    # where each iteration depends on the previous value of t
-    # We'll process sequentially in a single thread
+def s252_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This kernel implements a sequential scan operation
+    # Each block processes one segment sequentially
+    block_id = tl.program_id(0)
+    block_start = block_id * BLOCK_SIZE
     
-    pid = tl.program_id(0)
-    if pid != 0:  # Only use the first thread block
+    # Check if this block has work to do
+    if block_start >= n_elements:
         return
     
+    # Calculate the actual number of elements this block will process
+    block_end = tl.minimum(block_start + BLOCK_SIZE, n_elements)
+    block_size = block_end - block_start
+    
+    # Initialize t = 0
     t = 0.0
     
-    # Process in blocks to handle memory efficiently
-    offsets = tl.arange(0, BLOCK_SIZE)
-    
-    for block_start in range(0, N, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < N
+    # Process elements sequentially within this block
+    for i in range(block_size):
+        idx = block_start + i
         
-        # Load blocks of b and c
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
-        c_vals = tl.load(c_ptr + current_offsets, mask=mask, other=0.0)
+        # Load b[i] and c[i]
+        b_val = tl.load(b_ptr + idx)
+        c_val = tl.load(c_ptr + idx)
         
-        # Process each element in the block sequentially
-        for i in range(BLOCK_SIZE):
-            if block_start + i >= N:
-                break
-            
-            # Extract scalar values for sequential processing
-            b_val = tl.load(b_ptr + block_start + i)
-            c_val = tl.load(c_ptr + block_start + i)
-            
-            s = b_val * c_val
-            a_val = s + t
-            
-            # Store result
-            tl.store(a_ptr + block_start + i, a_val)
-            
-            # Update t for next iteration
-            t = s
+        # Compute s = b[i] * c[i]
+        s = b_val * c_val
+        
+        # Compute a[i] = s + t
+        a_val = s + t
+        tl.store(a_ptr + idx, a_val)
+        
+        # Update t = s for next iteration
+        t = s
 
 def s252_triton(a, b, c):
-    N = a.shape[0]
+    n_elements = a.numel()
     
+    # Use a moderate block size for sequential processing
     BLOCK_SIZE = 256
-    grid = (1,)  # Use only one thread block due to sequential dependency
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s252_kernel[grid](
-        a, b, c, N,
+        a, b, c,
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )

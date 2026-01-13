@@ -3,53 +3,52 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s141_kernel(flat_2d_array_ptr, bb_ptr, n, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i = pid
+def s141_kernel(bb_ptr, flat_2d_array_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Get program ID for i dimension
+    i = tl.program_id(0)
     
-    if i >= n:
+    if i >= LEN_2D:
         return
     
-    # k = (i+1) * ((i+1) - 1) / 2 + (i+1)-1
-    # Simplifying: k = i * (i + 1) / 2 + i = i * (i + 3) / 2
-    k_start = i * (i + 1) // 2 + i
+    # Calculate starting k for this i
+    k = (i + 1) * (i + 1 - 1) // 2 + (i + 1) - 1
     
-    # Process j from i to n-1
-    num_j = n - i
-    
-    # Process in blocks
+    # Process j loop in blocks
+    j_start = i
     j_offsets = tl.arange(0, BLOCK_SIZE)
     
-    k_current = k_start
-    for j_block in range(0, num_j, BLOCK_SIZE):
-        current_j = i + j_block + j_offsets
-        mask = (j_block + j_offsets) < num_j
+    for j_block in range(j_start, LEN_2D, BLOCK_SIZE):
+        # Current j indices
+        j_indices = j_block + j_offsets
+        j_mask = (j_indices < LEN_2D) & (j_indices >= i)
         
         # Calculate k indices for this block
-        # k increases by j+1 at each step
-        k_indices = k_current + tl.cumsum(current_j, axis=0) - tl.sum(tl.where(j_offsets == 0, current_j, 0))
+        k_indices = k + tl.cumsum(j_indices + 1, axis=0) - (i + 1)
         
-        # Load bb[j][i] values
-        bb_indices = current_j * n + i
-        bb_vals = tl.load(bb_ptr + bb_indices, mask=mask, other=0.0)
+        # Load bb values: bb[j][i]
+        bb_offsets = j_indices * LEN_2D + i
+        bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
         
         # Load current flat_2d_array values
-        flat_vals = tl.load(flat_2d_array_ptr + k_indices, mask=mask, other=0.0)
+        flat_vals = tl.load(flat_2d_array_ptr + k_indices, mask=j_mask, other=0.0)
         
-        # Update
-        new_vals = flat_vals + bb_vals
-        tl.store(flat_2d_array_ptr + k_indices, new_vals, mask=mask)
+        # Update flat_2d_array
+        updated_vals = flat_vals + bb_vals
+        tl.store(flat_2d_array_ptr + k_indices, updated_vals, mask=j_mask)
         
-        # Update k_current for next block
-        if j_block + BLOCK_SIZE < num_j:
-            k_current += tl.sum(current_j + 1, axis=0)
+        # Update k for next block
+        valid_j_indices = tl.where(j_mask, j_indices, 0)
+        last_valid_j = tl.max(valid_j_indices)
+        k += tl.sum(tl.where(j_mask, j_indices + 1, 0))
 
 def s141_triton(bb, flat_2d_array):
-    n = bb.shape[0]
-    
+    LEN_2D = bb.shape[0]
     BLOCK_SIZE = 64
-    grid = (n,)
+    
+    grid = (LEN_2D,)
     
     s141_kernel[grid](
-        flat_2d_array, bb, n, BLOCK_SIZE
+        bb, flat_2d_array,
+        LEN_2D=LEN_2D,
+        BLOCK_SIZE=BLOCK_SIZE
     )
