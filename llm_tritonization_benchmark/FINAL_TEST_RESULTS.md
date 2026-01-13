@@ -1,14 +1,81 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-07 (Integrated generate_and_test.py - test15)
-**Previous Tests:** test14, test13, test12, test11, test10, test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2025-12-08 (Integrated generate_and_test.py - test16)
+**Previous Tests:** test15, test14, test13, test12, test11, test10, test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
 **Infrastructure:** PyTorch Baseline Comparison ✅
 
 ---
 
-## 🔬 LLM Triton v3 with Reduction Analysis & Return Statement Extraction (2025-12-07) - test15 - LATEST RUN
+## 🔬 LLM Triton v3 Continued Runs (2025-12-08) - test16 - LATEST RUN
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 143 | 94.7% |
+| ❌ **FAILING** | 8 | 5.3% |
+
+### Comparison with test15
+
+| Metric | test15 | test16 | Change |
+|--------|--------|--------|--------|
+| Passing | 140 (92.7%) | 143 (94.7%) | **+3** |
+| Failing | 11 (7.3%) | 8 (5.3%) | **-3** |
+| Passed 1st try | 112 | 119 | **+7** |
+
+**Functions Fixed (7 from test15 failures now pass):**
+- ✅ **s123**: Conditionals - now passes (attempt 2)
+- ✅ **s2244**: Array expansion - now passes (attempt 2)
+- ✅ **s2251**: Array expansion - now passes (attempt 3)
+- ✅ **s235**: Loop interchanging - now passes (attempt 1)
+- ✅ **s255**: Carry-around variables - now passes (attempt 3)
+- ✅ **s256**: Array expansion - now passes (attempt 1)
+- ✅ **s424**: Pointer aliasing - now passes (attempt 1)
+
+**New Failures (LLM non-determinism):**
+- ❌ **s118**: Numerical (max_error = 6.35e+09) - was passing in test15
+- ❌ **s244**: Numerical (max_error = 8.67e-01) - was passing in test15
+- ❌ **s252**: Numerical (max_error = 2.88e+00) - was passing in test15
+- ❌ **s31111**: Numerical (max_error = 1.59e+01) - was passing in test15
+
+**Persistent Failures (4 functions):**
+- ❌ **s141**: Numerical (max_error = 4.43e+00) - pointer aliasing
+- ❌ **s176**: Timeout - sequential computation, inherently not parallelizable
+- ❌ **s257**: Numerical (max_error = 8.36e+00) - complex scalar expansion with loop-carried dependency
+- ❌ **s258**: Numerical (max_error = 3.29e+00) - wrap-around scalar under if condition
+
+### Failed Functions (8) - Error Breakdown
+
+| Function | Attempts | Error Type | Max Error | Notes |
+|----------|----------|-----------|-----------|-------|
+| s118 | 3 | numerical | 6.35e+09 | Regression from test15 |
+| s141 | 3 | numerical | 4.43e+00 | Pointer aliasing (persists) |
+| s176 | 10 | timeout | N/A | Sequential computation (persists) |
+| s244 | 3 | numerical | 8.67e-01 | Regression from test15 |
+| s252 | 4 | numerical | 2.88e+00 | Regression from test15 |
+| s257 | 3 | numerical | 8.36e+00 | Loop-carried dependency (persists) |
+| s258 | 3 | numerical | 3.29e+00 | Wrap-around scalar (persists) |
+| s31111 | 3 | numerical | 1.59e+01 | Regression from test15 |
+
+**Error Type Summary:**
+- Numerical errors: 7 functions
+- Timeout: 1 function (s176)
+
+### Pass Rate by Attempt
+| Attempt | New Passes | Cumulative |
+|---------|------------|------------|
+| Attempt 1 | 119 | 119 (78.8%) |
+| Attempt 2 | +17 | 136 (90.1%) |
+| Attempt 3 | +6 | 142 (94.0%) |
+| Attempt 4 | +1 | 143 (94.7%) |
+
+### Passing Functions (143):
+s000, s111, s1111, s1112, s1113, s1115, s1119, s112, s113, s114, s115, s116, s1161, s119, s121, s1213, s122, s1221, s123, s1232, s124, s1244, s125, s1251, s126, s127, s1279, s128, s1281, s131, s13110, s132, s1351, s1421, s151, s152, s161, s162, s171, s172, s173, s174, s175, s2101, s2102, s211, s2111, s212, s221, s222, s2233, s2244, s2251, s2275, s231, s232, s233, s235, s241, s242, s243, s251, s253, s254, s255, s256, s261, s271, s2710, s2711, s2712, s272, s273, s274, s275, s276, s277, s278, s279, s281, s291, s292, s293, s311, s3110, s3111, s3112, s3113, s312, s313, s314, s315, s316, s317, s318, s319, s321, s322, s323, s3251, s331, s332, s341, s342, s343, s351, s352, s353, s4112, s4113, s4114, s4115, s4116, s4117, s4121, s421, s422, s423, s424, s431, s441, s442, s443, s451, s452, s453, s471, s481, s482, s491, va, vag, vas, vbor, vdotr, vif, vpv, vpvpv, vpvts, vpvtv, vsumr, vtv, vtvtv
+
+---
+
+## 🔬 LLM Triton v3 with Reduction Analysis & Return Statement Extraction (2025-12-07) - test15
 
 ### Summary
 | Metric | Count | Percentage |

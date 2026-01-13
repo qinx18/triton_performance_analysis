@@ -839,7 +839,7 @@ for (int nl = 0; nl < 4*(iterations/LEN_1D); nl++) {
         "has_conditional": False,
         "has_reduction": False,
         "has_2d_arrays": False,
-        "scalar_params": {'m': 'scalar', 'iterations': 'scalar'},
+        "scalar_params": {'iterations': 'scalar'},  # m is computed internally, not a parameter
     },
     "s2101": {
         "name": "s2101",

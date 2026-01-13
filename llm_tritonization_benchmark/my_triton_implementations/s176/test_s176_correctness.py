@@ -11,7 +11,7 @@ import torch
 
 try:
     from baselines.s176_baseline import s176_pytorch
-    from test16.llm_triton.s176.attempt10 import s176_triton
+    from test16.llm_triton.s176.attempt1 import s176_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -46,7 +46,6 @@ def test_correctness():
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1
-            m = 1
 
             a_pt = a.clone()
             b_pt = b.clone()
@@ -58,7 +57,7 @@ def test_correctness():
 
             pt_tensors = {"a": a_pt, "b": b_pt, "c": c_pt}
             tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr}
-            scalars = {"iterations": iterations, "m": m}
+            scalars = {"iterations": iterations}
 
             pt_args = build_args(s176_pytorch, pt_tensors, scalars)
             tr_args = build_args(s176_triton, tr_tensors, scalars)

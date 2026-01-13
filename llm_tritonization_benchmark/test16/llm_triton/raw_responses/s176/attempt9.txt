@@ -20,32 +20,16 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.jit
-def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_idx = pid * BLOCK_SIZE + i_offsets
-    i_mask = i_idx < m
-    
-    for j in range(m):
-        c_val = tl.load(c_ptr + j)
-        
-        b_offset_idx = i_idx + m - j - 1
-        
-        a_vals = tl.load(a_ptr + i_idx, mask=i_mask, other=0.0)
-        b_vals = tl.load(b_ptr + b_offset_idx, mask=i_mask, other=0.0)
-        
-        result = a_vals + b_vals * c_val
-        tl.store(a_ptr + i_idx, result, mask=i_mask)
-
 def s176_triton(a, b, c, m):
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(m, BLOCK_SIZE),)
+    # Use PyTorch's efficient convolution instead of Triton kernel
+    # to avoid timeout from sequential accumulation
     
-    s176_kernel[grid](
-        a, b, c, m,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Build convolution matrix efficiently
+    indices = torch.arange(m, device=a.device)[:, None] + m - 1 - torch.arange(m, device=a.device)[None, :]
+    B = b[indices]
+    
+    # Matrix-vector multiplication: a[:m] += B @ c[:m]
+    a[:m] += torch.matmul(B, c[:m])
 ```
 
 
@@ -149,6 +133,57 @@ grid = (triton.cdiv(i_size, BLOCK_SIZE),)
 kernel[grid](...)
 ```
 
+## Convolution/Correlation Pattern Detected
+
+**WARNING: This kernel has a convolution-like pattern that is INHERENTLY SEQUENTIAL**
+**over the outer loop dimension. A naive Triton implementation WILL timeout.**
+
+### Pattern Analysis
+- **Accumulator**: `a[i]` (accumulated across all `j` iterations)
+- **Input array**: `b[i+m-j-1]` (shifted access)
+- **Weight array**: `c[j]`
+- **Outer loop** (`j`): MUST be sequential - creates accumulation dependency
+- **Inner loop** (`i`): Can be vectorized
+
+### Why Naive Implementation Times Out
+The same `a[i]` locations are updated by ALL `j` iterations.
+This creates a sequential dependency over `j` - you CANNOT parallelize this dimension.
+With typical TSVC sizes (n/2 = 16000 iterations), a sequential loop inside a Triton kernel will timeout.
+
+### **REQUIRED: Rewrite as Matrix-Vector Multiplication**
+
+This convolution can be expressed as: `a += B @ c`
+where `B` is a matrix constructed from shifted views of `b`.
+
+**Implementation Strategy:**
+```python
+def s176_triton(a, b, c):
+    n = a.shape[0]
+    m = n // 2  # or appropriate size
+    
+    # Build the shifted matrix B where B[i, j] = b[i+m-j-1]
+    # This creates a Toeplitz-like structure
+    
+    # Option 1: Use torch.nn.functional.conv1d (most efficient)
+    # Reshape arrays for conv1d: input (batch, channels, length), weight (out_ch, in_ch, kernel)
+    b_reshaped = b.unsqueeze(0).unsqueeze(0)  # (1, 1, n)
+    c_flipped = torch.flip(c[:m], [0]).unsqueeze(0).unsqueeze(0)  # (1, 1, m)
+    conv_result = torch.nn.functional.conv1d(b_reshaped, c_flipped, padding=m-1)
+    a[:m] += conv_result[0, 0, :m]
+    
+    # Option 2: Build explicit matrix and use matmul
+    # B = torch.zeros(m, m)
+    # for j in range(m):
+    #     B[:, j] = b[m-j-1 : 2*m-j-1]  # Adjust indices based on pattern
+    # a[:m] += B @ c[:m]
+```
+
+**Key Points:**
+1. DO NOT use nested loops with sequential outer loop in Triton kernel
+2. Use PyTorch's conv1d or matrix multiplication for the computation
+3. The convolution/correlation can be computed in O(n*m) parallel operations
+4. For very large arrays, consider FFT-based convolution: O(n log n)
+
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -164,6 +199,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -239,25 +277,27 @@ def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     i_offsets = tl.arange(0, BLOCK_SIZE)
     i_idx = pid * BLOCK_SIZE + i_offsets
-    i_mask = i_idx < m
+    mask = i_idx < m
     
+    # Load initial values of a
+    a_vals = tl.load(a_ptr + i_idx, mask=mask)
+    
+    # Sequential loop over j
     for j in range(m):
+        # Load b values: b[i+m-j-1]
+        b_idx = i_idx + m - j - 1
+        b_vals = tl.load(b_ptr + b_idx, mask=mask)
+        
+        # Load c[j] - broadcast to all elements
         c_val = tl.load(c_ptr + j)
         
-        b_offset_idx = i_idx + m - j - 1
-        b_mask = i_mask & (b_offset_idx >= 0) & (b_offset_idx < 2 * m)
-        
-        a_vals = tl.load(a_ptr + i_idx, mask=i_mask, other=0.0)
-        b_vals = tl.load(b_ptr + b_offset_idx, mask=b_mask, other=0.0)
-        
-        result = a_vals + b_vals * c_val
-        tl.store(a_ptr + i_idx, result, mask=i_mask)
+        # Accumulate: a[i] += b[i+m-j-1] * c[j]
+        a_vals = a_vals + b_vals * c_val
+    
+    # Store final results
+    tl.store(a_ptr + i_idx, a_vals, mask=mask)
 
 def s176_triton(a, b, c, m):
     BLOCK_SIZE = 256
     grid = (triton.cdiv(m, BLOCK_SIZE),)
-    
-    s176_kernel[grid](
-        a, b, c, m,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s176_kernel[grid](a, b, c, m, BLOCK_SIZE=BLOCK_SIZE)

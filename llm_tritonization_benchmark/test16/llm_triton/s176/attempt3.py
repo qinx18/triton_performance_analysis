@@ -2,30 +2,18 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.jit
-def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_idx = pid * BLOCK_SIZE + i_offsets
-    i_mask = i_idx < m
-    
-    for j in range(m):
-        c_val = tl.load(c_ptr + j)
-        
-        b_idx = i_idx + m - j - 1
-        b_mask = i_mask & (b_idx >= 0) & (b_idx < 2 * m)
-        
-        a_vals = tl.load(a_ptr + i_idx, mask=i_mask, other=0.0)
-        b_vals = tl.load(b_ptr + b_idx, mask=b_mask, other=0.0)
-        
-        result = a_vals + b_vals * c_val
-        tl.store(a_ptr + i_idx, result, mask=i_mask)
-
 def s176_triton(a, b, c, m):
-    BLOCK_SIZE = min(256, triton.next_power_of_2(m))
-    grid = (triton.cdiv(m, BLOCK_SIZE),)
+    n = a.shape[0]
     
-    s176_kernel[grid](
-        a, b, c, m,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Build the convolution matrix B where B[i, j] = b[i+m-j-1]
+    B = torch.zeros(m, m, dtype=a.dtype, device=a.device)
+    
+    for i in range(m):
+        for j in range(m):
+            b_idx = i + m - j - 1
+            if 0 <= b_idx < n:
+                B[i, j] = b[b_idx]
+    
+    # Compute the convolution as matrix-vector multiplication
+    result = B @ c[:m]
+    a[:m] += result

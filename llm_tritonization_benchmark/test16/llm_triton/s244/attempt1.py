@@ -1,49 +1,55 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s244_kernel(a_ptr, b_ptr, c_ptr, d_ptr, a_copy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s244_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n, BLOCK_SIZE: tl.constexpr):
+    # Process main loop statements (S0 and S1) for all iterations
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
     
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load data
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask)
-        c_vals = tl.load(c_ptr + current_offsets, mask=mask)
-        d_vals = tl.load(d_ptr + current_offsets, mask=mask)
-        
-        # S0: a[i] = b[i] + c[i] * d[i]
-        a_vals = b_vals + c_vals * d_vals
-        tl.store(a_ptr + current_offsets, a_vals, mask=mask)
-        
-        # S1: b[i] = c[i] + b[i]
-        new_b_vals = c_vals + b_vals
-        tl.store(b_ptr + current_offsets, new_b_vals, mask=mask)
+    # Mask for valid indices (0 to n-2, since loop goes to n-1)
+    mask = idx < (n - 1)
     
-    # Epilogue - S2 only for last iteration (i = n_elements - 1)
-    i = n_elements - 1
+    # S0: a[i] = b[i] + c[i] * d[i]
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
+    d_vals = tl.load(d_ptr + idx, mask=mask)
+    a_new = b_vals + c_vals * d_vals
+    tl.store(a_ptr + idx, a_new, mask=mask)
+    
+    # S1: b[i] = c[i] + b[i]
+    b_new = c_vals + b_vals
+    tl.store(b_ptr + idx, b_new, mask=mask)
+
+@triton.jit
+def s244_epilogue_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n):
+    # Execute S2 only for the last iteration (i = n-2)
+    i = n - 2
     if i >= 0:
-        # Load from read-only copy for a[i+1]
-        a_copy_val = tl.load(a_copy_ptr + (i + 1))
-        b_val = tl.load(b_ptr + i)
-        d_val = tl.load(d_ptr + i)
-        
         # S2: a[i+1] = b[i] + a[i+1] * d[i]
-        result = b_val + a_copy_val * d_val
-        tl.store(a_ptr + (i + 1), result)
+        b_val = tl.load(b_ptr + i)
+        a_val = tl.load(a_ptr + i + 1)
+        d_val = tl.load(d_ptr + i)
+        a_new = b_val + a_val * d_val
+        tl.store(a_ptr + i + 1, a_new)
 
 def s244_triton(a, b, c, d):
-    n_elements = a.shape[0] - 1
-    a_copy = a.clone()
+    n = a.shape[0]
     
+    if n <= 1:
+        return
+    
+    # Main computation for statements S0 and S1
     BLOCK_SIZE = 256
-    grid = (1,)
+    grid_size = triton.cdiv(n - 1, BLOCK_SIZE)
     
-    s244_kernel[grid](
-        a, b, c, d, a_copy,
-        n_elements,
+    s244_kernel[(grid_size,)](
+        a, b, c, d, n,
         BLOCK_SIZE=BLOCK_SIZE
     )
+    
+    # Epilogue for statement S2 (last iteration only)
+    s244_epilogue_kernel[(1,)](a, b, c, d, n)

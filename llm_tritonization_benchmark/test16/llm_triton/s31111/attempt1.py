@@ -3,76 +3,38 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s31111_kernel(a_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel computes sum reduction over specific elements of array a
-    # Each block handles one iteration of the original loop
+def s31111_kernel(a_ptr, sum_ptr, N, BLOCK_SIZE: tl.constexpr):
+    # Calculate sum of elements at specific positions
+    # Each position sums 4 consecutive elements starting from base indices
+    base_indices = tl.arange(0, 8) * 4  # [0, 4, 8, 12, 16, 20, 24, 28]
     
-    # Single block computes the entire sum
-    block_id = tl.program_id(0)
-    if block_id > 0:
-        return
+    total_sum = 0.0
     
-    # Initialize sum
-    sum_val = 0.0
+    for i in range(8):
+        base_idx = i * 4
+        if base_idx + 3 < N:
+            # Load 4 consecutive elements starting from base_idx
+            offsets = base_idx + tl.arange(0, 4)
+            mask = offsets < N
+            vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+            # Sum the 4 elements
+            partial_sum = tl.sum(vals)
+            total_sum += partial_sum
     
-    # Compute sum += test(a) - sum first 4 elements starting at a[0]
-    offsets = tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Compute sum += test(&a[4]) - sum 4 elements starting at a[4]
-    offsets = 4 + tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Compute sum += test(&a[8]) - sum 4 elements starting at a[8]
-    offsets = 8 + tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Compute sum += test(&a[12]) - sum 4 elements starting at a[12]
-    offsets = 12 + tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Compute sum += test(&a[16]) - sum 4 elements starting at a[16]
-    offsets = 16 + tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Compute sum += test(&a[20]) - sum 4 elements starting at a[20]
-    offsets = 20 + tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Compute sum += test(&a[24]) - sum 4 elements starting at a[24]
-    offsets = 24 + tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Compute sum += test(&a[28]) - sum 4 elements starting at a[28]
-    offsets = 28 + tl.arange(0, 4)
-    mask = offsets < n_elements
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
+    # Store the result
+    tl.store(sum_ptr, total_sum)
 
 def s31111_triton(a):
-    n_elements = a.numel()
+    N = a.shape[0]
+    
+    # Output tensor for the sum
+    sum_result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    
     BLOCK_SIZE = 32
     
-    # Launch single block to compute the sum
-    grid = (1,)
-    
-    s31111_kernel[grid](
-        a, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+    # Launch kernel with a single block since we're computing one sum
+    s31111_kernel[(1,)](
+        a, sum_result, N, BLOCK_SIZE
     )
     
-    return a
+    return sum_result.item()

@@ -1,49 +1,40 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s252_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    block_id = tl.program_id(0)
+    # This kernel cannot be parallelized due to the sequential dependency
+    # Each element depends on the previous computation (t = s from previous iteration)
+    # We need to process elements sequentially within each thread block
     
-    # Each block processes elements sequentially
-    block_start = block_id * BLOCK_SIZE
+    pid = tl.program_id(0)
     
-    if block_start >= n_elements:
+    # Only use the first thread block since we need sequential processing
+    if pid != 0:
         return
     
-    block_end = tl.minimum(block_start + BLOCK_SIZE, n_elements)
-    
-    # Initialize t = 0 for this block
+    # Process all elements sequentially
     t = 0.0
     
-    # Process elements one by one sequentially
-    offsets = tl.arange(0, BLOCK_SIZE)
-    for i in range(BLOCK_SIZE):
-        idx = block_start + i
-        if idx >= block_end:
-            return
-            
-        # Load b[i] and c[i]
-        b_val = tl.load(b_ptr + idx)
-        c_val = tl.load(c_ptr + idx)
+    # Process elements one by one
+    for i in range(n_elements):
+        # Load single values
+        b_val = tl.load(b_ptr + i)
+        c_val = tl.load(c_ptr + i)
         
-        # s = b[i] * c[i]
         s = b_val * c_val
-        
-        # a[i] = s + t
         a_val = s + t
-        tl.store(a_ptr + idx, a_val)
         
-        # t = s for next iteration
+        # Store the result
+        tl.store(a_ptr + i, a_val)
         t = s
 
 def s252_triton(a, b, c):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     
-    # Use small block size since we need sequential processing
-    BLOCK_SIZE = 1024
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    BLOCK_SIZE = 256
+    grid = (1,)  # Only one block since we need sequential processing
     
     s252_kernel[grid](
         a, b, c,

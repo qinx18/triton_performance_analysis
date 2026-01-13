@@ -98,7 +98,14 @@ try:
 except ImportError:
     HAS_STATEMENT_REORDERING_ANALYSIS = False
     analyze_kernel_reordering = None
-    format_reordering_for_prompt = None
+
+try:
+    from compute_scalar_expansion import analyze_kernel_scalar_expansion, format_scalar_expansion_for_prompt
+    HAS_SCALAR_EXPANSION_ANALYSIS = True
+except ImportError:
+    HAS_SCALAR_EXPANSION_ANALYSIS = False
+    analyze_kernel_scalar_expansion = None
+    format_scalar_expansion_for_prompt = None
 
 try:
     from compute_reduction_type import analyze_kernel_reduction, build_reduction_instructions
@@ -107,6 +114,14 @@ except ImportError:
     HAS_REDUCTION_ANALYSIS = False
     analyze_kernel_reduction = None
     build_reduction_instructions = None
+
+try:
+    from compute_convolution_pattern import analyze_kernel_convolution, build_convolution_instructions
+    HAS_CONVOLUTION_ANALYSIS = True
+except ImportError:
+    HAS_CONVOLUTION_ANALYSIS = False
+    analyze_kernel_convolution = None
+    build_convolution_instructions = None
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
@@ -333,10 +348,87 @@ def load_war_analysis(kernel_name: str) -> Optional[dict]:
         return None
 
 
-def build_war_instructions(kernel_name: str, war_result: dict) -> str:
-    """Build specific instructions for handling WAR dependencies."""
+def check_war_eliminated_by_overwrite(war_result: dict, overwrite_result: dict) -> bool:
+    """
+    Check if WAR dependencies are eliminated by statement overwrite optimization.
+
+    When statement overwrite optimization applies:
+    - The overwritten statement only executes at the last iteration(s)
+    - If this eliminates the overlap between read and write locations,
+      then WAR is no longer a concern
+
+    Example (s244):
+    - WAR: S_2 reads a[i+1], S_0 writes a[i]
+    - Overwrite: S_0 overwrites S_2's a[i+1] in next iteration
+    - After optimization: S_2 only at i=N-2 (writes a[N-1]),
+                         S_0 for i=0..N-2 (writes a[0..N-2])
+    - No overlap → WAR eliminated!
+
+    Returns:
+        True if WAR is eliminated by overwrite optimization, False otherwise
+    """
+    if not war_result.get('war_dependencies'):
+        return False
+
+    overwrites = overwrite_result.get('overwrites', [])
+    if not overwrites:
+        return False
+
+    # Build a map of which arrays/statements are involved in overwrites
+    overwrite_info = {}
+    for ow in overwrites:
+        array = ow['array']
+        overwritten_stmt = ow['overwritten_stmt']
+        overwriting_stmt = ow['overwriting_stmt']
+        key = (array, overwritten_stmt, overwriting_stmt)
+        overwrite_info[key] = ow
+
+    # Check each WAR dependency
+    for war in war_result['war_dependencies']:
+        array = war['array']
+        read_stmt = war['read_stmt']  # e.g., "S_2"
+        write_stmt = war['write_stmt']  # e.g., "S_0"
+
+        # Extract statement numbers
+        read_stmt_num = int(read_stmt.split('_')[1]) if '_' in read_stmt else None
+        write_stmt_num = int(write_stmt.split('_')[1]) if '_' in write_stmt else None
+
+        if read_stmt_num is None or write_stmt_num is None:
+            continue
+
+        # Check if this WAR is resolved by statement overwrite
+        # Case 1: The writing statement is overwriting the reading statement's result
+        key = (array, read_stmt_num, write_stmt_num)
+        if key in overwrite_info:
+            # The write overwrites the read's result
+            # After optimization, the read-statement only executes at last iteration
+            # and the write-statement doesn't touch that location anymore
+            # → WAR eliminated
+            return True
+
+    return False
+
+
+def build_war_instructions(kernel_name: str, war_result: dict, overwrite_result: dict = None) -> str:
+    """Build specific instructions for handling WAR dependencies.
+
+    Args:
+        kernel_name: Name of the kernel
+        war_result: WAR dependency analysis result
+        overwrite_result: Statement overwrite analysis result (optional)
+
+    Returns:
+        WAR instructions string, or empty if WAR is eliminated by overwrite optimization
+    """
     if not war_result or war_result['parallelization_safe']:
         return ""
+
+    # Check if statement overwrite optimization eliminates the WAR dependencies
+    if overwrite_result and overwrite_result.get('applicable'):
+        war_eliminated = check_war_eliminated_by_overwrite(war_result, overwrite_result)
+        if war_eliminated:
+            # WAR is eliminated by statement overwrite optimization
+            return ""
 
     arrays_to_copy = war_result['arrays_needing_copy']
 
@@ -566,6 +658,32 @@ def build_statement_reordering_instructions(kernel_name: str, reordering_result:
     return ""
 
 
+def load_scalar_expansion_analysis(kernel_name: str) -> Optional[dict]:
+    """Load scalar expansion analysis for a kernel."""
+    if not HAS_SCALAR_EXPANSION_ANALYSIS or analyze_kernel_scalar_expansion is None:
+        return None
+
+    kernel_file = f"/home/qinxiao/workspace/pet/isl_analysis/kernels/{kernel_name}.c"
+    try:
+        return analyze_kernel_scalar_expansion(kernel_file)
+    except Exception:
+        return None
+
+
+def build_scalar_expansion_instructions(kernel_name: str, expansion_result: dict) -> str:
+    """Build specific instructions for handling scalar expansion patterns."""
+    if not expansion_result or not expansion_result.get('has_scalar_expansion'):
+        return ""
+
+    # Use the formatted advice from the module
+    if format_scalar_expansion_for_prompt:
+        formatted = format_scalar_expansion_for_prompt(kernel_name, expansion_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
 def load_reduction_analysis(kernel_name: str) -> Optional[dict]:
     """Load reduction type analysis for a kernel."""
     if not HAS_REDUCTION_ANALYSIS or analyze_kernel_reduction is None:
@@ -585,6 +703,31 @@ def build_reduction_type_instructions(kernel_name: str, reduction_result: dict) 
     # Use the formatted instructions from the module
     if build_reduction_instructions:
         formatted = build_reduction_instructions(reduction_result)
+        if formatted:
+            return formatted
+
+    return ""
+
+
+def load_convolution_analysis(kernel_name: str) -> Optional[dict]:
+    """Load convolution pattern analysis for a kernel."""
+    if not HAS_CONVOLUTION_ANALYSIS or analyze_kernel_convolution is None:
+        return None
+
+    try:
+        return analyze_kernel_convolution(kernel_name)
+    except Exception:
+        return None
+
+
+def build_convolution_pattern_instructions(kernel_name: str, conv_result: dict) -> str:
+    """Build specific instructions for handling convolution patterns."""
+    if not conv_result or not conv_result.get('is_convolution'):
+        return ""
+
+    # Use the formatted instructions from the module
+    if build_convolution_instructions:
+        formatted = build_convolution_instructions(conv_result)
         if formatted:
             return formatted
 
@@ -768,6 +911,10 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
         if par_type == 'reduction':
             lines.append(f"**Reduction pattern:** Use `tl.sum()` to reduce across {par_dim} dimension")
             lines.append("")
+        elif par_type == 'overwrite':
+            lines.append(f"**Overwrite pattern:** Each {par_dim} iteration overwrites the same location - last value wins")
+            lines.append(f"**Implementation:** The final value will be from the last {par_dim} iteration that executes")
+            lines.append("")
 
     if invalid_options:
         lines.append("### INVALID Parallelization (DO NOT USE)")
@@ -783,7 +930,8 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       compaction_section: str = "", aliasing_section: str = "",
                       crossing_threshold_section: str = "", loop_unrolling_section: str = "",
                       early_exit_section: str = "", statement_reordering_section: str = "",
-                      reduction_section: str = "") -> str:
+                      scalar_expansion_section: str = "", reduction_section: str = "",
+                      convolution_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -816,7 +964,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{loop_unrolling_section}{statement_reordering_section}{war_section}{par_section}{reduction_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
+{helper_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -832,6 +980,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -979,11 +1130,12 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
 
     exact_sig = get_exact_function_signature(kernel_name)
     war_result = load_war_analysis(kernel_name)
-    war_section = build_war_instructions(kernel_name, war_result)
     par_analysis = load_parallelization_analysis(kernel_name)
     par_section = build_parallelization_instructions(kernel_name, par_analysis)
     overwrite_result = load_overwrite_analysis(kernel_name)
     overwrite_section = build_overwrite_instructions(kernel_name, overwrite_result)
+    # Build WAR instructions after overwrite analysis (so we can check if overwrite eliminates WAR)
+    war_section = build_war_instructions(kernel_name, war_result, overwrite_result)
     compaction_result = load_stream_compaction_analysis(kernel_name)
     compaction_section = build_stream_compaction_instructions(kernel_name, compaction_result)
     aliasing_result = load_pointer_aliasing_analysis(kernel_name)
@@ -996,10 +1148,14 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     early_exit_section = build_early_exit_instructions(kernel_name, early_exit_result)
     statement_reordering_result = load_statement_reordering_analysis(kernel_name)
     statement_reordering_section = build_statement_reordering_instructions(kernel_name, statement_reordering_result)
+    scalar_expansion_result = load_scalar_expansion_analysis(kernel_name)
+    scalar_expansion_section = build_scalar_expansion_instructions(kernel_name, scalar_expansion_result)
     reduction_result = load_reduction_analysis(kernel_name)
     reduction_section = build_reduction_type_instructions(kernel_name, reduction_result)
+    convolution_result = load_convolution_analysis(kernel_name)
+    convolution_section = build_convolution_pattern_instructions(kernel_name, convolution_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, reduction_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
@@ -1383,6 +1539,218 @@ def run_test(func_name: str, test_file: Path) -> Tuple[bool, dict]:
         }
 
 
+def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -> str:
+    """Generate performance benchmark script for a specific attempt."""
+    arrays = func_spec['arrays']
+    has_offset = func_spec['has_offset']
+    has_2d = func_spec.get('has_2d_arrays', False)
+    scalar_params = func_spec.get('scalar_params', {})
+
+    if has_offset:
+        size_expr = "N + 10"
+    else:
+        size_expr = "N"
+
+    array_inits = []
+    for arr, mode in sorted(arrays.items()):
+        if mode in ['r', 'rw', 'w']:
+            if arr == 'ip':
+                array_inits.append(f"    {arr} = torch.randperm({size_expr}, device='cuda', dtype=torch.long)")
+            elif has_2d and len(arr) == 2 and arr[0] == arr[1]:
+                array_inits.append(f"    {arr} = torch.randn({size_expr}, {size_expr}, device='cuda', dtype=torch.float32)")
+            elif arr == 'flat_2d_array':
+                if has_offset:
+                    array_inits.append(f"    {arr} = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)")
+                else:
+                    array_inits.append(f"    {arr} = torch.randn(N * N, device='cuda', dtype=torch.float32)")
+            elif arr == 'd' and func_name == 's481':
+                array_inits.append(f"    {arr} = torch.abs(torch.randn({size_expr}, device='cuda', dtype=torch.float32))")
+            else:
+                array_inits.append(f"    {arr} = torch.randn({size_expr}, device='cuda', dtype=torch.float32)")
+
+    for scalar_name in sorted(scalar_params.keys()):
+        if scalar_name == 'k':
+            array_inits.append(f"    {scalar_name} = 0")
+        elif scalar_name == 't':
+            array_inits.append(f"    {scalar_name} = 0.5")
+        elif scalar_name in ['n1', 'n3']:
+            if scalar_name == 'n1':
+                array_inits.append(f"    {scalar_name} = 10")
+            elif scalar_name == 'n3':
+                array_inits.append(f"    {scalar_name} = 3")
+        else:
+            array_inits.append(f"    {scalar_name} = 1")
+
+    array_init_str = '\n'.join(array_inits) if array_inits else "    pass"
+
+    array_names = [arr for arr, mode in sorted(arrays.items()) if mode in ['r', 'rw', 'w']]
+    all_scalar_names = sorted(scalar_params.keys())
+
+    available_arrays = array_names
+    available_scalars = all_scalar_names
+
+    if has_2d:
+        benchmark_size = 256
+    else:
+        benchmark_size = 32000
+
+    benchmark_code = f'''#!/usr/bin/env python3
+"""
+Performance Benchmark for {func_name}
+"""
+import sys
+import time
+import inspect
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+import torch
+
+try:
+    from baselines.{func_name}_baseline import {func_name}_pytorch
+    from test16.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+except ImportError as e:
+    print(f"Import error: {{e}}")
+    sys.exit(1)
+
+def get_func_params(func):
+    sig = inspect.signature(func)
+    return list(sig.parameters.keys())
+
+def build_args(func, available_tensors, available_scalars):
+    params = get_func_params(func)
+    args = []
+    for p in params:
+        if p in available_tensors:
+            args.append(available_tensors[p])
+        elif p in available_scalars:
+            args.append(available_scalars[p])
+    return args
+
+def benchmark():
+    N = {benchmark_size}
+    num_warmup = 10
+    num_iterations = 100
+
+    print("="*70)
+    print(f"Performance Benchmark: {func_name}")
+    print(f"Array size: N={{N}}")
+    print("="*70)
+
+    # Initialize arrays
+{array_init_str}
+
+    pt_tensors = {{{', '.join([f'"{arr}": {arr}' for arr in available_arrays])}}}
+    tr_tensors = {{{', '.join([f'"{arr}": {arr}.clone()' for arr in available_arrays])}}}
+    scalars = {{{', '.join([f'"{s}": {s}' for s in available_scalars])}}}
+
+    pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+    tr_args = build_args({func_name}_triton, tr_tensors, scalars)
+
+    # Warmup PyTorch
+    print(f"Warming up PyTorch baseline ({{num_warmup}} iterations)...")
+    for _ in range(num_warmup):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+        {func_name}_pytorch(*pt_args)
+    torch.cuda.synchronize()
+
+    # Benchmark PyTorch
+    print(f"Benchmarking PyTorch baseline ({{num_iterations}} iterations)...")
+    torch.cuda.synchronize()
+    pt_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+        {func_name}_pytorch(*pt_args)
+    torch.cuda.synchronize()
+    pt_time = (time.perf_counter() - pt_start) / num_iterations
+
+    # Warmup Triton
+    print(f"Warming up Triton implementation ({{num_warmup}} iterations)...")
+    for _ in range(num_warmup):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args({func_name}_triton, tr_tensors, scalars)
+        {func_name}_triton(*tr_args)
+    torch.cuda.synchronize()
+
+    # Benchmark Triton
+    print(f"Benchmarking Triton implementation ({{num_iterations}} iterations)...")
+    torch.cuda.synchronize()
+    tr_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args({func_name}_triton, tr_tensors, scalars)
+        {func_name}_triton(*tr_args)
+    torch.cuda.synchronize()
+    tr_time = (time.perf_counter() - tr_start) / num_iterations
+
+    speedup = pt_time / tr_time if tr_time > 0 else 0
+
+    print("="*70)
+    print(f"PyTorch time:  {{pt_time*1000:8.3f}} ms")
+    print(f"Triton time:   {{tr_time*1000:8.3f}} ms")
+    print(f"Speedup:       {{speedup:8.2f}}x")
+    print("="*70)
+
+    # Output machine-readable format for parsing
+    print(f"BENCHMARK_RESULT:{{pt_time*1000:.6f}},{{tr_time*1000:.6f}},{{speedup:.6f}}")
+
+if __name__ == "__main__":
+    try:
+        benchmark()
+    except Exception as e:
+        print(f"Benchmark error: {{e}}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+'''
+
+    return benchmark_code
+
+
+def run_benchmark(func_name: str, benchmark_file: Path) -> Optional[dict]:
+    """Run performance benchmark and parse results.
+
+    Returns:
+        dict with 'pytorch_time_ms', 'triton_time_ms', 'speedup', or None if failed
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, str(benchmark_file)],
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout for benchmarking
+            cwd=Path.cwd()
+        )
+
+        stdout = result.stdout
+
+        # Parse benchmark results
+        for line in stdout.split('\n'):
+            if line.startswith('BENCHMARK_RESULT:'):
+                parts = line.split(':')[1].split(',')
+                if len(parts) == 3:
+                    return {
+                        'pytorch_time_ms': float(parts[0]),
+                        'triton_time_ms': float(parts[1]),
+                        'speedup': float(parts[2])
+                    }
+
+        return None
+
+    except subprocess.TimeoutExpired:
+        print(f"  Benchmark timed out after 300 seconds")
+        return None
+    except Exception as e:
+        print(f"  Benchmark error: {e}")
+        return None
+
+
 def process_function(func_name: str, func_spec: dict) -> dict:
     """Process a single TSVC function with retry logic."""
     print(f"\n{'=' * 70}")
@@ -1487,6 +1855,23 @@ def process_function(func_name: str, func_spec: dict) -> dict:
             if passed:
                 print(f"  All tests PASSED on attempt {attempt}!")
                 results["test_passed"] = True
+
+                # Run performance benchmark
+                print(f"  Running performance benchmark...")
+                benchmark_file = test_dir / f"benchmark_{func_name}.py"
+                benchmark_code = generate_benchmark_test(func_name, func_spec, attempt)
+                with open(benchmark_file, 'w') as f:
+                    f.write(benchmark_code)
+                benchmark_file.chmod(0o755)
+
+                benchmark_results = run_benchmark(func_name, benchmark_file)
+                if benchmark_results:
+                    results["benchmark"] = benchmark_results
+                    print(f"  Benchmark complete: {benchmark_results['speedup']:.2f}x speedup")
+                else:
+                    print(f"  Benchmark failed or timed out")
+                    results["benchmark"] = None
+
                 return results
             else:
                 error_type = error_info.get('type', 'unknown')
@@ -1552,11 +1937,11 @@ def main():
         all_results[func_name] = results
 
     # Print summary
-    print(f"\n\n{'=' * 70}")
+    print(f"\n\n{'=' * 80}")
     print("SUMMARY")
-    print(f"{'=' * 70}")
-    print(f"{'Function':<12} {'Baseline':<10} {'Triton':<10} {'Passed':<10} {'Attempts':<10}")
-    print(f"{'-' * 70}")
+    print(f"{'=' * 80}")
+    print(f"{'Function':<12} {'Baseline':<10} {'Triton':<10} {'Passed':<10} {'Attempts':<10} {'Speedup':<12}")
+    print(f"{'-' * 80}")
 
     for func_name, results in all_results.items():
         baseline = "Y" if results["baseline_generated"] else "N"
@@ -1564,9 +1949,14 @@ def main():
         passed = "Y" if results["test_passed"] else "N"
         attempts = str(results["attempts"])
 
-        print(f"{func_name:<12} {baseline:<10} {triton:<10} {passed:<10} {attempts:<10}")
+        if results.get("benchmark") and results["benchmark"].get("speedup"):
+            speedup = f"{results['benchmark']['speedup']:.2f}x"
+        else:
+            speedup = "-"
 
-    print(f"{'=' * 70}")
+        print(f"{func_name:<12} {baseline:<10} {triton:<10} {passed:<10} {attempts:<10} {speedup:<12}")
+
+    print(f"{'=' * 80}")
 
     # Count successes
     total = len(all_results)
@@ -1576,12 +1966,25 @@ def main():
     first_try = sum(1 for r in all_results.values() if r["test_passed"] and r["attempts"] == 1)
     retried = sum(1 for r in all_results.values() if r["test_passed"] and r["attempts"] > 1)
 
+    # Calculate benchmark statistics
+    benchmarked = sum(1 for r in all_results.values() if r.get("benchmark"))
+    if benchmarked > 0:
+        speedups = [r["benchmark"]["speedup"] for r in all_results.values() if r.get("benchmark") and r["benchmark"].get("speedup")]
+        avg_speedup = sum(speedups) / len(speedups) if speedups else 0
+        min_speedup = min(speedups) if speedups else 0
+        max_speedup = max(speedups) if speedups else 0
+
     print(f"\nBaselines generated: {baseline_ok}/{total}")
     print(f"Triton generated: {triton_ok}/{total}")
     print(f"Tests passed: {passed}/{total}")
     print(f"  - Passed on first try: {first_try}")
     print(f"  - Passed after retry: {retried}")
-    print(f"{'=' * 70}")
+    if benchmarked > 0:
+        print(f"\nPerformance benchmarks: {benchmarked}/{total}")
+        print(f"  - Average speedup: {avg_speedup:.2f}x")
+        print(f"  - Min speedup: {min_speedup:.2f}x")
+        print(f"  - Max speedup: {max_speedup:.2f}x")
+    print(f"{'=' * 80}")
 
     # Save results to JSON file
     import json
@@ -1611,7 +2014,8 @@ def main():
             "triton_generated": results["triton_generated"],
             "test_passed": results["test_passed"],
             "attempts": results["attempts"],
-            "final_error": error_info
+            "final_error": error_info,
+            "benchmark": results.get("benchmark")
         }
 
     # Save updated results

@@ -99,11 +99,13 @@
   "s118": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 6.35e+09"
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "pytorch_time_ms": 837.078803,
+      "triton_time_ms": 3.246814,
+      "speedup": 257.815485
     }
   },
   "s119": {
@@ -258,11 +260,16 @@
   "s141": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
+    "test_passed": true,
     "attempts": 3,
     "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.43e+00"
+      "type": "compilation",
+      "message": "        ^\nunsupported AST node type: Break\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s141/test_s141_correctness.py\", line 63, in test_correctness\n    triton_result = s141_triton(*tr_args)\n                    ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test16/llm_triton/s141/attempt2.py\", line 58, in s141_triton\n    s141_kerne"
+    },
+    "benchmark": {
+      "pytorch_time_ms": 478.67133,
+      "triton_time_ms": 0.07288,
+      "speedup": 6567.936787
     }
   },
   "s1421": {
@@ -341,11 +348,13 @@
   "s176": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "timeout",
-      "message": "Test timed out after 60 seconds"
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "pytorch_time_ms": 11.964267,
+      "triton_time_ms": 0.562325,
+      "speedup": 21.276422
     }
   },
   "s2101": {
@@ -498,11 +507,13 @@
   "s244": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 8.67e-01"
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "pytorch_time_ms": 2488.628544,
+      "triton_time_ms": 0.092934,
+      "speedup": 26778.548099
     }
   },
   "s251": {
@@ -515,11 +526,13 @@
   "s252": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 4,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.88e+00"
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "pytorch_time_ms": 877.046561,
+      "triton_time_ms": 1.286928,
+      "speedup": 681.504191
     }
   },
   "s253": {
@@ -556,21 +569,24 @@
   "s257": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
       "type": "numerical",
-      "message": "Numerical mismatch: max_error = 8.36e+00"
-    }
+      "message": "Numerical mismatch: max_error = 9.80e+00"
+    },
+    "benchmark": null
   },
   "s258": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 3.29e+00"
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "pytorch_time_ms": 23.511082,
+      "triton_time_ms": 0.151205,
+      "speedup": 155.491691
     }
   },
   "s261": {
@@ -725,11 +741,13 @@
   "s31111": {
     "baseline_generated": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 1.59e+01"
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "pytorch_time_ms": 0.195401,
+      "triton_time_ms": 0.079653,
+      "speedup": 2.453153
     }
   },
   "s3112": {

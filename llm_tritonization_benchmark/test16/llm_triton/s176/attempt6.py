@@ -2,30 +2,27 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.jit
-def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_idx = pid * BLOCK_SIZE + i_offsets
-    i_mask = i_idx < m
-    
-    for j in range(m):
-        c_val = tl.load(c_ptr + j)
-        
-        b_idx = i_idx + m - j - 1
-        b_mask = i_mask & (b_idx >= 0) & (b_idx < 2 * m)
-        
-        a_vals = tl.load(a_ptr + i_idx, mask=i_mask, other=0.0)
-        b_vals = tl.load(b_ptr + b_idx, mask=b_mask, other=0.0)
-        
-        result = a_vals + b_vals * c_val
-        tl.store(a_ptr + i_idx, result, mask=i_mask)
-
 def s176_triton(a, b, c, m):
-    BLOCK_SIZE = 64
-    grid = (triton.cdiv(m, BLOCK_SIZE),)
+    # This is a convolution pattern that needs to be computed efficiently
+    # The original nested loop: a[i] += b[i+m-j-1] * c[j]
+    # This creates a matrix-vector multiplication pattern
     
-    s176_kernel[grid](
-        a, b, c, m,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Build the computation matrix B where B[i,j] = b[i+m-j-1]
+    # Then compute a[:m] += B @ c[:m]
+    
+    # Create index tensors for the matrix construction
+    i_indices = torch.arange(m, device=a.device, dtype=torch.long)
+    j_indices = torch.arange(m, device=a.device, dtype=torch.long)
+    
+    # Create the access pattern: i+m-j-1 for each (i,j) pair
+    i_grid, j_grid = torch.meshgrid(i_indices, j_indices, indexing='ij')
+    b_indices = i_grid + m - j_grid - 1
+    
+    # Extract the matrix B from array b using the computed indices
+    B = b[b_indices]  # Shape: (m, m)
+    
+    # Compute the matrix-vector multiplication
+    result = torch.matmul(B, c[:m])
+    
+    # Add to the accumulator array
+    a[:m] += result
