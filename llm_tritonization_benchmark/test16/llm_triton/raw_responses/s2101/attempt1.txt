@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s2101
-# Generated: 2025-12-08 14:06:17
+# Generated: 2026-01-13 02:52:44
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -54,6 +54,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -118,48 +121,37 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s2101_kernel(aa_ptr, bb_ptr, cc_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s2101_kernel(aa_ptr, bb_ptr, cc_ptr, N, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
+    mask = indices < N
     
-    mask = indices < n_elements
-    
-    # Calculate 2D diagonal indices: [i, i] -> i * n + i where n = sqrt(n_elements)
-    n_dim = tl.sqrt(n_elements.to(tl.float32)).to(tl.int32)
-    diag_offsets = indices * n_dim + indices
-    diag_mask = mask & (indices < n_dim)
+    # Calculate 2D diagonal indices (i, i) -> flattened index i * N + i
+    diag_offsets = indices * N + indices
     
     # Load diagonal elements
-    bb_vals = tl.load(bb_ptr + diag_offsets, mask=diag_mask, other=0.0)
-    cc_vals = tl.load(cc_ptr + diag_offsets, mask=diag_mask, other=0.0)
-    aa_vals = tl.load(aa_ptr + diag_offsets, mask=diag_mask, other=0.0)
+    aa_vals = tl.load(aa_ptr + diag_offsets, mask=mask)
+    bb_vals = tl.load(bb_ptr + diag_offsets, mask=mask)
+    cc_vals = tl.load(cc_ptr + diag_offsets, mask=mask)
     
-    # Compute: aa[i][i] += bb[i][i] * cc[i][i]
+    # Compute aa[i][i] += bb[i][i] * cc[i][i]
     result = aa_vals + bb_vals * cc_vals
     
-    # Store result
-    tl.store(aa_ptr + diag_offsets, result, mask=diag_mask)
+    # Store back to diagonal
+    tl.store(aa_ptr + diag_offsets, result, mask=mask)
 
 def s2101_triton(aa, bb, cc):
-    n_dim = aa.shape[0]
-    n_elements = n_dim
+    N = aa.shape[0]
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    s2101_kernel[grid](
-        aa, bb, cc,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return aa
+    s2101_kernel[grid](aa, bb, cc, N, BLOCK_SIZE)
 ```

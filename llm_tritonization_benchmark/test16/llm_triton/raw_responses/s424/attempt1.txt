@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s424
-# Generated: 2025-12-08 14:30:34
+# Generated: 2026-01-13 04:46:32
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -130,6 +130,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -194,54 +197,47 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s424_kernel(flat_2d_array, a, strip_start, n_elements, BLOCK_SIZE: tl.constexpr):
+def s424_kernel(flat_2d_array_ptr, a_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    idx = strip_start + offsets
+    idx = block_start + offsets
     
-    # Mask for valid indices
     mask = idx < n_elements
     
     # Load from flat_2d_array[i] and a[i]
-    flat_vals = tl.load(flat_2d_array + idx, mask=mask)
-    a_vals = tl.load(a + idx, mask=mask)
+    flat_vals = tl.load(flat_2d_array_ptr + idx, mask=mask, other=0.0)
+    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
     
-    # Compute result
     result = flat_vals + a_vals
     
-    # Store to xx[i+1] = flat_2d_array[i+64]
-    store_idx = idx + 64
-    tl.store(flat_2d_array + store_idx, result, mask=mask)
+    # Store to flat_2d_array[i+64] (xx[i+1] where xx = flat_2d_array + 63)
+    tl.store(flat_2d_array_ptr + idx + 64, result, mask=mask)
 
 def s424_triton(a, flat_2d_array):
-    vl = 63
     n_elements = a.shape[0] - 1  # LEN_1D - 1
     
-    STRIP_SIZE = 64
     BLOCK_SIZE = 64
+    num_strips = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Process in sequential strips of 64 elements
-    for strip_start in range(0, n_elements, STRIP_SIZE):
-        strip_end = min(strip_start + STRIP_SIZE, n_elements)
-        current_strip_size = strip_end - strip_start
+    # Process strips sequentially to avoid race conditions
+    for strip_id in range(num_strips):
+        strip_start = strip_id * BLOCK_SIZE
+        strip_end = min(strip_start + BLOCK_SIZE, n_elements)
         
-        if current_strip_size > 0:
-            # Use block size that matches strip size, but cap at 64
-            current_block_size = min(BLOCK_SIZE, current_strip_size)
+        if strip_start >= n_elements:
+            break
             
-            # Round up to nearest power of 2 for Triton efficiency
-            if current_block_size <= 32:
-                current_block_size = 32
-            else:
-                current_block_size = 64
-            
-            grid = (1,)
-            s424_kernel[grid](
-                flat_2d_array, a, strip_start, strip_end,
-                BLOCK_SIZE=current_block_size
-            )
+        # Launch kernel for this strip only
+        grid = (1,)
+        s424_kernel[grid](
+            flat_2d_array,
+            a,
+            strip_end - strip_start,
+            BLOCK_SIZE=BLOCK_SIZE
+        )
 ```

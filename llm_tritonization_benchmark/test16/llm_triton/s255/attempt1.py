@@ -1,35 +1,42 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s255_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s255_kernel(
+    a_ptr,
+    b_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
     # Get program ID
     pid = tl.program_id(axis=0)
+    
+    # Calculate block start
     block_start = pid * BLOCK_SIZE
     
-    # Create offset vector once
+    # Create offset vector
     offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
     
-    # Load x and y values (carry-around variables)
-    x = tl.load(b_ptr + (n_elements - 1))
-    y = tl.load(b_ptr + (n_elements - 2))
+    # Create mask for valid elements
+    mask = indices < n_elements
     
-    # Process elements in this block
-    current_offsets = block_start + offsets
-    mask = current_offsets < n_elements
+    # Load x and y values (carry around variables)
+    x = tl.load(b_ptr + (n_elements - 1))  # b[LEN_1D-1]
+    y = tl.load(b_ptr + (n_elements - 2))  # b[LEN_1D-2]
     
     # Load b values for this block
-    b_vals = tl.load(b_ptr + current_offsets, mask=mask)
+    b_vals = tl.load(b_ptr + indices, mask=mask)
     
     # Compute a[i] = (b[i] + x + y) * 0.333
     result = (b_vals + x + y) * 0.333
     
-    # Store result
-    tl.store(a_ptr + current_offsets, result, mask=mask)
+    # Store results
+    tl.store(a_ptr + indices, result, mask=mask)
 
 def s255_triton(a, b):
-    n_elements = b.shape[0]
+    n_elements = a.shape[0]
     
     # Choose block size
     BLOCK_SIZE = 256
@@ -39,9 +46,8 @@ def s255_triton(a, b):
     
     # Launch kernel
     s255_kernel[grid](
-        a, b,
+        a,
+        b,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=BLOCK_SIZE,
     )
-    
-    return a

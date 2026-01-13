@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s311
-# Generated: 2025-12-08 14:21:21
+# Generated: 2026-01-13 04:06:48
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -77,6 +77,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -141,41 +144,34 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s311_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Single thread does the entire reduction
-    pid = tl.program_id(0)
-    if pid != 0:
-        return
-    
     offsets = tl.arange(0, BLOCK_SIZE)
-    total_sum = 0.0
+    block_sum = 0.0
     
-    # Process array in blocks
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        block_sum = tl.sum(vals, axis=0)
-        total_sum += block_sum
+        block_sum += tl.sum(vals)
     
-    # Store the final sum
-    tl.store(result_ptr, total_sum)
+    if tl.program_id(0) == 0:
+        tl.store(result_ptr, block_sum)
 
 def s311_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
-    
-    # Create output tensor for the sum
     result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread
+    BLOCK_SIZE = 1024
     grid = (1,)
-    s311_kernel[grid](a, result, n_elements, BLOCK_SIZE)
+    
+    s311_kernel[grid](
+        a, result, n_elements, BLOCK_SIZE
+    )
     
     return result.item()
 ```

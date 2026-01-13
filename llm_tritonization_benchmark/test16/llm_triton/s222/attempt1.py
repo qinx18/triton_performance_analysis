@@ -1,19 +1,18 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s222_kernel(a_ptr, b_ptr, c_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel must run sequentially due to loop-carried dependency in e[i] = e[i-1] * e[i-1]
-    # Use single thread to process all elements sequentially
-    
-    tid = tl.program_id(0)
-    if tid != 0:
+def s222_kernel(a_ptr, b_ptr, c_ptr, e_ptr, N):
+    # This kernel must process sequentially due to e[i] = e[i-1] * e[i-1] dependency
+    # Use single thread to handle the entire computation
+    pid = tl.program_id(0)
+    if pid != 0:
         return
     
-    # Process elements sequentially from 1 to n_elements-1
-    for i in range(1, n_elements):
-        # Load b[i] and c[i]
+    # Process all elements sequentially in a single thread
+    for i in range(1, N):
+        # Load values for a[i] += b[i] * c[i]
         b_val = tl.load(b_ptr + i)
         c_val = tl.load(c_ptr + i)
         bc_product = b_val * c_val
@@ -34,14 +33,13 @@ def s222_kernel(a_ptr, b_ptr, c_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr
         tl.store(a_ptr + i, a_val)
 
 def s222_triton(a, b, c, e):
-    n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
+    N = a.shape[0]
     
-    # Launch with single block since we need sequential execution
+    # Launch with single thread since computation must be sequential
     grid = (1,)
     
     s222_kernel[grid](
-        a, b, c, e,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, c, e, N
     )
+    
+    return a, e

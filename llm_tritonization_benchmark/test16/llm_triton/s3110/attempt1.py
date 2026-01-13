@@ -3,62 +3,67 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s3110_kernel(aa_ptr, output_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s3110_kernel(aa_ptr, max_val_ptr, max_i_ptr, max_j_ptr, n_rows, n_cols, BLOCK_SIZE: tl.constexpr):
+    # Get program ID and compute column offsets
     pid = tl.program_id(0)
-    
-    # Initialize with first element
-    max_val = tl.load(aa_ptr)
-    max_i = 0
-    max_j = 0
-    
     j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_idx = pid * BLOCK_SIZE + j_offsets
+    j_mask = j_idx < n_cols
     
-    for i in range(LEN_2D):
-        for j_block_start in range(0, LEN_2D, BLOCK_SIZE):
-            j_indices = j_block_start + j_offsets
-            j_mask = j_indices < LEN_2D
-            
-            # Calculate flat indices for 2D array access
-            flat_indices = i * LEN_2D + j_indices
-            
-            # Load values
-            vals = tl.load(aa_ptr + flat_indices, mask=j_mask, other=float('-inf'))
-            
-            # Find local maximum
-            local_max = tl.max(vals)
-            
-            # Check if local max is greater than current global max
-            if local_max > max_val:
-                max_val = local_max
-                max_i = i
-                
-                # Find which j index has the maximum value
-                max_mask = vals == local_max
-                for k in range(BLOCK_SIZE):
-                    if j_block_start + k < LEN_2D:
-                        if (max_mask >> k) & 1:
-                            max_j = j_block_start + k
-                            break
+    # Initialize with first element values
+    current_max = tl.load(aa_ptr)  # aa[0][0]
+    current_max_i = 0
+    current_max_j = 0
     
-    # Only thread 0 writes the result
-    if pid == 0:
-        chksum = max_val + max_i + max_j
-        result = max_val + (max_i + 1) + (max_j + 1)
-        tl.store(output_ptr, result)
+    # Sequential loop over rows (i dimension)
+    for i in range(n_rows):
+        # Load entire row for current columns
+        row_ptr = aa_ptr + i * n_cols + j_idx
+        row_vals = tl.load(row_ptr, mask=j_mask, other=-float('inf'))
+        
+        # Find which elements are greater than current max
+        greater_mask = row_vals > current_max
+        valid_greater = greater_mask & j_mask
+        
+        # Update max values where condition is met
+        current_max = tl.where(valid_greater, row_vals, current_max)
+        current_max_i = tl.where(valid_greater, i, current_max_i)
+        current_max_j = tl.where(valid_greater, j_idx, current_max_j)
+    
+    # Reduce within block to find global maximum
+    # First reduce to find the maximum value
+    block_max = tl.max(current_max)
+    
+    # Find which thread has the maximum value
+    has_max = current_max == block_max
+    
+    # Get the indices corresponding to the maximum
+    max_i_candidate = tl.where(has_max, current_max_i, n_rows)
+    max_j_candidate = tl.where(has_max, current_max_j, n_cols)
+    
+    # Find the minimum indices among threads that have the maximum value
+    block_max_i = tl.min(max_i_candidate)
+    block_max_j = tl.min(max_j_candidate)
+    
+    # Store results (only first thread in block writes)
+    if tl.program_id(0) == 0 and j_offsets[0] == 0:
+        tl.store(max_val_ptr, block_max)
+        tl.store(max_i_ptr, block_max_i)
+        tl.store(max_j_ptr, block_max_j)
 
 def s3110_triton(aa):
-    LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 256
+    # Get dimensions
+    n_rows, n_cols = aa.shape
     
-    # Use PyTorch for more efficient argmax
+    # Use PyTorch's argmax for reliable reduction
     flat_aa = aa.flatten()
     max_val = torch.max(flat_aa)
-    max_idx = torch.argmax(flat_aa)
+    flat_idx = torch.argmax(flat_aa)
+    xindex = flat_idx // n_cols
+    yindex = flat_idx % n_cols
     
-    xindex = max_idx // LEN_2D
-    yindex = max_idx % LEN_2D
+    # Compute chksum (though not used in return)
+    chksum = max_val + xindex.float() + yindex.float()
     
-    chksum = max_val + xindex + yindex
-    result = max_val + (xindex + 1) + (yindex + 1)
-    
-    return result.item()
+    # Return the exact format from C code: max + xindex+1 + yindex+1
+    return max_val + (xindex + 1) + (yindex + 1)

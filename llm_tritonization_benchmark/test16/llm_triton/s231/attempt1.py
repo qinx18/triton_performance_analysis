@@ -11,16 +11,16 @@ def s231_kernel(aa_ptr, bb_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     i_mask = i_idx < LEN_2D
     
     for j in range(1, LEN_2D):
-        # Load aa[j-1][i] (previous row)
+        # Load aa[j-1][i]
         prev_aa_ptrs = aa_ptr + (j - 1) * LEN_2D + i_idx
-        prev_aa = tl.load(prev_aa_ptrs, mask=i_mask, other=0.0)
+        prev_aa_vals = tl.load(prev_aa_ptrs, mask=i_mask, other=0.0)
         
-        # Load bb[j][i] (current row)
+        # Load bb[j][i]
         bb_ptrs = bb_ptr + j * LEN_2D + i_idx
         bb_vals = tl.load(bb_ptrs, mask=i_mask, other=0.0)
         
         # Compute aa[j][i] = aa[j-1][i] + bb[j][i]
-        result = prev_aa + bb_vals
+        result = prev_aa_vals + bb_vals
         
         # Store aa[j][i]
         aa_ptrs = aa_ptr + j * LEN_2D + i_idx
@@ -28,7 +28,7 @@ def s231_kernel(aa_ptr, bb_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
 
 def s231_triton(aa, bb):
     LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 256
+    BLOCK_SIZE = 64
     
     grid = (triton.cdiv(LEN_2D, BLOCK_SIZE),)
     

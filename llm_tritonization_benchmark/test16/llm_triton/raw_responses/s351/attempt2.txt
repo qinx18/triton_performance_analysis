@@ -6,11 +6,12 @@ Your last attempt failed with a compilation or runtime error:
 **Error type**: compilation
 **Error message**:
 ```
-nt call last):
+)
+Traceback (most recent call last):
   File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s351/test_s351_correctness.py", line 66, in test_correctness
     triton_result = s351_triton(*tr_args)
                     ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test16/llm_triton/s351/attempt1.py", line 27, in s351_triton
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test16/llm_triton/s351/attempt1.py", line 26, in s351_triton
     s351_kernel[grid](a, b, alpha, n_elements, BLOCK_SIZE)
   File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
     return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
@@ -24,16 +25,15 @@ nt call last):
   File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 11:22:
+triton.compiler.errors.CompilationError: at 10:22:
 def s351_kernel(a_ptr, b_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
 
-    a_vals = tl.load(a_ptr + indices, mask=mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
 
     result = a_vals + alpha * b_vals
                       ^
@@ -56,16 +56,15 @@ import triton.language as tl
 def s351_kernel(a_ptr, b_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    a_vals = tl.load(a_ptr + indices, mask=mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
     result = a_vals + alpha * b_vals
     
-    tl.store(a_ptr + indices, result, mask=mask)
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s351_triton(a, b, c):
     n_elements = a.shape[0]
@@ -195,6 +194,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -269,16 +271,15 @@ import triton.language as tl
 def s351_kernel(a_ptr, b_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    a_vals = tl.load(a_ptr + indices, mask=mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
     
     result = a_vals + alpha * b_vals
     
-    tl.store(a_ptr + indices, result, mask=mask)
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s351_triton(a, b, c):
     n_elements = a.shape[0]

@@ -3,58 +3,54 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s281_kernel_phase1(a_ptr, a_copy_ptr, b_ptr, c_ptr, n, BLOCK_SIZE: tl.constexpr):
-    block_start = tl.program_id(0) * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    idx = block_start + offsets
-    mask = idx < n // 2
+def s281_phase1_kernel(a_ptr, a_copy_ptr, b_ptr, c_ptr, n, threshold, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = (offsets < threshold)
     
-    # Phase 1: i = 0 to n//2 - 1
-    # Read from a_copy[n-1-i], write to a[i]
-    reverse_idx = n - 1 - idx
+    reverse_offsets = n - 1 - offsets
     
-    a_vals = tl.load(a_copy_ptr + reverse_idx, mask=mask)
-    b_vals = tl.load(b_ptr + idx, mask=mask)
-    c_vals = tl.load(c_ptr + idx, mask=mask)
+    a_vals = tl.load(a_copy_ptr + reverse_offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
     
     x = a_vals + b_vals * c_vals
     
-    tl.store(a_ptr + idx, x - 1.0, mask=mask)
-    tl.store(b_ptr + idx, x, mask=mask)
+    tl.store(a_ptr + offsets, x - 1.0, mask=mask)
+    tl.store(b_ptr + offsets, x, mask=mask)
 
 @triton.jit
-def s281_kernel_phase2(a_ptr, b_ptr, c_ptr, n, BLOCK_SIZE: tl.constexpr):
-    block_start = tl.program_id(0) * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    idx = block_start + offsets + n // 2
-    mask = idx < n
+def s281_phase2_kernel(a_ptr, b_ptr, c_ptr, n, threshold, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE + threshold
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = (offsets < n)
     
-    # Phase 2: i = n//2 to n-1
-    # Read from a[n-1-i] (updated values from phase 1), write to a[i]
-    reverse_idx = n - 1 - idx
+    reverse_offsets = n - 1 - offsets
     
-    a_vals = tl.load(a_ptr + reverse_idx, mask=mask)
-    b_vals = tl.load(b_ptr + idx, mask=mask)
-    c_vals = tl.load(c_ptr + idx, mask=mask)
+    a_vals = tl.load(a_ptr + reverse_offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
     
     x = a_vals + b_vals * c_vals
     
-    tl.store(a_ptr + idx, x - 1.0, mask=mask)
-    tl.store(b_ptr + idx, x, mask=mask)
+    tl.store(a_ptr + offsets, x - 1.0, mask=mask)
+    tl.store(b_ptr + offsets, x, mask=mask)
 
 def s281_triton(a, b, c):
     n = a.shape[0]
     threshold = n // 2
     
-    # Clone array for Phase 1 reads
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
     
-    # Phase 1: process first half
+    # Phase 1: Process indices 0 to threshold-1
     grid1 = (triton.cdiv(threshold, BLOCK_SIZE),)
-    s281_kernel_phase1[grid1](a, a_copy, b, c, n, BLOCK_SIZE)
+    s281_phase1_kernel[grid1](a, a_copy, b, c, n, threshold, BLOCK_SIZE)
     
-    # Phase 2: process second half
-    grid2 = (triton.cdiv(n - threshold, BLOCK_SIZE),)
-    s281_kernel_phase2[grid2](a, b, c, n, BLOCK_SIZE)
+    # Phase 2: Process indices threshold to n-1
+    remaining = n - threshold
+    grid2 = (triton.cdiv(remaining, BLOCK_SIZE),)
+    s281_phase2_kernel[grid2](a, b, c, n, threshold, BLOCK_SIZE)

@@ -3,36 +3,34 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s175_kernel(a_ptr, a_copy_ptr, b_ptr, n, inc, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    
+def s175_kernel(a_ptr, a_copy_ptr, b_ptr, inc, n, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
-    idx = block_start + offsets
     
-    mask = idx < n
-    
-    # Load from read-only copy and b array
-    a_vals = tl.load(a_copy_ptr + idx + inc, mask=mask & ((idx + inc) < (n + 1)))
-    b_vals = tl.load(b_ptr + idx, mask=mask)
-    
-    # Compute result
-    result = a_vals + b_vals
-    
-    # Store to original array
-    tl.store(a_ptr + idx, result, mask=mask)
+    for block_start in range(0, n, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n
+        
+        # Check if current_offsets + inc is within bounds
+        read_mask = mask & ((current_offsets + inc) < (n + 1))
+        
+        # Load from read-only copy and b array
+        a_vals = tl.load(a_copy_ptr + current_offsets + inc, mask=read_mask, other=0.0)
+        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
+        
+        # Compute result
+        result = a_vals + b_vals
+        
+        # Store to original array
+        tl.store(a_ptr + current_offsets, result, mask=mask)
 
 def s175_triton(a, b, inc):
-    n = len(a) - 1
+    n = a.shape[0] - 1
     
     # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
     
-    # Calculate grid size
     BLOCK_SIZE = 256
-    grid_size = triton.cdiv(n, BLOCK_SIZE)
     
-    # Launch kernel
-    s175_kernel[(grid_size,)](
-        a, a_copy, b, n, inc, BLOCK_SIZE
+    s175_kernel[(1,)](
+        a, a_copy, b, inc, n, BLOCK_SIZE
     )

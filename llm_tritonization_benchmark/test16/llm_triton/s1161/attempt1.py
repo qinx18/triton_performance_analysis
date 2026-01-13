@@ -3,36 +3,44 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s1161_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s1161_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n, BLOCK_SIZE: tl.constexpr):
     block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets
-    mask = idx < n_elements
+    mask = idx < n
     
-    # Load values
     c_vals = tl.load(c_ptr + idx, mask=mask)
     d_vals = tl.load(d_ptr + idx, mask=mask)
     e_vals = tl.load(e_ptr + idx, mask=mask)
     a_vals = tl.load(a_ptr + idx, mask=mask)
     
-    # Condition: c[i] < 0
-    condition = c_vals < 0.0
+    # Check condition: c[i] < 0
+    cond_mask = c_vals < 0.0
     
-    # For condition true (c[i] < 0): b[i] = a[i] + d[i] * d[i]
-    b_vals = a_vals + d_vals * d_vals
-    tl.store(b_ptr + idx, b_vals, mask=mask & condition)
+    # If c[i] >= 0: a[i] = c[i] + d[i] * e[i]
+    if_result = c_vals + d_vals * e_vals
     
-    # For condition false (c[i] >= 0): a[i] = c[i] + d[i] * e[i]
-    a_new = c_vals + d_vals * e_vals
-    tl.store(a_ptr + idx, a_new, mask=mask & ~condition)
+    # If c[i] < 0: b[i] = a[i] + d[i] * d[i]
+    else_result = a_vals + d_vals * d_vals
+    
+    # Store results based on condition
+    # For if branch (c[i] >= 0)
+    if_store_mask = mask & (cond_mask == False)
+    if tl.any(if_store_mask):
+        tl.store(a_ptr + idx, if_result, mask=if_store_mask)
+    
+    # For else branch (c[i] < 0)
+    else_store_mask = mask & cond_mask
+    if tl.any(else_store_mask):
+        tl.store(b_ptr + idx, else_result, mask=else_store_mask)
 
 def s1161_triton(a, b, c, d, e):
-    n_elements = a.shape[0] - 1
+    n = a.shape[0] - 1  # LEN_1D - 1
+    
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(n, BLOCK_SIZE),)
     
     s1161_kernel[grid](
-        a, b, c, d, e,
-        n_elements,
+        a, b, c, d, e, n,
         BLOCK_SIZE=BLOCK_SIZE
     )

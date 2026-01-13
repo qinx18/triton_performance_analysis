@@ -3,42 +3,44 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s2244_kernel(a_ptr, b_ptr, c_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+def s2244_kernel(a_ptr, b_ptr, c_ptr, e_ptr, N, BLOCK_SIZE: tl.constexpr):
+    # Define offsets once
     offsets = tl.arange(0, BLOCK_SIZE)
-    current_offsets = block_start + offsets
     
-    # Mask for valid elements (i < n_elements-1)
-    mask = current_offsets < (n_elements - 1)
+    # Main loop - execute S1 for all iterations (handles overwrite)
+    for block_start in range(0, N - 1, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < (N - 1)
+        
+        # Load values
+        b_vals = tl.load(b_ptr + current_offsets, mask=mask)
+        c_vals = tl.load(c_ptr + current_offsets, mask=mask)
+        
+        # S1: a[i] = b[i] + c[i]
+        result = b_vals + c_vals
+        tl.store(a_ptr + current_offsets, result, mask=mask)
     
-    # Load b[i], c[i], e[i]
-    b_vals = tl.load(b_ptr + current_offsets, mask=mask)
-    c_vals = tl.load(c_ptr + current_offsets, mask=mask)
-    e_vals = tl.load(e_ptr + current_offsets, mask=mask)
-    
-    # S1: a[i] = b[i] + c[i] (execute for all iterations)
-    a_vals = b_vals + c_vals
-    tl.store(a_ptr + current_offsets, a_vals, mask=mask)
-    
-    # S0: a[i+1] = b[i] + e[i] (only execute for last iteration i = n_elements-2)
-    last_iter_mask = mask & (current_offsets == (n_elements - 2))
-    if tl.any(last_iter_mask):
-        s0_vals = b_vals + e_vals
-        tl.store(a_ptr + current_offsets + 1, s0_vals, mask=last_iter_mask)
+    # Epilogue - execute S0 only for last iteration
+    # S0: a[i+1] = b[i] + e[i] at i = N-2
+    if N >= 2:
+        last_i = N - 2
+        if tl.program_id(0) == 0:  # Only first program handles epilogue
+            b_val = tl.load(b_ptr + last_i)
+            e_val = tl.load(e_ptr + last_i)
+            result = b_val + e_val
+            tl.store(a_ptr + last_i + 1, result)
 
 def s2244_triton(a, b, c, e):
-    n_elements = a.shape[0]
+    N = a.shape[0]
     
-    # Handle edge case
-    if n_elements <= 1:
+    if N < 2:
         return
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements - 1, BLOCK_SIZE),)
+    grid = (1,)
     
     s2244_kernel[grid](
         a, b, c, e,
-        n_elements,
+        N,
         BLOCK_SIZE=BLOCK_SIZE
     )

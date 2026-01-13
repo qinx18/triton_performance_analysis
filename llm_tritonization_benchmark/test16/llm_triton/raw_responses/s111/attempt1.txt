@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s111
-# Generated: 2025-12-08 13:44:00
+# Generated: 2026-01-13 02:11:02
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -89,6 +89,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -158,36 +161,34 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s111_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel must process sequentially due to RAW dependency
-    # Use single thread to process all elements
+def s111_kernel(a_ptr, b_ptr, n):
+    # This kernel must process sequentially due to loop-carried dependency
+    # Each iteration depends on the result of the previous iteration
+    # Use single thread to maintain sequential order
+    
     pid = tl.program_id(0)
     if pid != 0:
         return
     
-    # Process sequentially starting from i=1, step=2
+    # Process sequentially from i=1 to n-1, stepping by 2
     i = 1
-    while i < n_elements:
+    while i < n:
         # Load a[i-1] and b[i]
         a_prev = tl.load(a_ptr + (i - 1))
         b_val = tl.load(b_ptr + i)
         
-        # Compute a[i] = a[i-1] + b[i]
+        # Compute and store a[i] = a[i-1] + b[i]
         result = a_prev + b_val
-        
-        # Store result
         tl.store(a_ptr + i, result)
         
         i += 2
 
 def s111_triton(a, b):
-    n_elements = a.shape[0]
-    BLOCK_SIZE = 256
+    n = a.shape[0]
     
-    # Launch single thread since computation is strictly sequential
+    # Launch with single thread to maintain sequential dependency
     grid = (1,)
+    s111_kernel[grid](a, b, n)
     
-    s111_kernel[grid](
-        a, b, n_elements, BLOCK_SIZE
-    )
+    return a
 ```

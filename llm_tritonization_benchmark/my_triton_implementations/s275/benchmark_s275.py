@@ -1,65 +1,117 @@
 #!/usr/bin/env python3
 """
-Benchmark s275: Column-wise vs Row-wise processing
+Performance Benchmark for s275
 """
 import sys
+import time
+import inspect
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
-import time
 
-from llm_triton.s275_triton_correct import s275_triton as s275_columnwise
-from llm_triton.s275_triton_rowwise import s275_triton as s275_rowwise
-from baselines.s275_baseline import s275_pytorch
+try:
+    from baselines.s275_baseline import s275_pytorch
+    from test16.llm_triton.s275.attempt1 import s275_triton
+except ImportError as e:
+    print(f"Import error: {e}")
+    sys.exit(1)
+
+def get_func_params(func):
+    sig = inspect.signature(func)
+    return list(sig.parameters.keys())
+
+def build_args(func, available_tensors, available_scalars):
+    params = get_func_params(func)
+    args = []
+    for p in params:
+        if p in available_tensors:
+            args.append(available_tensors[p])
+        elif p in available_scalars:
+            args.append(available_scalars[p])
+    return args
 
 def benchmark():
-    """Benchmark both implementations"""
-    test_sizes = [100, 200, 500, 1000, 2000]
+    N = 256
+    num_warmup = 10
+    num_iterations = 100
 
-    print("="*80)
-    print("s275 Performance Comparison: Column-wise vs Row-wise")
-    print("="*80)
-    print(f"{'Size':<10} {'Column-wise (ms)':<20} {'Row-wise (ms)':<20} {'Speedup':<10}")
-    print("-"*80)
+    print("="*70)
+    print(f"Performance Benchmark: s275")
+    print(f"Array size: N={N}")
+    print("="*70)
 
-    for N in test_sizes:
-        # Initialize arrays
-        aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
-        bb = torch.randn(N, N, device='cuda', dtype=torch.float32)
-        cc = torch.randn(N, N, device='cuda', dtype=torch.float32)
+    # Initialize arrays
+    aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+    bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+    cc = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+    iterations = 1
 
-        # Warmup
-        for _ in range(5):
-            _ = s275_columnwise(aa.clone(), bb.clone(), cc.clone())
-            _ = s275_rowwise(aa.clone(), bb.clone(), cc.clone())
+    pt_tensors = {"aa": aa, "bb": bb, "cc": cc}
+    tr_tensors = {"aa": aa.clone(), "bb": bb.clone(), "cc": cc.clone()}
+    scalars = {"iterations": iterations}
 
-        torch.cuda.synchronize()
+    pt_args = build_args(s275_pytorch, pt_tensors, scalars)
+    tr_args = build_args(s275_triton, tr_tensors, scalars)
 
-        # Benchmark column-wise
-        num_iters = 20
-        start = time.perf_counter()
-        for _ in range(num_iters):
-            result_col = s275_columnwise(aa.clone(), bb.clone(), cc.clone())
-        torch.cuda.synchronize()
-        time_col = (time.perf_counter() - start) / num_iters * 1000
+    # Warmup PyTorch
+    print(f"Warming up PyTorch baseline ({num_warmup} iterations)...")
+    for _ in range(num_warmup):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args(s275_pytorch, pt_tensors, scalars)
+        s275_pytorch(*pt_args)
+    torch.cuda.synchronize()
 
-        # Benchmark row-wise
-        start = time.perf_counter()
-        for _ in range(num_iters):
-            result_row = s275_rowwise(aa.clone(), bb.clone(), cc.clone())
-        torch.cuda.synchronize()
-        time_row = (time.perf_counter() - start) / num_iters * 1000
+    # Benchmark PyTorch
+    print(f"Benchmarking PyTorch baseline ({num_iterations} iterations)...")
+    torch.cuda.synchronize()
+    pt_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args(s275_pytorch, pt_tensors, scalars)
+        s275_pytorch(*pt_args)
+    torch.cuda.synchronize()
+    pt_time = (time.perf_counter() - pt_start) / num_iterations
 
-        # Verify correctness
-        max_error = torch.max(torch.abs(result_col - result_row)).item()
+    # Warmup Triton
+    print(f"Warming up Triton implementation ({num_warmup} iterations)...")
+    for _ in range(num_warmup):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args(s275_triton, tr_tensors, scalars)
+        s275_triton(*tr_args)
+    torch.cuda.synchronize()
 
-        speedup = time_col / time_row
-        speedup_str = f"{speedup:.2f}x" if speedup > 1 else f"{1/speedup:.2f}x slower"
+    # Benchmark Triton
+    print(f"Benchmarking Triton implementation ({num_iterations} iterations)...")
+    torch.cuda.synchronize()
+    tr_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args(s275_triton, tr_tensors, scalars)
+        s275_triton(*tr_args)
+    torch.cuda.synchronize()
+    tr_time = (time.perf_counter() - tr_start) / num_iterations
 
-        print(f"{N:<10} {time_col:<20.3f} {time_row:<20.3f} {speedup_str:<10} (err={max_error:.2e})")
+    speedup = pt_time / tr_time if tr_time > 0 else 0
 
-    print("="*80)
+    print("="*70)
+    print(f"PyTorch time:  {pt_time*1000:8.3f} ms")
+    print(f"Triton time:   {tr_time*1000:8.3f} ms")
+    print(f"Speedup:       {speedup:8.2f}x")
+    print("="*70)
+
+    # Output machine-readable format for parsing
+    print(f"BENCHMARK_RESULT:{pt_time*1000:.6f},{tr_time*1000:.6f},{speedup:.6f}")
 
 if __name__ == "__main__":
-    benchmark()
+    try:
+        benchmark()
+    except Exception as e:
+        print(f"Benchmark error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

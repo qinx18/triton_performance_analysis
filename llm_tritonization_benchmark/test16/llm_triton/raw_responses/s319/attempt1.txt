@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s319
-# Generated: 2025-12-08 14:24:35
+# Generated: 2026-01-13 04:17:09
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -83,6 +83,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -155,7 +158,7 @@ import triton.language as tl
 def s319_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    total_sum = 0.0
+    block_sum = 0.0
     
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
@@ -166,26 +169,24 @@ def s319_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.co
         d_vals = tl.load(d_ptr + current_offsets, mask=mask, other=0.0)
         e_vals = tl.load(e_ptr + current_offsets, mask=mask, other=0.0)
         
-        # Compute a[i] = c[i] + d[i]
+        # Compute a[i] = c[i] + d[i] and accumulate sum
         a_vals = c_vals + d_vals
         tl.store(a_ptr + current_offsets, a_vals, mask=mask)
+        block_sum += tl.sum(tl.where(mask, a_vals, 0.0))
         
-        # Compute b[i] = c[i] + e[i]  
+        # Compute b[i] = c[i] + e[i] and accumulate sum
         b_vals = c_vals + e_vals
-        tl.store(b_ptr + current_offsets, b_vals, mask=mask, other=0.0)
-        
-        # Sum contributions from this block
-        a_sum = tl.sum(tl.where(mask, a_vals, 0.0))
-        b_sum = tl.sum(tl.where(mask, b_vals, 0.0))
-        total_sum += a_sum + b_sum
+        tl.store(b_ptr + current_offsets, b_vals, mask=mask)
+        block_sum += tl.sum(tl.where(mask, b_vals, 0.0))
     
-    return total_sum
+    return block_sum
 
 def s319_triton(a, b, c, d, e):
-    n_elements = c.shape[0]
+    n_elements = a.shape[0]
+    
     BLOCK_SIZE = 256
     
-    # Launch kernel with single program instance to accumulate sum
+    # Launch single block to handle entire array and reduction
     total_sum = s319_kernel[(1,)](
         a, b, c, d, e,
         n_elements,

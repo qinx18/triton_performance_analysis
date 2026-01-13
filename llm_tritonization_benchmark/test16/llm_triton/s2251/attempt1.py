@@ -3,57 +3,59 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s2251_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel cannot be parallelized due to sequential dependency on scalar s
-    # We need to process all elements sequentially in a single thread block
-    
+def s2251_expand_s_kernel(b_ptr, c_ptr, s_expanded_ptr, n_elements):
+    # Single thread processes all elements sequentially to expand scalar s
+    if tl.program_id(0) == 0:
+        s_val = 0.0
+        for i in range(n_elements):
+            b_val = tl.load(b_ptr + i)
+            c_val = tl.load(c_ptr + i)
+            tl.store(s_expanded_ptr + i, s_val)
+            s_val = b_val + c_val
+
+@triton.jit
+def s2251_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, s_expanded_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    if pid != 0:
-        return
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    # Process elements sequentially
-    s = 0.0
+    # Load expanded s values
+    s_vals = tl.load(s_expanded_ptr + offsets, mask=mask)
     
-    # Process in blocks but sequentially
-    offsets = tl.arange(0, BLOCK_SIZE)
+    # Load input arrays
+    e_vals = tl.load(e_ptr + offsets, mask=mask)
+    d_vals = tl.load(d_ptr + offsets, mask=mask)
     
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load current block
-        e_vals = tl.load(e_ptr + current_offsets, mask=mask, other=0.0)
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
-        c_vals = tl.load(c_ptr + current_offsets, mask=mask, other=0.0)
-        d_vals = tl.load(d_ptr + current_offsets, mask=mask, other=0.0)
-        
-        # Process each element in the block sequentially
-        for i in range(BLOCK_SIZE):
-            if block_start + i >= n_elements:
-                break
-                
-            # a[i] = s * e[i]
-            a_val = s * e_vals[i] if mask[i] else 0.0
-            
-            # s = b[i] + c[i]
-            if mask[i]:
-                s = b_vals[i] + c_vals[i]
-            
-            # b[i] = a[i] + d[i]
-            if mask[i]:
-                b_new_val = a_val + d_vals[i]
-                tl.store(a_ptr + block_start + i, a_val)
-                tl.store(b_ptr + block_start + i, b_new_val)
+    # Compute a[i] = s*e[i]
+    a_vals = s_vals * e_vals
+    
+    # Store a[i]
+    tl.store(a_ptr + offsets, a_vals, mask=mask)
+    
+    # Compute b[i] = a[i]+d[i]
+    b_vals = a_vals + d_vals
+    
+    # Store b[i]
+    tl.store(b_ptr + offsets, b_vals, mask=mask)
 
 def s2251_triton(a, b, c, d, e):
-    n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
+    N = a.shape[0]
     
-    # Launch with single block since we need sequential processing
+    # Create expanded scalar array
+    s_expanded = torch.zeros(N, dtype=a.dtype, device=a.device)
+    
+    # Phase 1: Expand scalar s using sequential kernel
     grid = (1,)
+    s2251_expand_s_kernel[grid](
+        b, c, s_expanded, N
+    )
+    
+    # Phase 2: Compute main kernel in parallel
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
     s2251_kernel[grid](
-        a, b, c, d, e,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, c, d, e, s_expanded, N, BLOCK_SIZE
     )
+    
+    return a, b

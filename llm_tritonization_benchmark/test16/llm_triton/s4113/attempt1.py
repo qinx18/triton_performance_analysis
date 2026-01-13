@@ -4,30 +4,30 @@ import triton.language as tl
 
 @triton.jit
 def s4113_kernel(a_ptr, b_ptr, c_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
+    mask = idx < n_elements
     
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load indices and c values
-        indices = tl.load(ip_ptr + current_offsets, mask=mask)
-        c_vals = tl.load(c_ptr + current_offsets, mask=mask)
-        
-        # Load b values using indirect addressing
-        b_vals = tl.load(b_ptr + indices, mask=mask)
-        
-        # Compute result
-        result = b_vals + c_vals
-        
-        # Store result using indirect addressing
-        tl.store(a_ptr + indices, result, mask=mask)
+    # Load indices and direct data
+    indices = tl.load(ip_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
+    
+    # Load b values using indirect addressing
+    b_vals = tl.load(b_ptr + indices, mask=mask)
+    
+    # Compute result
+    result = b_vals + c_vals
+    
+    # Store result using indirect addressing
+    tl.store(a_ptr + indices, result, mask=mask)
 
 def s4113_triton(a, b, c, ip):
     n_elements = a.shape[0]
     BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s4113_kernel[(1,)](
+    s4113_kernel[grid](
         a, b, c, ip,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE

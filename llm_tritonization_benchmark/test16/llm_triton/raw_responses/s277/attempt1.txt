@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s277
-# Generated: 2025-12-08 14:18:44
+# Generated: 2026-01-13 03:59:29
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -109,6 +109,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -173,61 +176,55 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s277_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Single thread processes all elements sequentially due to strict dependencies
+def s277_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements: tl.constexpr):
+    # This must be sequential due to the b[i+1] = ... b[i] dependency
+    # Use single thread to process all elements sequentially
+    
     pid = tl.program_id(0)
     if pid != 0:
         return
     
     # Process all elements sequentially in a single thread
     for i in range(n_elements - 1):
-        # Load a[i]
+        # Load current values
         a_val = tl.load(a_ptr + i)
-        
-        # Check if a[i] >= 0
-        if a_val >= 0.0:
-            # goto L20 - skip everything
-            continue
-        
-        # Load b[i]
         b_val = tl.load(b_ptr + i)
-        
-        # Check if b[i] >= 0
-        if b_val >= 0.0:
-            # goto L30 - skip a[i] update, do b[i+1] update
-            c_val = tl.load(c_ptr + i)
-            d_val = tl.load(d_ptr + i)
-            e_val = tl.load(e_ptr + i)
-            b_new = c_val + d_val * e_val
-            tl.store(b_ptr + i + 1, b_new)
-            continue
-        
-        # Update a[i]
         c_val = tl.load(c_ptr + i)
         d_val = tl.load(d_ptr + i)
-        a_new = a_val + c_val * d_val
-        tl.store(a_ptr + i, a_new)
-        
-        # L30: Update b[i+1]
         e_val = tl.load(e_ptr + i)
-        b_new = c_val + d_val * e_val
-        tl.store(b_ptr + i + 1, b_new)
+        
+        # Check first condition: if a[i] >= 0, skip everything (goto L20)
+        a_ge_zero = a_val >= 0.0
+        
+        # Check second condition: if b[i] >= 0, skip to L30
+        b_ge_zero = b_val >= 0.0
+        
+        # If a[i] < 0 and b[i] < 0, execute: a[i] += c[i] * d[i]
+        should_update_a = (a_val < 0.0) & (b_val < 0.0)
+        new_a = tl.where(should_update_a, a_val + c_val * d_val, a_val)
+        tl.store(a_ptr + i, new_a)
+        
+        # L30: Execute b[i+1] = c[i] + d[i] * e[i] if a[i] < 0
+        should_update_b = a_val < 0.0
+        new_b = c_val + d_val * e_val
+        if should_update_b:
+            tl.store(b_ptr + i + 1, new_b)
 
 def s277_triton(a, b, c, d, e):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
     
-    # Launch single thread due to sequential dependencies
+    # Launch with single thread since this must be sequential
     grid = (1,)
     
     s277_kernel[grid](
         a, b, c, d, e,
-        n_elements=n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        n_elements=n_elements
     )
+    
+    return a, b
 ```

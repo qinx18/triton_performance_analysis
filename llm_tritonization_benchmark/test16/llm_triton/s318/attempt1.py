@@ -3,36 +3,41 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s318_kernel(a_ptr, n_elements, inc, result_ptr):
-    # Find maximum absolute value and its index with stride
-    current_max = tl.abs(tl.load(a_ptr))  # max = ABS(a[0])
-    max_index = 0
+def s318_kernel(a_ptr, output_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
+    # This kernel finds the maximum absolute value and its index with stride
+    # We need to process the entire array sequentially due to the stride pattern
     
-    # Sequential search with stride
-    k = inc
+    # Initialize with first element
+    k = 0
+    index = 0
+    max_val = tl.abs(tl.load(a_ptr + k))
+    k += inc
+    
+    # Process remaining elements
     for i in range(1, n_elements):
         if k < n_elements:
-            val = tl.abs(tl.load(a_ptr + k))
-            # if (ABS(a[k]) > max)
-            if val > current_max:
-                max_index = i
-                current_max = val
+            current_abs = tl.abs(tl.load(a_ptr + k))
+            if current_abs > max_val:
+                index = i
+                max_val = current_abs
         k += inc
     
-    # Store results: max + index + 1 (as per return statement)
-    result = current_max + max_index + 1
-    tl.store(result_ptr, result)
+    # Store result as max + index + 1
+    result = max_val + index + 1
+    tl.store(output_ptr, result)
 
 def s318_triton(a, inc):
     n_elements = a.shape[0]
     
-    # Output tensor for result
-    result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Output tensor for the result
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread (sequential reduction)
-    grid = (1,)
-    s318_kernel[grid](
-        a, n_elements, inc, result
+    # Launch kernel with single block since this is inherently sequential
+    BLOCK_SIZE = 128
+    
+    s318_kernel[(1,)](
+        a, output, inc, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    return result.item()
+    return output.item()

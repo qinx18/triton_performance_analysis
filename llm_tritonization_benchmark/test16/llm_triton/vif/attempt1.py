@@ -7,17 +7,19 @@ def vif_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
+    idx = block_start + offsets
     
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    mask = idx < n_elements
+    
+    b_vals = tl.load(b_ptr + idx, mask=mask)
     condition = b_vals > 0.0
-    combined_mask = mask & condition
     
-    tl.store(a_ptr + indices, b_vals, mask=combined_mask)
+    combined_mask = mask & condition
+    tl.store(a_ptr + idx, b_vals, mask=combined_mask)
 
 def vif_triton(a, b):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     

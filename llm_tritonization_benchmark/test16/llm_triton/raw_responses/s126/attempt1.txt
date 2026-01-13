@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s126
-# Generated: 2025-12-08 13:50:19
+# Generated: 2026-01-13 02:36:19
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -64,6 +64,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -128,54 +131,56 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s126_kernel(bb_ptr, cc_ptr, flat_2d_array_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # This kernel processes one column at a time due to recurrence dependency
-    i = tl.program_id(0)
+def s126_kernel(bb_ptr, cc_ptr, flat_2d_array_ptr, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    i = pid
     
-    if i >= LEN_2D:
+    if i >= N:
         return
     
-    k = 1 + i * LEN_2D
+    k = 1 + i * N + i
     
-    # Process column i sequentially due to j dependency
-    for j in range(1, LEN_2D):
-        # Load bb[j-1][i]
-        bb_prev_offset = (j - 1) * LEN_2D + i
-        bb_prev = tl.load(bb_ptr + bb_prev_offset)
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    
+    # Process j loop in blocks
+    for j_start in range(1, N, BLOCK_SIZE):
+        j_indices = j_start + j_offsets
+        mask = (j_indices < N) & (j_indices >= 1)
         
-        # Load flat_2d_array[k-1]
-        flat_val = tl.load(flat_2d_array_ptr + k - 1)
+        # Load bb[j-1][i]
+        prev_j_indices = j_indices - 1
+        prev_offsets = prev_j_indices * N + i
+        bb_prev = tl.load(bb_ptr + prev_offsets, mask=mask)
         
         # Load cc[j][i]
-        cc_offset = j * LEN_2D + i
-        cc_val = tl.load(cc_ptr + cc_offset)
+        cc_offsets = j_indices * N + i
+        cc_vals = tl.load(cc_ptr + cc_offsets, mask=mask)
         
-        # Compute bb[j][i] = bb[j-1][i] + flat_2d_array[k-1] * cc[j][i]
-        result = bb_prev + flat_val * cc_val
+        # Load flat_2d_array values
+        k_base = k + (j_start - 1)
+        k_indices = k_base + j_offsets
+        flat_offsets = k_indices - 1
+        flat_mask = mask & (flat_offsets >= 0) & (flat_offsets < N * N)
+        flat_vals = tl.load(flat_2d_array_ptr + flat_offsets, mask=flat_mask)
         
-        # Store bb[j][i]
-        bb_offset = j * LEN_2D + i
-        tl.store(bb_ptr + bb_offset, result)
+        # Compute bb[j][i]
+        result = bb_prev + flat_vals * cc_vals
         
-        k += 1
-    
+        # Store result
+        tl.store(bb_ptr + cc_offsets, result, mask=mask)
+
 def s126_triton(bb, cc, flat_2d_array):
-    LEN_2D = bb.shape[0]
+    N = bb.shape[0]
     
-    # Launch kernel with one thread per column
-    BLOCK_SIZE = 256
-    grid = (LEN_2D,)
+    BLOCK_SIZE = triton.next_power_of_2(N)
+    grid = (N,)
     
-    s126_kernel[grid](
-        bb, cc, flat_2d_array,
-        LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s126_kernel[grid](bb, cc, flat_2d_array, N, BLOCK_SIZE)
     
     return bb
 ```

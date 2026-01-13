@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s128
-# Generated: 2025-12-08 13:51:01
+# Generated: 2026-01-13 02:43:36
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -63,6 +63,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -133,41 +136,42 @@ import triton.language as tl
 
 @triton.jit
 def s128_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Sequential computation due to data dependencies
-    # Each thread block processes a contiguous range of iterations
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE
+    # This kernel processes the coupled induction variables sequentially
+    # due to the WAR dependency between iterations
     
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    for i in range(BLOCK_SIZE):
-        idx = block_start + i
-        if idx >= n_elements:
-            break
+    # Process elements in blocks, but sequentially within each block
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        # Load values for this block
+        d_vals = tl.load(d_ptr + current_offsets, mask=mask)
+        
+        # Process each element in the block
+        for local_idx in range(BLOCK_SIZE):
+            global_idx = block_start + local_idx
+            if global_idx >= n_elements:
+                break
+                
+            # k = j + 1, where j starts at -1 and increments by 2 each iteration
+            # So k = 2*i for iteration i
+            k = 2 * global_idx
             
-        # k = j + 1 where j starts at -1 and increments by 2 each iteration
-        # j = -1, 1, 3, 5, ... => j = 2*i - 1
-        # k = j + 1 = 2*i
-        k = 2 * idx
-        
-        # Load values
-        if k < n_elements:
-            b_k = tl.load(b_ptr + k)
-            c_k = tl.load(c_ptr + k)
-        else:
-            b_k = 0.0
-            c_k = 0.0
-            
-        d_i = tl.load(d_ptr + idx)
-        
-        # a[i] = b[k] - d[i]
-        a_val = b_k - d_i
-        tl.store(a_ptr + idx, a_val)
-        
-        # b[k] = a[i] + c[k]
-        if k < n_elements:
-            b_val = a_val + c_k
-            tl.store(b_ptr + k, b_val)
+            # Load individual values
+            if k < n_elements:
+                b_k = tl.load(b_ptr + k)
+                c_k = tl.load(c_ptr + k)
+                d_i = tl.load(d_ptr + global_idx)
+                
+                # a[i] = b[k] - d[i]
+                a_val = b_k - d_i
+                tl.store(a_ptr + global_idx, a_val)
+                
+                # b[k] = a[i] + c[k]
+                b_val = a_val + c_k
+                tl.store(b_ptr + k, b_val)
 
 def s128_triton(a, b, c, d):
     n_elements = a.shape[0] // 2

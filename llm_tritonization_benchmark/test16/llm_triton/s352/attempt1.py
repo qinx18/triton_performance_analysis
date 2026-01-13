@@ -1,61 +1,49 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s352_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and compute offsets
+def s352_kernel(a_ptr, b_ptr, dot_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get program ID and calculate offsets
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    block_start = pid * BLOCK_SIZE
+    offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
     
-    # Load elements
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    # Create mask for valid elements
+    mask = indices < n_elements
     
-    # Compute dot products
+    # Load data
+    a_vals = tl.load(a_ptr + indices, mask=mask, other=0.0)
+    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
+    
+    # Compute dot product contribution
     products = a_vals * b_vals
     
-    # Sum across the block (reduction)
-    result = tl.sum(products)
+    # Sum within this block
+    block_sum = tl.sum(products)
     
-    # Store result (only first thread in block stores)
-    if pid * BLOCK_SIZE < n_elements:
-        tl.store(tl.program_id(0) + tl.zeros((1,), dtype=tl.float32), result)
-
-@triton.jit
-def s352_reduction_kernel(partial_sums_ptr, n_partials, BLOCK_SIZE: tl.constexpr):
-    # Simple reduction kernel to sum partial results
-    offsets = tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_partials
-    
-    vals = tl.load(partial_sums_ptr + offsets, mask=mask, other=0.0)
-    result = tl.sum(vals)
-    
-    # Store final result at index 0
+    # Store the partial sum (each block contributes one value)
     if tl.program_id(0) == 0:
-        tl.store(partial_sums_ptr, result)
+        tl.atomic_add(dot_ptr, block_sum)
+    else:
+        tl.atomic_add(dot_ptr, block_sum)
 
 def s352_triton(a, b):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
     
-    # Calculate grid size
+    # Initialize result tensor
+    dot_result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    
+    # Calculate grid and block sizes
+    BLOCK_SIZE = 256
     grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Create tensor to store partial sums
-    partial_sums = torch.zeros(grid_size, dtype=a.dtype, device=a.device)
-    
-    # Launch first kernel to compute partial dot products
+    # Launch kernel
     s352_kernel[(grid_size,)](
-        a, b, n_elements, BLOCK_SIZE=BLOCK_SIZE
+        a, b, dot_result,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # If we have multiple blocks, we need to sum the partial results
-    if grid_size > 1:
-        # Launch reduction kernel
-        s352_reduction_kernel[(1,)](
-            partial_sums, grid_size, BLOCK_SIZE=min(grid_size, 256)
-        )
-    
-    return partial_sums[0].item()
+    return dot_result.item()

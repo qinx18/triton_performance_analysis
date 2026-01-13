@@ -1,71 +1,116 @@
 #!/usr/bin/env python3
 """
-Benchmark s424: Multi-kernel vs Single-kernel versions
+Performance Benchmark for s424
 """
 import sys
+import time
+import inspect
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
-import time
 
-from baselines.s424_baseline_correct import s424_pytorch
-from llm_triton.s424_triton_correct import s424_triton as s424_multikernel
-from llm_triton.s424_triton_optimized import s424_triton as s424_onekernel
+try:
+    from baselines.s424_baseline import s424_pytorch
+    from test16.llm_triton.s424.attempt2 import s424_triton
+except ImportError as e:
+    print(f"Import error: {e}")
+    sys.exit(1)
 
-def benchmark(func, a, flat_2d_array, name, warmup=10, iters=50):
-    """Benchmark a function"""
-    # Warmup
-    for _ in range(warmup):
-        result = func(a.clone(), flat_2d_array.clone())
+def get_func_params(func):
+    sig = inspect.signature(func)
+    return list(sig.parameters.keys())
+
+def build_args(func, available_tensors, available_scalars):
+    params = get_func_params(func)
+    args = []
+    for p in params:
+        if p in available_tensors:
+            args.append(available_tensors[p])
+        elif p in available_scalars:
+            args.append(available_scalars[p])
+    return args
+
+def benchmark():
+    N = 32000
+    num_warmup = 10
+    num_iterations = 100
+
+    print("="*70)
+    print(f"Performance Benchmark: s424")
+    print(f"Array size: N={N}")
+    print("="*70)
+
+    # Initialize arrays
+    a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+    flat_2d_array = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)
+    iterations = 1
+
+    pt_tensors = {"a": a, "flat_2d_array": flat_2d_array}
+    tr_tensors = {"a": a.clone(), "flat_2d_array": flat_2d_array.clone()}
+    scalars = {"iterations": iterations}
+
+    pt_args = build_args(s424_pytorch, pt_tensors, scalars)
+    tr_args = build_args(s424_triton, tr_tensors, scalars)
+
+    # Warmup PyTorch
+    print(f"Warming up PyTorch baseline ({num_warmup} iterations)...")
+    for _ in range(num_warmup):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args(s424_pytorch, pt_tensors, scalars)
+        s424_pytorch(*pt_args)
     torch.cuda.synchronize()
 
-    # Timing
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
+    # Benchmark PyTorch
+    print(f"Benchmarking PyTorch baseline ({num_iterations} iterations)...")
+    torch.cuda.synchronize()
+    pt_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args(s424_pytorch, pt_tensors, scalars)
+        s424_pytorch(*pt_args)
+    torch.cuda.synchronize()
+    pt_time = (time.perf_counter() - pt_start) / num_iterations
 
-    start_event.record()
-    for _ in range(iters):
-        result = func(a.clone(), flat_2d_array.clone())
-    end_event.record()
+    # Warmup Triton
+    print(f"Warming up Triton implementation ({num_warmup} iterations)...")
+    for _ in range(num_warmup):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args(s424_triton, tr_tensors, scalars)
+        s424_triton(*tr_args)
     torch.cuda.synchronize()
 
-    elapsed_time = start_event.elapsed_time(end_event)  # milliseconds
-    avg_time = elapsed_time / iters
-    return avg_time
+    # Benchmark Triton
+    print(f"Benchmarking Triton implementation ({num_iterations} iterations)...")
+    torch.cuda.synchronize()
+    tr_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args(s424_triton, tr_tensors, scalars)
+        s424_triton(*tr_args)
+    torch.cuda.synchronize()
+    tr_time = (time.perf_counter() - tr_start) / num_iterations
 
-print("="*80)
-print("s424 Performance Benchmark: Multi-kernel vs Single-kernel")
-print("="*80)
-print()
+    speedup = pt_time / tr_time if tr_time > 0 else 0
 
-sizes = [100, 500, 1000, 5000, 10000]
+    print("="*70)
+    print(f"PyTorch time:  {pt_time*1000:8.3f} ms")
+    print(f"Triton time:   {tr_time*1000:8.3f} ms")
+    print(f"Speedup:       {speedup:8.2f}x")
+    print("="*70)
 
-print(f"{'N':<8} {'Elements':<12} {'Strips':<8} {'PyTorch':<12} {'Multi-K':<12} {'Single-K':<12} {'Speedup':<10}")
-print("-"*80)
+    # Output machine-readable format for parsing
+    print(f"BENCHMARK_RESULT:{pt_time*1000:.6f},{tr_time*1000:.6f},{speedup:.6f}")
 
-for N in sizes:
-    a = torch.randn(N, device='cuda', dtype=torch.float32)
-    flat_2d_array = torch.randn(N * N, device='cuda', dtype=torch.float32)
-
-    # Calculate metadata
-    n_elements = N - 1
-    num_strips = (n_elements + 63) // 64
-
-    # Benchmark
-    pytorch_time = benchmark(s424_pytorch, a, flat_2d_array, "PyTorch")
-    multi_time = benchmark(s424_multikernel, a, flat_2d_array, "Multi-kernel")
-    single_time = benchmark(s424_onekernel, a, flat_2d_array, "Single-kernel")
-
-    speedup = multi_time / single_time
-
-    print(f"{N:<8} {n_elements:<12} {num_strips:<8} {pytorch_time:<12.4f} {multi_time:<12.4f} {single_time:<12.4f} {speedup:<10.2f}x")
-
-print("="*80)
-print("\nAnalysis:")
-print("-"*80)
-print("Multi-kernel: Launches one kernel per strip from Python loop")
-print("Single-kernel: Launches ONE kernel, loop over strips is inside kernel")
-print()
-print("Expected: Single-kernel should be faster due to reduced launch overhead")
-print("          Benefit increases with more strips (larger arrays)")
+if __name__ == "__main__":
+    try:
+        benchmark()
+    except Exception as e:
+        print(f"Benchmark error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s253
-# Generated: 2025-12-08 14:13:50
+# Generated: 2026-01-13 03:39:40
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -51,6 +51,61 @@ real_t s253(struct args_t * func_args)
         }
 ```
 
+================================================================================
+SCALAR EXPANSION PATTERN DETECTED
+================================================================================
+
+Kernel s253 contains scalar variables that create loop-carried
+dependencies but can be PARALLELIZED through SCALAR EXPANSION.
+
+Variable: s
+  Initial value: 0
+  Expansion type: conditional_propagation
+  Reason: s value wraps around across iterations. Expand to array and propagate values forward.
+
+  IMPLEMENTATION STRATEGY for s:
+  ======================================================================
+
+  Step 1: Expand scalar to array
+    Create array: s_expanded = torch.zeros(N)
+
+  Step 2: Compute expanded array with conditional scan
+    For each position i:
+      - If condition is true: s_expanded[i] = new_value
+      - Else: s_expanded[i] = s_expanded[i-1] (carry forward)
+
+    Triton implementation:
+    ```python
+    # Phase 1: Compute expanded scalar array
+    # Use sequential loop (one thread) OR specialized scan algorithm
+    @triton.jit
+    def expand_s_kernel(...):
+        # Single thread processes all elements sequentially
+        s_val = 0.0  # Initial value
+        for i in range(N):
+            # Load condition and data
+            cond = ...
+            if cond:
+                s_val = ...  # Update value
+            tl.store(s_expanded_ptr + i, s_val)
+    
+    # Phase 2: Use expanded array in parallel
+    @triton.jit
+    def compute_kernel(...):
+        # Multiple threads process elements in parallel
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        s_vals = tl.load(s_expanded_ptr + offsets, mask=mask)
+        # Now use expanded values in parallel
+        ...
+    ```
+
+  Step 3: Use expanded array in original computations
+    Replace all uses of scalar 's' with 's_expanded[i]'
+    Now the array writes can be done in PARALLEL!
+
+================================================================================
+
+
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -66,6 +121,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -135,40 +193,64 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s253_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    block_start = tl.program_id(0) * BLOCK_SIZE
+def s253_expand_s_kernel(a_ptr, b_ptr, d_ptr, s_expanded_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Single program processes all elements sequentially for scalar expansion
+    pid = tl.program_id(axis=0)
+    if pid != 0:
+        return
+    
+    s_val = 0.0
+    for i in range(n_elements):
+        a_val = tl.load(a_ptr + i)
+        b_val = tl.load(b_ptr + i)
+        d_val = tl.load(d_ptr + i)
+        
+        if a_val > b_val:
+            s_val = a_val - b_val * d_val
+        
+        tl.store(s_expanded_ptr + i, s_val)
+
+@triton.jit
+def s253_kernel(a_ptr, b_ptr, c_ptr, d_ptr, s_expanded_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
+    
     mask = indices < n_elements
     
     a_vals = tl.load(a_ptr + indices, mask=mask)
     b_vals = tl.load(b_ptr + indices, mask=mask)
     d_vals = tl.load(d_ptr + indices, mask=mask)
     c_vals = tl.load(c_ptr + indices, mask=mask)
+    s_vals = tl.load(s_expanded_ptr + indices, mask=mask)
     
-    # if (a[i] > b[i])
-    condition = a_vals > b_vals
+    cond = a_vals > b_vals
     
-    # s = a[i] - b[i] * d[i]
-    s = a_vals - b_vals * d_vals
+    # Only update c and a where condition is true
+    new_s = a_vals - b_vals * d_vals
+    c_updated = tl.where(cond, c_vals + s_vals, c_vals)
+    a_updated = tl.where(cond, s_vals, a_vals)
     
-    # c[i] += s (only where condition is true)
-    new_c = tl.where(condition, c_vals + s, c_vals)
-    
-    # a[i] = s (only where condition is true)
-    new_a = tl.where(condition, s, a_vals)
-    
-    tl.store(c_ptr + indices, new_c, mask=mask)
-    tl.store(a_ptr + indices, new_a, mask=mask)
+    tl.store(c_ptr + indices, c_updated, mask=mask)
+    tl.store(a_ptr + indices, a_updated, mask=mask)
 
 def s253_triton(a, b, c, d):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
+    # Create expanded scalar array
+    s_expanded = torch.zeros_like(a)
+    
+    # Phase 1: Expand scalar s
+    grid = (1,)
+    s253_expand_s_kernel[grid](
+        a, b, d, s_expanded, n_elements, BLOCK_SIZE
+    )
+    
+    # Phase 2: Parallel computation using expanded scalar
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     s253_kernel[grid](
-        a, b, c, d,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, c, d, s_expanded, n_elements, BLOCK_SIZE
     )
 ```

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s276
-# Generated: 2025-12-08 14:18:30
+# Generated: 2026-01-13 03:59:11
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -66,6 +66,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -130,41 +133,47 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s276_kernel(a_ptr, b_ptr, c_ptr, d_ptr, mid, n_elements, BLOCK_SIZE: tl.constexpr):
+def s276_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, mid, BLOCK_SIZE: tl.constexpr):
     block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
+    idx = block_start + offsets
+    mask = idx < n_elements
     
     # Load data
-    a_vals = tl.load(a_ptr + indices, mask=mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
-    c_vals = tl.load(c_ptr + indices, mask=mask)
-    d_vals = tl.load(d_ptr + indices, mask=mask)
+    a_vals = tl.load(a_ptr + idx, mask=mask)
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
+    d_vals = tl.load(d_ptr + idx, mask=mask)
     
-    # Compute condition: i+1 < mid (indices are 0-based, so indices+1 < mid)
-    cond = (indices + 1) < mid
+    # Condition: if (i+1 < mid)
+    condition = (idx + 1) < mid
     
-    # Select multiplication factor based on condition
-    mult_vals = tl.where(cond, c_vals, d_vals)
+    # Compute based on condition
+    bc_vals = b_vals * c_vals
+    bd_vals = b_vals * d_vals
     
-    # Compute result
-    result = a_vals + b_vals * mult_vals
+    # Use tl.where for conditional selection
+    result = tl.where(condition, a_vals + bc_vals, a_vals + bd_vals)
     
     # Store result
-    tl.store(a_ptr + indices, result, mask=mask)
+    tl.store(a_ptr + idx, result, mask=mask)
 
 def s276_triton(a, b, c, d, mid):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    
+    # Choose block size
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
+    # Launch kernel
     s276_kernel[grid](
-        a, b, c, d, mid, n_elements, BLOCK_SIZE
+        a, b, c, d,
+        n_elements, mid,
+        BLOCK_SIZE=BLOCK_SIZE
     )
 ```

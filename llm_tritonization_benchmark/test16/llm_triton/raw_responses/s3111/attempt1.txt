@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s3111
-# Generated: 2025-12-08 14:21:45
+# Generated: 2026-01-13 04:07:21
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -81,6 +81,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -150,31 +153,29 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s3111_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s3111_kernel(a_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
     block_sum = 0.0
-    for block_start in range(0, n_elements, BLOCK_SIZE):
+    for block_start in range(0, N, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
+        mask = current_offsets < N
         
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        condition_mask = vals > 0.0
-        masked_vals = tl.where(condition_mask, vals, 0.0)
-        block_sum += tl.sum(masked_vals)
+        condition = vals > 0.0
+        masked_vals = tl.where(condition, vals, 0.0)
+        block_sum += tl.sum(masked_vals, axis=0)
     
     tl.store(result_ptr, block_sum)
 
 def s3111_triton(a):
-    n_elements = a.shape[0]
+    N = a.shape[0]
     BLOCK_SIZE = 1024
     
     result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    grid = (1,)
-    s3111_kernel[grid](
-        a, result, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+    s3111_kernel[(1,)](
+        a, result, N, BLOCK_SIZE=BLOCK_SIZE
     )
     
     return result.item()

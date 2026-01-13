@@ -3,43 +3,40 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s2233_kernel(aa_ptr, bb_ptr, cc_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s2233_kernel(aa_ptr, bb_ptr, cc_ptr, N, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     
     i_offsets = tl.arange(0, BLOCK_SIZE)
     i_idx = pid * BLOCK_SIZE + i_offsets + 1
-    i_mask = i_idx < LEN_2D
+    i_mask = i_idx < N
     
-    for j in range(1, LEN_2D):
+    for j in range(1, N):
         # First loop: aa[j][i] = aa[j-1][i] + cc[j][i]
-        aa_prev_ptrs = aa_ptr + (j - 1) * LEN_2D + i_idx
-        aa_curr_ptrs = aa_ptr + j * LEN_2D + i_idx
-        cc_ptrs = cc_ptr + j * LEN_2D + i_idx
+        aa_prev_ptr = aa_ptr + (j-1) * N
+        aa_curr_ptr = aa_ptr + j * N
+        cc_curr_ptr = cc_ptr + j * N
         
-        aa_prev_vals = tl.load(aa_prev_ptrs, mask=i_mask, other=0.0)
-        cc_vals = tl.load(cc_ptrs, mask=i_mask, other=0.0)
-        aa_new_vals = aa_prev_vals + cc_vals
-        tl.store(aa_curr_ptrs, aa_new_vals, mask=i_mask)
+        aa_prev = tl.load(aa_prev_ptr + i_idx, mask=i_mask)
+        cc_val = tl.load(cc_curr_ptr + i_idx, mask=i_mask)
+        aa_new = aa_prev + cc_val
+        tl.store(aa_curr_ptr + i_idx, aa_new, mask=i_mask)
         
         # Second loop: bb[i][j] = bb[i-1][j] + cc[i][j]
-        bb_prev_ptrs = bb_ptr + (i_idx - 1) * LEN_2D + j
-        bb_curr_ptrs = bb_ptr + i_idx * LEN_2D + j
-        cc2_ptrs = cc_ptr + i_idx * LEN_2D + j
+        bb_prev_ptr = bb_ptr + (i_idx - 1) * N + j
+        bb_curr_ptr = bb_ptr + i_idx * N + j
+        cc_ij_ptr = cc_ptr + i_idx * N + j
         
-        bb_prev_vals = tl.load(bb_prev_ptrs, mask=i_mask, other=0.0)
-        cc2_vals = tl.load(cc2_ptrs, mask=i_mask, other=0.0)
-        bb_new_vals = bb_prev_vals + cc2_vals
-        tl.store(bb_curr_ptrs, bb_new_vals, mask=i_mask)
+        bb_prev = tl.load(bb_prev_ptr, mask=i_mask)
+        cc_ij = tl.load(cc_ij_ptr, mask=i_mask)
+        bb_new = bb_prev + cc_ij
+        tl.store(bb_curr_ptr, bb_new, mask=i_mask)
 
 def s2233_triton(aa, bb, cc):
-    LEN_2D = aa.shape[0]
-    BLOCK_SIZE = 32
+    N = aa.shape[0]
+    BLOCK_SIZE = 64
     
-    i_size = LEN_2D - 1
-    grid = (triton.cdiv(i_size, BLOCK_SIZE),)
+    grid = (triton.cdiv(N - 1, BLOCK_SIZE),)
     
     s2233_kernel[grid](
-        aa, bb, cc,
-        LEN_2D=LEN_2D,
-        BLOCK_SIZE=BLOCK_SIZE
+        aa, bb, cc, N, BLOCK_SIZE
     )

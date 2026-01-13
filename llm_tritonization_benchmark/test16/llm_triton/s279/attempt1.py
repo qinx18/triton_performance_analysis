@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s279_kernel(
@@ -15,37 +15,42 @@ def s279_kernel(
     mask = idx < n_elements
     
     # Load all arrays
-    a = tl.load(a_ptr + idx, mask=mask)
-    b = tl.load(b_ptr + idx, mask=mask)
-    c = tl.load(c_ptr + idx, mask=mask)
-    d = tl.load(d_ptr + idx, mask=mask)
-    e = tl.load(e_ptr + idx, mask=mask)
+    a_vals = tl.load(a_ptr + idx, mask=mask)
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
+    d_vals = tl.load(d_ptr + idx, mask=mask)
+    e_vals = tl.load(e_ptr + idx, mask=mask)
     
-    # Control flow logic
-    cond1 = a > 0.0
+    # First condition: if a[i] > 0
+    cond1 = a_vals > 0.0
     
-    # Path 1: a[i] <= 0
-    b_new = -b + d * d
-    cond2 = b_new <= a
-    c_path1_step1 = c + d * e
-    c_path1 = tl.where(cond2, c, c_path1_step1)
+    # Path when a[i] <= 0
+    b_new = -b_vals + d_vals * d_vals
+    cond2 = b_new <= a_vals
     
-    # Path 2: a[i] > 0 (L20)
-    c_path2 = -c + e * e
+    # Update c based on second condition (when a[i] <= 0 and b[i] > a[i])
+    c_update1 = c_vals + d_vals * e_vals
+    c_branch1 = tl.where(cond2, c_vals, c_update1)
+    
+    # Path when a[i] > 0 (L20)
+    c_branch2 = -c_vals + e_vals * e_vals
     
     # Select final c value based on first condition
-    c_final = tl.where(cond1, c_path2, c_path1)
+    c_final = tl.where(cond1, c_branch2, c_branch1)
     
-    # L30: Final computation for a
-    a_final = b_new + c_final * d
+    # Update b only when a[i] <= 0
+    b_final = tl.where(cond1, b_vals, b_new)
+    
+    # Final update: a[i] = b[i] + c[i] * d[i]
+    a_final = b_final + c_final * d_vals
     
     # Store results
     tl.store(a_ptr + idx, a_final, mask=mask)
-    tl.store(b_ptr + idx, b_new, mask=mask)
+    tl.store(b_ptr + idx, b_final, mask=mask)
     tl.store(c_ptr + idx, c_final, mask=mask)
 
 def s279_triton(a, b, c, d, e):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s471
-# Generated: 2025-12-08 14:32:06
+# Generated: 2026-01-13 04:51:07
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -72,6 +72,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -141,17 +144,20 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s471_kernel(b_ptr, c_ptr, d_ptr, e_ptr, x_ptr, m, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+def s471_kernel(
+    b_ptr, c_ptr, d_ptr, e_ptr, x_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr
+):
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets
-    mask = idx < m
+    mask = idx < n_elements
     
-    # Load values
+    # Load arrays
     b_vals = tl.load(b_ptr + idx, mask=mask)
-    c_vals = tl.load(c_ptr + idx, mask=mask)
     d_vals = tl.load(d_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
     e_vals = tl.load(e_ptr + idx, mask=mask)
     
     # x[i] = b[i] + d[i] * d[i]
@@ -163,11 +169,14 @@ def s471_kernel(b_ptr, c_ptr, d_ptr, e_ptr, x_ptr, m, BLOCK_SIZE: tl.constexpr):
     tl.store(b_ptr + idx, b_new, mask=mask)
 
 def s471_triton(b, c, d, e, x, m):
+    n_elements = m
+    
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(m, BLOCK_SIZE),)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s471_kernel[grid](
-        b, c, d, e, x, m,
+        b, c, d, e, x,
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
 ```

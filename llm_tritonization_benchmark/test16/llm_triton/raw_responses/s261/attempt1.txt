@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s261
-# Generated: 2025-12-08 14:16:40
+# Generated: 2026-01-13 03:51:50
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -97,6 +97,61 @@ NOTE: c_copy is needed for WAR safety (S3 reads c[i+1] while writing c[i]).
 
 ============================================================
 
+================================================================================
+SCALAR EXPANSION PATTERN DETECTED
+================================================================================
+
+Kernel s261 contains scalar variables that create loop-carried
+dependencies but can be PARALLELIZED through SCALAR EXPANSION.
+
+Variable: t
+  Initial value: 0
+  Expansion type: conditional_propagation
+  Reason: t value wraps around across iterations. Expand to array and propagate values forward.
+
+  IMPLEMENTATION STRATEGY for t:
+  ======================================================================
+
+  Step 1: Expand scalar to array
+    Create array: t_expanded = torch.zeros(N)
+
+  Step 2: Compute expanded array with conditional scan
+    For each position i:
+      - If condition is true: t_expanded[i] = new_value
+      - Else: t_expanded[i] = t_expanded[i-1] (carry forward)
+
+    Triton implementation:
+    ```python
+    # Phase 1: Compute expanded scalar array
+    # Use sequential loop (one thread) OR specialized scan algorithm
+    @triton.jit
+    def expand_t_kernel(...):
+        # Single thread processes all elements sequentially
+        t_val = 0.0  # Initial value
+        for i in range(N):
+            # Load condition and data
+            cond = ...
+            if cond:
+                t_val = ...  # Update value
+            tl.store(t_expanded_ptr + i, t_val)
+    
+    # Phase 2: Use expanded array in parallel
+    @triton.jit
+    def compute_kernel(...):
+        # Multiple threads process elements in parallel
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        t_vals = tl.load(t_expanded_ptr + offsets, mask=mask)
+        # Now use expanded values in parallel
+        ...
+    ```
+
+  Step 3: Use expanded array in original computations
+    Replace all uses of scalar 't' with 't_expanded[i]'
+    Now the array writes can be done in PARALLEL!
+
+================================================================================
+
+
 ============================================================
 POINTER ALIASING PATTERN DETECTED
 ============================================================
@@ -154,6 +209,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -218,14 +276,13 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s261_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel must process sequentially due to loop-carried dependency
-    # Use single thread to maintain sequential order
+def s261_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements: tl.constexpr):
+    # Single thread processes all elements sequentially due to loop-carried dependency
     pid = tl.program_id(0)
     if pid != 0:
         return
@@ -235,31 +292,29 @@ def s261_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr
         # Load values
         a_val = tl.load(a_ptr + i)
         b_val = tl.load(b_ptr + i)
-        c_prev = tl.load(c_ptr + i - 1)
+        c_prev_val = tl.load(c_ptr + i - 1)
         c_val = tl.load(c_ptr + i)
         d_val = tl.load(d_ptr + i)
         
-        # Compute
+        # First computation: t = a[i] + b[i]
         t = a_val + b_val
-        new_a = t + c_prev
+        
+        # First assignment: a[i] = t + c[i-1]
+        a_new = t + c_prev_val
+        tl.store(a_ptr + i, a_new)
+        
+        # Second computation: t = c[i] * d[i]
         t = c_val * d_val
         
-        # Store results
-        tl.store(a_ptr + i, new_a)
+        # Second assignment: c[i] = t
         tl.store(c_ptr + i, t)
 
 def s261_triton(a, b, c, d):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
     
-    # Launch with single block since we need sequential processing
+    # Launch kernel with single program
     grid = (1,)
+    s261_kernel[grid](a, b, c, d, n_elements)
     
-    s261_kernel[grid](
-        a, b, c, d,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return a, c
+    return a, b, c, d
 ```

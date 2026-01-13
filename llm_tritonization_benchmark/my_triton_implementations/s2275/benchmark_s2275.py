@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""
+Performance Benchmark for s2275
+"""
+import sys
+import time
+import inspect
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+import torch
+
+try:
+    from baselines.s2275_baseline import s2275_pytorch
+    from test16.llm_triton.s2275.attempt1 import s2275_triton
+except ImportError as e:
+    print(f"Import error: {e}")
+    sys.exit(1)
+
+def get_func_params(func):
+    sig = inspect.signature(func)
+    return list(sig.parameters.keys())
+
+def build_args(func, available_tensors, available_scalars):
+    params = get_func_params(func)
+    args = []
+    for p in params:
+        if p in available_tensors:
+            args.append(available_tensors[p])
+        elif p in available_scalars:
+            args.append(available_scalars[p])
+    return args
+
+def benchmark():
+    N = 256
+    num_warmup = 10
+    num_iterations = 100
+
+    print("="*70)
+    print(f"Performance Benchmark: s2275")
+    print(f"Array size: N={N}")
+    print("="*70)
+
+    # Initialize arrays
+    a = torch.randn(N, device='cuda', dtype=torch.float32)
+    aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
+    b = torch.randn(N, device='cuda', dtype=torch.float32)
+    bb = torch.randn(N, N, device='cuda', dtype=torch.float32)
+    c = torch.randn(N, device='cuda', dtype=torch.float32)
+    cc = torch.randn(N, N, device='cuda', dtype=torch.float32)
+    d = torch.randn(N, device='cuda', dtype=torch.float32)
+    iterations = 1
+
+    pt_tensors = {"a": a, "aa": aa, "b": b, "bb": bb, "c": c, "cc": cc, "d": d}
+    tr_tensors = {"a": a.clone(), "aa": aa.clone(), "b": b.clone(), "bb": bb.clone(), "c": c.clone(), "cc": cc.clone(), "d": d.clone()}
+    scalars = {"iterations": iterations}
+
+    pt_args = build_args(s2275_pytorch, pt_tensors, scalars)
+    tr_args = build_args(s2275_triton, tr_tensors, scalars)
+
+    # Warmup PyTorch
+    print(f"Warming up PyTorch baseline ({num_warmup} iterations)...")
+    for _ in range(num_warmup):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args(s2275_pytorch, pt_tensors, scalars)
+        s2275_pytorch(*pt_args)
+    torch.cuda.synchronize()
+
+    # Benchmark PyTorch
+    print(f"Benchmarking PyTorch baseline ({num_iterations} iterations)...")
+    torch.cuda.synchronize()
+    pt_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in pt_tensors:
+            pt_tensors[arr] = pt_tensors[arr].clone()
+        pt_args = build_args(s2275_pytorch, pt_tensors, scalars)
+        s2275_pytorch(*pt_args)
+    torch.cuda.synchronize()
+    pt_time = (time.perf_counter() - pt_start) / num_iterations
+
+    # Warmup Triton
+    print(f"Warming up Triton implementation ({num_warmup} iterations)...")
+    for _ in range(num_warmup):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args(s2275_triton, tr_tensors, scalars)
+        s2275_triton(*tr_args)
+    torch.cuda.synchronize()
+
+    # Benchmark Triton
+    print(f"Benchmarking Triton implementation ({num_iterations} iterations)...")
+    torch.cuda.synchronize()
+    tr_start = time.perf_counter()
+    for _ in range(num_iterations):
+        for arr in tr_tensors:
+            tr_tensors[arr] = tr_tensors[arr].clone()
+        tr_args = build_args(s2275_triton, tr_tensors, scalars)
+        s2275_triton(*tr_args)
+    torch.cuda.synchronize()
+    tr_time = (time.perf_counter() - tr_start) / num_iterations
+
+    speedup = pt_time / tr_time if tr_time > 0 else 0
+
+    print("="*70)
+    print(f"PyTorch time:  {pt_time*1000:8.3f} ms")
+    print(f"Triton time:   {tr_time*1000:8.3f} ms")
+    print(f"Speedup:       {speedup:8.2f}x")
+    print("="*70)
+
+    # Output machine-readable format for parsing
+    print(f"BENCHMARK_RESULT:{pt_time*1000:.6f},{tr_time*1000:.6f},{speedup:.6f}")
+
+if __name__ == "__main__":
+    try:
+        benchmark()
+    except Exception as e:
+        print(f"Benchmark error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

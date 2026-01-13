@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1213
-# Generated: 2025-12-08 13:48:05
+# Generated: 2026-01-13 02:30:09
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -170,6 +170,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -234,49 +237,37 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
 
 @triton.jit
-def s1213_kernel(
-    a_ptr, a_copy_ptr, b_ptr, c_ptr, d_ptr,
-    n_elements: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # This kernel must be sequential due to loop-carried dependency
-    # b[i] = a[i+1] * d[i] depends on a[i+1] which may be written in same iteration
-    # Process one element per thread sequentially
+def s1213_kernel(a_ptr, a_copy_ptr, b_ptr, c_ptr, d_ptr, n):
+    # This kernel must be strictly sequential due to loop-carried dependency
+    # Use a single program with sequential processing
     
-    tid = tl.program_id(0)
-    
-    if tid == 0:  # Only use one thread for sequential processing
-        for i in range(1, n_elements - 1):
-            # a[i] = b[i-1] + c[i]
-            b_val = tl.load(b_ptr + (i - 1))
-            c_val = tl.load(c_ptr + i)
-            a_val = b_val + c_val
-            tl.store(a_ptr + i, a_val)
-            
-            # b[i] = a[i+1] * d[i]
-            # Use original a values for a[i+1]
-            a_next_val = tl.load(a_copy_ptr + (i + 1))
-            d_val = tl.load(d_ptr + i)
-            b_val = a_next_val * d_val
-            tl.store(b_ptr + i, b_val)
+    for i in range(1, n - 1):
+        # a[i] = b[i-1] + c[i]
+        b_val = tl.load(b_ptr + i - 1)
+        c_val = tl.load(c_ptr + i)
+        a_val = b_val + c_val
+        tl.store(a_ptr + i, a_val)
+        
+        # b[i] = a[i+1] * d[i] (using original a values)
+        a_next_val = tl.load(a_copy_ptr + i + 1)
+        d_val = tl.load(d_ptr + i)
+        b_val = a_next_val * d_val
+        tl.store(b_ptr + i, b_val)
 
 def s1213_triton(a, b, c, d):
-    n_elements = a.shape[0]
+    n = a.shape[0]
     
-    # Create read-only copy for WAR dependency
+    # Create read-only copy to handle WAR dependency
     a_copy = a.clone()
     
-    BLOCK_SIZE = 256
-    grid = (1,)  # Only one block since we need sequential processing
+    # Use single thread for sequential processing
+    grid = (1,)
     
     s1213_kernel[grid](
-        a, a_copy, b, c, d,
-        n_elements,
-        BLOCK_SIZE,
+        a, a_copy, b, c, d, n
     )
 ```

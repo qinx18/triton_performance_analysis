@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for va
-# Generated: 2025-12-08 14:32:49
+# Generated: 2026-01-13 04:53:20
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -53,6 +53,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -117,29 +120,26 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def va_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
+    
     mask = indices < n_elements
     
     b_vals = tl.load(b_ptr + indices, mask=mask)
     tl.store(a_ptr + indices, b_vals, mask=mask)
 
 def va_triton(a, b):
-    n_elements = a.numel()
-    
+    N = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    va_kernel[grid](a, b, n_elements, BLOCK_SIZE)
-    
-    return a
+    va_kernel[grid](a, b, N, BLOCK_SIZE)
 ```

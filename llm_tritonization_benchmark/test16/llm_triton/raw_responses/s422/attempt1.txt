@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s422
-# Generated: 2025-12-08 14:30:09
+# Generated: 2026-01-13 04:44:48
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -56,6 +56,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -120,50 +123,27 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s422_kernel(
-    a_ptr,
-    flat_2d_array_ptr,
-    xx_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    block_start = tl.program_id(0) * BLOCK_SIZE
+def s422_kernel(a_ptr, flat_2d_array_ptr, xx_ptr, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets
-    mask = idx < n_elements
+    mask = idx < N
     
-    # Load a[i]
     a_vals = tl.load(a_ptr + idx, mask=mask)
-    
-    # Load flat_2d_array[i + 8]
-    flat_idx = idx + 8
-    flat_mask = mask & (flat_idx < n_elements + 8)
-    flat_vals = tl.load(flat_2d_array_ptr + flat_idx, mask=flat_mask)
-    
-    # Compute xx[i] = flat_2d_array[i + 8] + a[i]
+    flat_vals = tl.load(flat_2d_array_ptr + idx + 8, mask=mask)
     result = flat_vals + a_vals
-    
-    # Store result
     tl.store(xx_ptr + idx, result, mask=mask)
 
 def s422_triton(a, flat_2d_array, xx):
-    n_elements = a.shape[0]
-    
+    N = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    s422_kernel[grid](
-        a,
-        flat_2d_array,
-        xx,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
-    
-    return xx
+    s422_kernel[grid](a, flat_2d_array, xx, N, BLOCK_SIZE)
 ```

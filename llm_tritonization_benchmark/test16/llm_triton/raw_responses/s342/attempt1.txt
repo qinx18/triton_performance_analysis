@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s342
-# Generated: 2025-12-08 14:26:41
+# Generated: 2026-01-13 04:26:58
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -63,6 +63,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -133,45 +136,27 @@ import triton.language as tl
 
 @triton.jit
 def s342_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel processes the arrays sequentially since j depends on previous iterations
-    # We need to process one block at a time to maintain the sequential dependency
-    
     block_id = tl.program_id(0)
-    if block_id > 0:
-        return
+    block_start = block_id * BLOCK_SIZE
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Process all elements sequentially in a single block
-    j = -1
-    
-    # Process in chunks to respect memory limits
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        offsets = tl.arange(0, BLOCK_SIZE)
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load current chunk of array a
-        a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        
-        # Process each element in the chunk
-        for i in range(BLOCK_SIZE):
-            if block_start + i >= n_elements:
-                break
-                
-            element_mask = (offsets == i) & mask
-            a_val = tl.sum(tl.where(element_mask, a_vals, 0.0))
-            
-            # Check if a[i] > 0
+    # Sequential processing required due to data dependency
+    if block_id == 0:
+        j = -1
+        for i in range(n_elements):
+            a_val = tl.load(a_ptr + i)
             if a_val > 0.0:
                 j += 1
-                # Load b[j] and store to a[i]
                 b_val = tl.load(b_ptr + j)
-                tl.store(a_ptr + block_start + i, b_val)
+                tl.store(a_ptr + i, b_val)
 
 def s342_triton(a, b):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 1024
+    BLOCK_SIZE = 256
+    grid = (1,)  # Single block due to sequential dependency
     
-    # Launch kernel with single block to maintain sequential processing
-    grid = (1,)
-    s342_kernel[grid](a, b, n_elements, BLOCK_SIZE)
+    s342_kernel[grid](
+        a, b, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```

@@ -1631,6 +1631,7 @@ def benchmark():
     N = {benchmark_size}
     num_warmup = 10
     num_iterations = 100
+    timeout_per_section = 60  # 60 seconds per section (warmup/benchmark)
 
     print("="*70)
     print(f"Performance Benchmark: {func_name}")
@@ -1647,58 +1648,97 @@ def benchmark():
     pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
     tr_args = build_args({func_name}_triton, tr_tensors, scalars)
 
-    # Warmup PyTorch
-    print(f"Warming up PyTorch baseline ({{num_warmup}} iterations)...")
-    for _ in range(num_warmup):
-        for arr in pt_tensors:
-            pt_tensors[arr] = pt_tensors[arr].clone()
-        pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
-        {func_name}_pytorch(*pt_args)
-    torch.cuda.synchronize()
+    pt_time = None
+    tr_time = None
 
-    # Benchmark PyTorch
-    print(f"Benchmarking PyTorch baseline ({{num_iterations}} iterations)...")
-    torch.cuda.synchronize()
-    pt_start = time.perf_counter()
-    for _ in range(num_iterations):
-        for arr in pt_tensors:
-            pt_tensors[arr] = pt_tensors[arr].clone()
-        pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
-        {func_name}_pytorch(*pt_args)
-    torch.cuda.synchronize()
-    pt_time = (time.perf_counter() - pt_start) / num_iterations
+    # Benchmark PyTorch (with separate timeout handling)
+    try:
+        print(f"Warming up PyTorch baseline ({{num_warmup}} iterations)...")
+        start_time = time.perf_counter()
+        for i in range(num_warmup):
+            if time.perf_counter() - start_time > timeout_per_section:
+                raise TimeoutError("PyTorch warmup timeout")
+            for arr in pt_tensors:
+                pt_tensors[arr] = pt_tensors[arr].clone()
+            pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+            {func_name}_pytorch(*pt_args)
+        torch.cuda.synchronize()
 
-    # Warmup Triton
-    print(f"Warming up Triton implementation ({{num_warmup}} iterations)...")
-    for _ in range(num_warmup):
-        for arr in tr_tensors:
-            tr_tensors[arr] = tr_tensors[arr].clone()
-        tr_args = build_args({func_name}_triton, tr_tensors, scalars)
-        {func_name}_triton(*tr_args)
-    torch.cuda.synchronize()
+        print(f"Benchmarking PyTorch baseline ({{num_iterations}} iterations)...")
+        torch.cuda.synchronize()
+        pt_start = time.perf_counter()
+        bench_start = time.perf_counter()
+        for i in range(num_iterations):
+            if time.perf_counter() - bench_start > timeout_per_section:
+                raise TimeoutError("PyTorch benchmark timeout")
+            for arr in pt_tensors:
+                pt_tensors[arr] = pt_tensors[arr].clone()
+            pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+            {func_name}_pytorch(*pt_args)
+        torch.cuda.synchronize()
+        pt_time = (time.perf_counter() - pt_start) / num_iterations
+        print(f"  PyTorch time: {{pt_time*1000:.3f}} ms")
+    except (TimeoutError, Exception) as e:
+        print(f"  PyTorch benchmark TIMEOUT or ERROR: {{e}}")
+        pt_time = None
 
-    # Benchmark Triton
-    print(f"Benchmarking Triton implementation ({{num_iterations}} iterations)...")
-    torch.cuda.synchronize()
-    tr_start = time.perf_counter()
-    for _ in range(num_iterations):
-        for arr in tr_tensors:
-            tr_tensors[arr] = tr_tensors[arr].clone()
-        tr_args = build_args({func_name}_triton, tr_tensors, scalars)
-        {func_name}_triton(*tr_args)
-    torch.cuda.synchronize()
-    tr_time = (time.perf_counter() - tr_start) / num_iterations
+    # Benchmark Triton (with separate timeout handling)
+    try:
+        print(f"Warming up Triton implementation ({{num_warmup}} iterations)...")
+        start_time = time.perf_counter()
+        for i in range(num_warmup):
+            if time.perf_counter() - start_time > timeout_per_section:
+                raise TimeoutError("Triton warmup timeout")
+            for arr in tr_tensors:
+                tr_tensors[arr] = tr_tensors[arr].clone()
+            tr_args = build_args({func_name}_triton, tr_tensors, scalars)
+            {func_name}_triton(*tr_args)
+        torch.cuda.synchronize()
 
-    speedup = pt_time / tr_time if tr_time > 0 else 0
+        print(f"Benchmarking Triton implementation ({{num_iterations}} iterations)...")
+        torch.cuda.synchronize()
+        tr_start = time.perf_counter()
+        bench_start = time.perf_counter()
+        for i in range(num_iterations):
+            if time.perf_counter() - bench_start > timeout_per_section:
+                raise TimeoutError("Triton benchmark timeout")
+            for arr in tr_tensors:
+                tr_tensors[arr] = tr_tensors[arr].clone()
+            tr_args = build_args({func_name}_triton, tr_tensors, scalars)
+            {func_name}_triton(*tr_args)
+        torch.cuda.synchronize()
+        tr_time = (time.perf_counter() - tr_start) / num_iterations
+        print(f"  Triton time: {{tr_time*1000:.3f}} ms")
+    except (TimeoutError, Exception) as e:
+        print(f"  Triton benchmark TIMEOUT or ERROR: {{e}}")
+        tr_time = None
+
+    # Calculate speedup (handle None cases)
+    if pt_time is not None and tr_time is not None and tr_time > 0:
+        speedup = pt_time / tr_time
+    else:
+        speedup = None
 
     print("="*70)
-    print(f"PyTorch time:  {{pt_time*1000:8.3f}} ms")
-    print(f"Triton time:   {{tr_time*1000:8.3f}} ms")
-    print(f"Speedup:       {{speedup:8.2f}}x")
+    if pt_time is not None:
+        print(f"PyTorch time:  {{pt_time*1000:8.3f}} ms")
+    else:
+        print(f"PyTorch time:  TIMEOUT")
+    if tr_time is not None:
+        print(f"Triton time:   {{tr_time*1000:8.3f}} ms")
+    else:
+        print(f"Triton time:   TIMEOUT")
+    if speedup is not None:
+        print(f"Speedup:       {{speedup:8.2f}}x")
+    else:
+        print(f"Speedup:       N/A (timeout)")
     print("="*70)
 
-    # Output machine-readable format for parsing
-    print(f"BENCHMARK_RESULT:{{pt_time*1000:.6f}},{{tr_time*1000:.6f}},{{speedup:.6f}}")
+    # Output machine-readable format for parsing (handle None values)
+    pt_time_ms = pt_time * 1000 if pt_time is not None else -1
+    tr_time_ms = tr_time * 1000 if tr_time is not None else -1
+    speedup_val = speedup if speedup is not None else -1
+    print(f"BENCHMARK_RESULT:{{pt_time_ms:.6f}},{{tr_time_ms:.6f}},{{speedup_val:.6f}}")
 
 if __name__ == "__main__":
     try:
@@ -1807,9 +1847,13 @@ def process_function(func_name: str, func_spec: dict) -> dict:
             print(f"  Failed to generate baseline")
             return results
 
-    # Step 2: Generate Triton with retry loop
+    # Step 2: Generate Triton with retry loop (5+5 strategy)
+    # First 5 attempts: normal retry with error feedback
+    # After 5 failures: reset and try 5 more times without showing last attempt
     original_prompt = None
     last_code = None
+    error_info = None  # Initialize error_info before the loop
+    reset_after = 5  # Reset context after this many failures
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         results["attempts"] = attempt
@@ -1822,8 +1866,15 @@ def process_function(func_name: str, func_spec: dict) -> dict:
             if attempt == 1:
                 # Initial generation
                 triton_code, original_prompt, full_response = generate_triton_initial(func_name)
+            elif attempt == reset_after + 1:
+                # Reset: Generate fresh without showing previous failed attempts
+                print(f"  Resetting context after {reset_after} failures, trying fresh approach...")
+                triton_code, retry_prompt = generate_triton_with_retry(
+                    func_name, original_prompt, None, error_info, attempt
+                )
+                full_response = retry_prompt + "\n\n" + "=" * 80 + "\nRESPONSE:\n" + "=" * 80 + "\n" + triton_code
             else:
-                # Retry with error feedback
+                # Retry with error feedback (show last attempt unless we just reset)
                 triton_code, retry_prompt = generate_triton_with_retry(
                     func_name, original_prompt, last_code, error_info, attempt
                 )
@@ -1880,11 +1931,8 @@ def process_function(func_name: str, func_spec: dict) -> dict:
                 print(f"    {error_msg[:100]}...")
                 results["final_error"] = error_info
 
-                # From attempt 3 onwards: stop on numerical errors, continue on compilation errors
-                if attempt >= 3 and error_type == 'numerical':
-                    print(f"  Numerical error after {attempt} attempts. Moving to next function.")
-                    break
-                elif attempt < MAX_ATTEMPTS:
+                # Continue retrying up to MAX_ATTEMPTS for all error types (no early exit for numerical)
+                if attempt < MAX_ATTEMPTS:
                     if error_type == 'numerical':
                         print(f"  Will retry with error feedback (numerical error)...")
                     else:
@@ -1949,8 +1997,29 @@ def main():
         passed = "Y" if results["test_passed"] else "N"
         attempts = str(results["attempts"])
 
-        if results.get("benchmark") and results["benchmark"].get("speedup"):
-            speedup = f"{results['benchmark']['speedup']:.2f}x"
+        if results.get("benchmark"):
+            benchmark = results["benchmark"]
+            speedup_val = benchmark.get("speedup", -1)
+            pt_time = benchmark.get("pytorch_time_ms", -1)
+            tr_time = benchmark.get("triton_time_ms", -1)
+
+            if speedup_val == -1:
+                # Timeout case - calculate minimum/maximum speedup
+                timeout_ms = 60000  # 60 seconds timeout per section
+                if pt_time == -1 and tr_time == -1:
+                    speedup = "Both timeout"
+                elif pt_time == -1 and tr_time > 0:
+                    # PyTorch timed out, Triton completed - calculate minimum speedup
+                    min_speedup = timeout_ms / tr_time
+                    speedup = f">{min_speedup:.0f}x (PT>{timeout_ms/1000:.0f}s, TR:{tr_time:.2f}ms)"
+                elif tr_time == -1 and pt_time > 0:
+                    # Triton timed out, PyTorch completed - calculate maximum slowdown
+                    max_slowdown = timeout_ms / pt_time
+                    speedup = f"<{1/max_slowdown:.2f}x (PT:{pt_time:.2f}ms, TR>{timeout_ms/1000:.0f}s)"
+                else:
+                    speedup = "N/A"
+            else:
+                speedup = f"{speedup_val:.2f}x"
         else:
             speedup = "-"
 
@@ -1969,7 +2038,10 @@ def main():
     # Calculate benchmark statistics
     benchmarked = sum(1 for r in all_results.values() if r.get("benchmark"))
     if benchmarked > 0:
-        speedups = [r["benchmark"]["speedup"] for r in all_results.values() if r.get("benchmark") and r["benchmark"].get("speedup")]
+        # Filter out timeout cases (speedup == -1)
+        speedups = [r["benchmark"]["speedup"] for r in all_results.values()
+                   if r.get("benchmark") and r["benchmark"].get("speedup") is not None
+                   and r["benchmark"]["speedup"] > 0]
         avg_speedup = sum(speedups) / len(speedups) if speedups else 0
         min_speedup = min(speedups) if speedups else 0
         max_speedup = max(speedups) if speedups else 0
@@ -1980,10 +2052,21 @@ def main():
     print(f"  - Passed on first try: {first_try}")
     print(f"  - Passed after retry: {retried}")
     if benchmarked > 0:
+        # Count timeout cases
+        pt_timeouts = sum(1 for r in all_results.values()
+                         if r.get("benchmark") and r["benchmark"].get("pytorch_time_ms") == -1)
+        tr_timeouts = sum(1 for r in all_results.values()
+                         if r.get("benchmark") and r["benchmark"].get("triton_time_ms") == -1)
+        successful_benchmarks = len(speedups)
+
         print(f"\nPerformance benchmarks: {benchmarked}/{total}")
-        print(f"  - Average speedup: {avg_speedup:.2f}x")
-        print(f"  - Min speedup: {min_speedup:.2f}x")
-        print(f"  - Max speedup: {max_speedup:.2f}x")
+        print(f"  - Successful: {successful_benchmarks}")
+        print(f"  - PyTorch timeouts: {pt_timeouts}")
+        print(f"  - Triton timeouts: {tr_timeouts}")
+        if successful_benchmarks > 0:
+            print(f"  - Average speedup: {avg_speedup:.2f}x")
+            print(f"  - Min speedup: {min_speedup:.2f}x")
+            print(f"  - Max speedup: {max_speedup:.2f}x")
     print(f"{'=' * 80}")
 
     # Save results to JSON file

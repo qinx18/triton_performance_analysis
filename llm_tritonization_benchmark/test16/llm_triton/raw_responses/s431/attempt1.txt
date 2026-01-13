@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s431
-# Generated: 2025-12-08 14:30:45
+# Generated: 2026-01-13 04:48:08
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -87,6 +87,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -156,34 +159,38 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s431_kernel(a_ptr, a_copy_ptr, b_ptr, k, n_elements, BLOCK_SIZE: tl.constexpr):
+def s431_kernel(a_ptr, a_copy_ptr, b_ptr, k, n, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets
     
-    mask = idx < n_elements
+    mask = idx < n
     
-    # Load from read-only copy and b array
-    a_vals = tl.load(a_copy_ptr + idx + k, mask=mask)
-    b_vals = tl.load(b_ptr + idx, mask=mask)
+    # Load from read-only copy for a[i+k]
+    a_read_offsets = idx + k
+    a_read_mask = mask & (a_read_offsets < n)
+    a_vals = tl.load(a_copy_ptr + a_read_offsets, mask=a_read_mask, other=0.0)
     
-    # Compute result
+    # Load b[i]
+    b_vals = tl.load(b_ptr + idx, mask=mask, other=0.0)
+    
+    # Compute a[i] = a[i+k] + b[i]
     result = a_vals + b_vals
     
     # Store to original array
     tl.store(a_ptr + idx, result, mask=mask)
 
 def s431_triton(a, b, k):
-    n_elements = a.shape[0]
+    n = a.shape[0]
     
     # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(n, BLOCK_SIZE),)
     
     s431_kernel[grid](
-        a, a_copy, b, k, n_elements, BLOCK_SIZE
+        a, a_copy, b, k, n, BLOCK_SIZE
     )
 ```

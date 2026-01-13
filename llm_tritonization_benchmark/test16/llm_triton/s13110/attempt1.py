@@ -3,58 +3,53 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s13110_kernel(aa_ptr, max_val_ptr, xindex_ptr, yindex_ptr, chksum_ptr, LEN_2D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s13110_kernel(aa_ptr, max_val_ptr, xindex_ptr, yindex_ptr, N, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_idx = pid * BLOCK_SIZE + j_offsets
+    j_mask = j_idx < N
     
     # Initialize reduction variables
-    max_val = tl.load(aa_ptr)  # aa[0][0]
-    best_xindex = 0
-    best_yindex = 0
+    local_max = tl.full([BLOCK_SIZE], float('-inf'), dtype=tl.float32)
+    local_xindex = tl.zeros([BLOCK_SIZE], dtype=tl.int32)
+    local_yindex = j_idx
     
-    for i in range(LEN_2D):
-        j_start = pid * BLOCK_SIZE
-        j_idx = j_start + j_offsets
-        j_mask = j_idx < LEN_2D
+    # Sequential loop over i dimension
+    for i in range(N):
+        # Load current row values for valid j indices
+        row_ptr = aa_ptr + i * N + j_idx
+        values = tl.load(row_ptr, mask=j_mask, other=float('-inf'))
         
-        # Load values for this row
-        row_ptr = aa_ptr + i * LEN_2D + j_idx
-        vals = tl.load(row_ptr, mask=j_mask, other=-float('inf'))
-        
-        # Find max in this block
-        block_max = tl.max(vals)
-        
-        # Update global max if needed
-        if block_max > max_val:
-            max_val = block_max
-            best_xindex = i
-            # Find the j index of the max value in this block
-            max_mask = vals == block_max
-            j_indices = j_idx
-            # Get first occurrence of max
-            for k in range(BLOCK_SIZE):
-                if j_start + k < LEN_2D:
-                    if vals[k] == block_max:
-                        best_yindex = j_start + k
-                        break
+        # Update max values and indices where new values are greater
+        is_greater = values > local_max
+        local_max = tl.where(is_greater, values, local_max)
+        local_xindex = tl.where(is_greater, i, local_xindex)
+        local_yindex = tl.where(is_greater, j_idx, local_yindex)
     
-    # Store results (only one thread should write)
-    if pid == 0:
-        tl.store(max_val_ptr, max_val)
-        tl.store(xindex_ptr, best_xindex)
-        tl.store(yindex_ptr, best_yindex)
-        chksum = max_val + best_xindex + best_yindex
-        tl.store(chksum_ptr, chksum)
+    # Store results back to global memory
+    tl.store(max_val_ptr + j_idx, local_max, mask=j_mask)
+    tl.store(xindex_ptr + j_idx, local_xindex, mask=j_mask)
+    tl.store(yindex_ptr + j_idx, local_yindex, mask=j_mask)
 
 def s13110_triton(aa):
-    # Use PyTorch for more efficient argmax
-    flat_aa = aa.flatten()
-    max_val = torch.max(flat_aa)
-    flat_idx = torch.argmax(flat_aa)
+    N = aa.shape[0]
+    BLOCK_SIZE = 256
     
-    xindex = flat_idx // aa.shape[1]
-    yindex = flat_idx % aa.shape[1]
+    # Allocate temporary storage for partial results
+    max_vals = torch.full((N,), float('-inf'), dtype=aa.dtype, device=aa.device)
+    xindices = torch.zeros((N,), dtype=torch.int32, device=aa.device)
+    yindices = torch.zeros((N,), dtype=torch.int32, device=aa.device)
     
-    chksum = max_val + xindex.float() + yindex.float()
+    # Launch kernel
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    s13110_kernel[grid](
+        aa, max_vals, xindices, yindices, N, BLOCK_SIZE
+    )
     
-    return max_val + (xindex + 1) + (yindex + 1)
+    # Find global maximum from partial results
+    global_max_idx = torch.argmax(max_vals)
+    max_val = max_vals[global_max_idx].item()
+    xindex = xindices[global_max_idx].item()
+    yindex = yindices[global_max_idx].item()
+    
+    return max_val + xindex + 1 + yindex + 1

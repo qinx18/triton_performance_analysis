@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s254
-# Generated: 2025-12-08 14:14:05
+# Generated: 2026-01-13 03:39:57
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -47,6 +47,61 @@ real_t s254(struct args_t * func_args)
         }
 ```
 
+================================================================================
+SCALAR EXPANSION PATTERN DETECTED
+================================================================================
+
+Kernel s254 contains scalar variables that create loop-carried
+dependencies but can be PARALLELIZED through SCALAR EXPANSION.
+
+Variable: x
+  Initial value: 0
+  Expansion type: conditional_propagation
+  Reason: x value wraps around across iterations. Expand to array and propagate values forward.
+
+  IMPLEMENTATION STRATEGY for x:
+  ======================================================================
+
+  Step 1: Expand scalar to array
+    Create array: x_expanded = torch.zeros(N)
+
+  Step 2: Compute expanded array with conditional scan
+    For each position i:
+      - If condition is true: x_expanded[i] = new_value
+      - Else: x_expanded[i] = x_expanded[i-1] (carry forward)
+
+    Triton implementation:
+    ```python
+    # Phase 1: Compute expanded scalar array
+    # Use sequential loop (one thread) OR specialized scan algorithm
+    @triton.jit
+    def expand_x_kernel(...):
+        # Single thread processes all elements sequentially
+        x_val = 0.0  # Initial value
+        for i in range(N):
+            # Load condition and data
+            cond = ...
+            if cond:
+                x_val = ...  # Update value
+            tl.store(x_expanded_ptr + i, x_val)
+    
+    # Phase 2: Use expanded array in parallel
+    @triton.jit
+    def compute_kernel(...):
+        # Multiple threads process elements in parallel
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x_vals = tl.load(x_expanded_ptr + offsets, mask=mask)
+        # Now use expanded values in parallel
+        ...
+    ```
+
+  Step 3: Use expanded array in original computations
+    Replace all uses of scalar 'x' with 'x_expanded[i]'
+    Now the array writes can be done in PARALLEL!
+
+================================================================================
+
+
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -62,6 +117,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -126,55 +184,50 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s254_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel cannot be parallelized due to the carry-around dependency
-    # Only one thread block processes the entire array sequentially
-    block_id = tl.program_id(0)
-    if block_id != 0:
+def s254_expand_x_kernel(b_ptr, x_expanded_ptr, n_elements):
+    # Single thread processes all elements sequentially
+    if tl.program_id(0) != 0:
         return
     
     # Initialize x with b[n_elements-1]
-    x = tl.load(b_ptr + (n_elements - 1))
+    x_val = tl.load(b_ptr + n_elements - 1)
     
-    # Process elements in blocks
-    offsets = tl.arange(0, BLOCK_SIZE)
+    for i in range(n_elements):
+        # Store current x value
+        tl.store(x_expanded_ptr + i, x_val)
+        # Update x to b[i] for next iteration
+        x_val = tl.load(b_ptr + i)
+
+@triton.jit
+def s254_compute_kernel(a_ptr, b_ptr, x_expanded_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load b values for current block
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
-        
-        # Process each element in the block sequentially
-        for i in range(BLOCK_SIZE):
-            if block_start + i < n_elements:
-                # Get current b value
-                if i == 0:
-                    b_val = tl.load(b_ptr + block_start + i)
-                else:
-                    b_val = tl.load(b_ptr + block_start + i)
-                
-                # Compute a[i] = (b[i] + x) * 0.5
-                a_val = (b_val + x) * 0.5
-                tl.store(a_ptr + block_start + i, a_val)
-                
-                # Update x = b[i]
-                x = b_val
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    x_vals = tl.load(x_expanded_ptr + offsets, mask=mask)
+    
+    result = (b_vals + x_vals) * 0.5
+    
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s254_triton(a, b):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
     
-    # Launch with only one thread block since computation is sequential
+    # Create expanded array for x
+    x_expanded = torch.zeros(n_elements, dtype=a.dtype, device=a.device)
+    
+    # Phase 1: Expand scalar x using sequential kernel
     grid = (1,)
+    s254_expand_x_kernel[grid](b, x_expanded, n_elements)
     
-    s254_kernel[grid](
-        a, b, n_elements, BLOCK_SIZE
-    )
+    # Phase 2: Compute result in parallel
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    s254_compute_kernel[grid](a, b, x_expanded, n_elements, BLOCK_SIZE)
 ```

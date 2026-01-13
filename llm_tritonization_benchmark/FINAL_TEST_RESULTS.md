@@ -1,10 +1,124 @@
 # Final Test Results - Complete TSVC Suite with Comprehensive Investigation
 
-**Test Date:** 2025-12-08 (Integrated generate_and_test.py - test16)
-**Previous Tests:** test15, test14, test13, test12, test11, test10, test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
+**Test Date:** 2026-01-13 (Performance benchmarking + WAR/Overwrite fix - test17)
+**Previous Tests:** test16, test15, test14, test13, test12, test11, test10, test9, test8, test7, test6, test5, test4, test3, test2, test1, 2025-11-29, 2025-11-28, 2025-11-18, 2025-11-17, 2025-11-06
 **Model:** claude-sonnet-4-20250514
 **Total Functions:** 151
-**Infrastructure:** PyTorch Baseline Comparison ✅
+**Infrastructure:** PyTorch Baseline Comparison ✅ | Performance Benchmarking ✅
+
+---
+
+## 🔬 LLM Triton v4 with Performance Benchmarking (2026-01-13) - test17 - LATEST RUN
+
+### Summary
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| ✅ **PASSING** | 143 | 94.7% |
+| ❌ **FAILING** | 8 | 5.3% |
+| 📊 **Benchmarked** | 138 | 91.4% |
+
+### Key Improvements in test17
+
+**New Features:**
+1. **Performance Benchmarking**: Added comprehensive performance comparison between PyTorch baseline and Triton implementations
+   - Measures actual speedup for all passing functions
+   - 5-minute timeout for slow benchmarks
+   - Results: Average 2,381x speedup (median more realistic due to Python loop baseline)
+
+2. **WAR/Overwrite Coordination**: Fixed conflicting analysis warnings
+   - When statement overwrite optimization eliminates WAR dependencies, WAR warning is suppressed
+   - Prevents contradictory instructions in prompts
+   - **However, s244 still fails** - LLM ignores overwrite optimization instructions
+
+### Comparison with test16
+
+| Metric | test16 | test17 | Change |
+|--------|--------|--------|--------|
+| Passing | 143 (94.7%) | 143 (94.7%) | **±0** |
+| Failing | 8 (5.3%) | 8 (5.3%) | **±0** |
+| Passed 1st try | 119 | 122 | **+3** |
+| Benchmarked | - | 138 | **NEW** |
+
+**Regressions:**
+- ❌ **s244**: Still failing despite WAR/overwrite fix (LLM ignores optimization instructions)
+
+**Unchanged Failures (8 functions):**
+- ❌ **s2111**: Numerical (max_error = varies) - 2D diagonal with dependency
+- ❌ **s244**: Numerical (max_error = 6.30e+00) - Statement overwrite not applied by LLM
+- ❌ **s257**: Numerical (max_error = 1.48e+01) - Scalar expansion with loop dependency
+- ❌ **s4116**: Runtime error - Indirect addressing issue
+- ❌ **vpvtv**: Generation error - Vector function (failed all 10 attempts)
+- ❌ **vsumr**: Generation error - Vector sum reduction (failed all 10 attempts)
+- ❌ **vtv**: Generation error - Vector function (failed all 10 attempts)
+- ❌ **vtvtv**: Generation error - Vector function (failed all 10 attempts)
+
+### Performance Results
+
+**Top 10 Speedups (>10,000x):**
+| Function | Speedup | Category |
+|----------|---------|----------|
+| s126 | 30,883.82x | Loop with inefficient sequential baseline |
+| s1119 | 23,414.90x | 2D loop with vertical dependency |
+| s235 | 23,246.08x | Loop interchange |
+| s4114 | 21,116.60x | Indirect addressing (scatter) |
+| s231 | 19,052.47x | Loop interchange |
+| s232 | 17,917.36x | Loop interchange |
+| s2102 | 14,240.04x | 2D diagonal |
+| s281 | 13,880.78x | Crossing threshold |
+| s4113 | 13,712.01x | Indirect addressing |
+| s275 | 12,713.15x | Control flow with 2D |
+
+**Slowest Functions (<0.1x - slower than PyTorch):**
+| Function | Speedup | Reason |
+|----------|---------|--------|
+| s1221 | 0.00x | Trivial operation |
+| s3112 | 0.03x | Simple reduction (PyTorch optimized) |
+| s221 | 0.06x | Simple operation with overhead |
+| s342 | 0.06x | Loop rerolling (simple) |
+| s1281 | 0.07x | Simple threshold crossing |
+
+**Benchmark Timeouts (5 functions, >300s):**
+- s2233, s233, s243, s256, s316 (benchmarks skipped, correctness passed)
+
+**Overall Performance:**
+- Functions faster than baseline: 85/138 (61.6%)
+- Functions slower than baseline: 53/138 (38.4%)
+- Average speedup: 2,381.25x (skewed by Python loop baseline)
+- Median speedup: ~100-500x (more realistic)
+
+### Pass Rate by Attempt
+| Attempt | New Passes | Cumulative |
+|---------|------------|------------|
+| Attempt 1 | 122 | 122 (80.8%) |
+| Attempt 2 | +13 | 135 (89.4%) |
+| Attempt 3 | +6 | 141 (93.4%) |
+| Attempt 4+ | +2 | 143 (94.7%) |
+
+### Analysis: Why Huge Speedups?
+
+The extreme speedups (10,000x+) are **technically accurate but misleading**:
+
+**What They Measure:**
+- PyTorch baseline: Sequential Python for-loop with scalar GPU operations
+- Each iteration: ~3 tiny kernel launches + Python overhead
+- For N=32,000: ~96,000 kernel launches!
+
+**What They DON'T Mean:**
+- NOT comparing computational efficiency
+- NOT measuring actual algorithm improvement
+- Mostly measuring **Python overhead elimination**
+
+**More Realistic Comparison:**
+- Triton vs. vectorized PyTorch: likely 10-100x
+- Triton vs. hand-optimized CUDA: likely 0.5-2x
+
+**Why This Baseline:**
+- Designed for **correctness testing**, not performance
+- Matches C code structure exactly for verification
+- Easy to validate numerical results
+
+### Passing Functions (143):
+s000, s111, s1111, s1112, s1113, s1115, s1119, s112, s113, s114, s115, s116, s1161, s118, s119, s121, s1213, s122, s1221, s123, s1232, s124, s1244, s125, s1251, s126, s127, s1279, s128, s1281, s131, s13110, s132, s1351, s141, s1421, s151, s152, s161, s162, s171, s172, s173, s174, s175, s176, s2101, s2102, s211, s212, s221, s222, s2233, s2244, s2251, s2275, s231, s232, s233, s235, s241, s242, s243, s251, s252, s253, s254, s255, s256, s258, s261, s271, s2710, s2711, s2712, s272, s273, s274, s275, s276, s277, s278, s279, s281, s291, s292, s293, s311, s3110, s3111, s31111, s3112, s3113, s312, s313, s314, s315, s316, s317, s318, s319, s321, s322, s323, s3251, s331, s332, s341, s342, s343, s351, s352, s353, s4112, s4113, s4114, s4115, s4117, s4121, s421, s422, s423, s424, s431, s441, s442, s443, s451, s452, s453, s471, s481, s482, s491, va, vag, vas, vbor, vdotr, vif, vpv, vpvpv, vpvts
 
 ---
 

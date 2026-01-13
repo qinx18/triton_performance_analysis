@@ -1,6 +1,6 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def vpv_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -10,19 +10,21 @@ def vpv_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     indices = block_start + offsets
     mask = indices < n_elements
     
-    # Load values
     a_vals = tl.load(a_ptr + indices, mask=mask)
     b_vals = tl.load(b_ptr + indices, mask=mask)
     
-    # Compute a[i] += b[i]
     result = a_vals + b_vals
     
-    # Store result
     tl.store(a_ptr + indices, result, mask=mask)
 
 def vpv_triton(a, b):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
+    
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    vpv_kernel[grid](a, b, n_elements, BLOCK_SIZE)
+    vpv_kernel[grid](
+        a, b,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

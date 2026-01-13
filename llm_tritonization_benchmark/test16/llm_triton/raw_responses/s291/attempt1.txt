@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s291
-# Generated: 2025-12-08 14:20:16
+# Generated: 2026-01-13 04:05:01
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -47,6 +47,61 @@ real_t s291(struct args_t * func_args)
         }
 ```
 
+================================================================================
+SCALAR EXPANSION PATTERN DETECTED
+================================================================================
+
+Kernel s291 contains scalar variables that create loop-carried
+dependencies but can be PARALLELIZED through SCALAR EXPANSION.
+
+Variable: im1
+  Initial value: 0
+  Expansion type: conditional_propagation
+  Reason: im1 value wraps around across iterations. Expand to array and propagate values forward.
+
+  IMPLEMENTATION STRATEGY for im1:
+  ======================================================================
+
+  Step 1: Expand scalar to array
+    Create array: im1_expanded = torch.zeros(N)
+
+  Step 2: Compute expanded array with conditional scan
+    For each position i:
+      - If condition is true: im1_expanded[i] = new_value
+      - Else: im1_expanded[i] = im1_expanded[i-1] (carry forward)
+
+    Triton implementation:
+    ```python
+    # Phase 1: Compute expanded scalar array
+    # Use sequential loop (one thread) OR specialized scan algorithm
+    @triton.jit
+    def expand_im1_kernel(...):
+        # Single thread processes all elements sequentially
+        im1_val = 0.0  # Initial value
+        for i in range(N):
+            # Load condition and data
+            cond = ...
+            if cond:
+                im1_val = ...  # Update value
+            tl.store(im1_expanded_ptr + i, im1_val)
+    
+    # Phase 2: Use expanded array in parallel
+    @triton.jit
+    def compute_kernel(...):
+        # Multiple threads process elements in parallel
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        im1_vals = tl.load(im1_expanded_ptr + offsets, mask=mask)
+        # Now use expanded values in parallel
+        ...
+    ```
+
+  Step 3: Use expanded array in original computations
+    Replace all uses of scalar 'im1' with 'im1_expanded[i]'
+    Now the array writes can be done in PARALLEL!
+
+================================================================================
+
+
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -62,6 +117,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -131,43 +189,48 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s291_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and compute block start
+def expand_im1_kernel(im1_expanded_ptr, n_elements):
+    # Single thread processes all elements sequentially
+    im1_val = n_elements - 1  # Initial value: LEN_1D-1
+    for i in range(n_elements):
+        tl.store(im1_expanded_ptr + i, im1_val)
+        im1_val = i  # Update for next iteration
+
+@triton.jit
+def s291_kernel(a_ptr, b_ptr, im1_expanded_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    
-    # Compute offsets
     offsets = tl.arange(0, BLOCK_SIZE)
-    mask = (block_start + offsets) < n_elements
+    current_offsets = block_start + offsets
+    mask = current_offsets < n_elements
     
-    # Handle the sequential dependency using a loop
-    # We need to process elements sequentially to maintain the im1 dependency
-    for i in range(n_elements):
-        if i == 0:
-            im1_idx = n_elements - 1
-        else:
-            im1_idx = i - 1
-            
-        # Load b[i] and b[im1]
-        b_i = tl.load(b_ptr + i)
-        b_im1 = tl.load(b_ptr + im1_idx)
-        
-        # Compute and store result
-        result = (b_i + b_im1) * 0.5
-        tl.store(a_ptr + i, result)
+    # Load b values
+    b_vals = tl.load(b_ptr + current_offsets, mask=mask)
+    
+    # Load im1 values (indices into b array)
+    im1_vals = tl.load(im1_expanded_ptr + current_offsets, mask=mask)
+    
+    # Load b[im1] values
+    b_im1_vals = tl.load(b_ptr + im1_vals.to(tl.int32), mask=mask)
+    
+    # Compute a[i] = (b[i] + b[im1]) * 0.5
+    result = (b_vals + b_im1_vals) * 0.5
+    
+    # Store result
+    tl.store(a_ptr + current_offsets, result, mask=mask)
 
 def s291_triton(a, b):
     n_elements = a.shape[0]
     
-    # Since this has sequential dependencies, we use a single thread block
-    # and process sequentially within the kernel
-    BLOCK_SIZE = 1
-    grid = (1,)
+    # Create expanded im1 array
+    im1_expanded = torch.zeros(n_elements, dtype=torch.int32, device=a.device)
     
-    s291_kernel[grid](
-        a, b, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Phase 1: Expand im1 scalar to array (single thread)
+    expand_im1_kernel[(1,)](im1_expanded, n_elements)
     
-    return a
+    # Phase 2: Use expanded array in parallel computation
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    s291_kernel[grid](a, b, im1_expanded, n_elements, BLOCK_SIZE)
 ```

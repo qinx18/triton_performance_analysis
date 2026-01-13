@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s173
-# Generated: 2025-12-08 13:54:46
+# Generated: 2026-01-13 02:51:37
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -53,6 +53,9 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
+7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
+   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
+   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -122,31 +125,31 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s173_kernel(a_ptr, b_ptr, k, n, BLOCK_SIZE: tl.constexpr):
+def s173_kernel(a_ptr, b_ptr, n, k, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
+    idx = block_start + offsets
     
-    mask = indices < n
+    mask = idx < n
     
     # Load a[i] and b[i]
-    a_vals = tl.load(a_ptr + indices, mask=mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
+    a_vals = tl.load(a_ptr + idx, mask=mask)
+    b_vals = tl.load(b_ptr + idx, mask=mask)
     
     # Compute a[i] + b[i]
     result = a_vals + b_vals
     
     # Store to a[i+k]
-    output_indices = indices + k
-    tl.store(a_ptr + output_indices, result, mask=mask)
+    store_idx = idx + k
+    store_mask = mask & (store_idx < (n + k))
+    tl.store(a_ptr + store_idx, result, mask=store_mask)
 
 def s173_triton(a, b, k):
     n = a.shape[0] // 2
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n, BLOCK_SIZE),)
     
-    s173_kernel[grid](a, b, k, n, BLOCK_SIZE)
-    
-    return a
+    s173_kernel[grid](a, b, n, k, BLOCK_SIZE=BLOCK_SIZE)
 ```

@@ -4,7 +4,9 @@ import torch
 
 @triton.jit
 def s451_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    block_start = tl.program_id(0) * BLOCK_SIZE
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
     mask = indices < n_elements
@@ -19,7 +21,8 @@ def s451_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     tl.store(a_ptr + indices, result, mask=mask)
 
 def s451_triton(a, b, c, cosf, sinf):
-    n_elements = a.numel()
+    n_elements = a.shape[0]
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
@@ -28,3 +31,5 @@ def s451_triton(a, b, c, cosf, sinf):
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
+    
+    return a
