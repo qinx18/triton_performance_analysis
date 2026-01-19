@@ -129,7 +129,7 @@ client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 # Paths
 TSVC_SOURCE = "/home/qinxiao/workspace/TSVC_2/src/archive/tsvc_orig.c"
 KERNELS_DIR = "/home/qinxiao/workspace/pet/isl_analysis/kernels"
-BASELINES_DIR = Path("baselines")
+# C reference is pre-compiled in c_reference/tsvc_all_reference.py
 
 MAX_ATTEMPTS = 10
 
@@ -976,7 +976,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 Please generate a complete Triton implementation that:
 1. Includes a @triton.jit kernel function named `{kernel_name}_kernel`
 2. Includes a Python wrapper function named `{kernel_name}_triton`
-3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation
+3. The wrapper should accept ONLY the tensor arrays used in the computation
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
@@ -1073,7 +1073,7 @@ def generate_triton_with_retry(kernel_name: str, original_prompt: str,
         error_section = f"""
 ## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
 **Error type**: Numerical error (values don't match)
 **Max error observed**: {error_info.get('max_error', 'unknown')}
@@ -1213,73 +1213,17 @@ RESPONSE:
 # From auto_test_all_tsvc.py - Testing functions
 # ============================================================================
 
-def generate_pytorch_baseline(func_name: str, func_spec: dict) -> Optional[str]:
-    """Generate PyTorch baseline implementation using LLM."""
-    if not client:
-        print(f"  No API key, skipping baseline generation for {func_name}")
-        return None
-
-    loop_code = func_spec['loop_code']
-    arrays = func_spec['arrays']
-    scalar_params = func_spec.get('scalar_params', {})
-
-    array_desc = ', '.join([f"{arr} ({mode})" for arr, mode in sorted(arrays.items())])
-    filtered_scalars = {k: v for k, v in scalar_params.items() if k != 'iterations'}
-
-    scalar_desc = ""
-    if filtered_scalars:
-        scalar_list = ', '.join(sorted(filtered_scalars.keys()))
-        scalar_desc = f"\nScalar parameters (computational only): {scalar_list}"
-
-    prompt = f"""Generate a PyTorch baseline implementation for TSVC function {func_name}.
-
-Original C loop code:
-```c
-{loop_code}
-```
-
-Arrays used: {array_desc}
-(r = read only, w = write only, rw = read-write){scalar_desc}
-
-Generate a complete, simple, and correct PyTorch implementation:
-
-1. Create a Python file with:
-   - Start with: `import torch` at the very top
-   - Function named `{func_name}_pytorch` that takes torch.Tensor arguments for ALL arrays{", plus computational scalar parameters" if filtered_scalars else ""}
-   - Parameters should be in alphabetical order
-
-2. Implementation guidelines:
-   - Remove the outer timing loop completely
-   - DO NOT include 'iterations' parameter
-   - Use torch operations (torch.where for conditionals)
-   - CRITICAL: Modify arrays IN-PLACE using slice assignment (a[:] = ...)
-   - Do NOT return the arrays
-
-Provide ONLY the complete Python code, no explanation."""
-
-    print(f"  Generating PyTorch baseline...")
-
-    try:
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        code = message.content[0].text
-        if "```python" in code:
-            code = code.split("```python")[1].split("```")[0].strip()
-        elif "```" in code:
-            code = code.split("```")[1].split("```")[0].strip()
-
-        return code
-    except Exception as e:
-        print(f"  Error generating baseline: {e}")
-        return None
+# NOTE: PyTorch baseline generation has been removed.
+# The infrastructure now uses the original tsvc.c functions (compiled as C library)
+# as the correctness reference and performance baseline.
+# See c_reference/tsvc_all_reference.py for the C function wrappers.
 
 
 def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1) -> str:
-    """Generate correctness test script for a specific attempt."""
+    """Generate correctness test script for a specific attempt.
+
+    Compares Triton implementation against original TSVC C reference.
+    """
     arrays = func_spec['arrays']
     has_offset = func_spec['has_offset']
     has_2d = func_spec.get('has_2d_arrays', False)
@@ -1338,10 +1282,11 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
 
     all_scalar_names = sorted(scalar_params.keys())
 
-    pytorch_clones = []
+    # C reference clones - convert to numpy for C function
+    c_ref_clones = []
     for arr in array_names:
-        pytorch_clones.append(f"            {arr}_pt = {arr}.clone()")
-    pytorch_clone_str = '\n'.join(pytorch_clones) if pytorch_clones else "            pass"
+        c_ref_clones.append(f"            {arr}_c = {arr}.cpu().numpy().copy()")
+    c_ref_clone_str = '\n'.join(c_ref_clones) if c_ref_clones else "            pass"
 
     triton_clones = []
     for arr in array_names:
@@ -1351,12 +1296,12 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
     # For pure reductions (all arrays read-only, returns scalar), compare return values
     if is_pure_reduction:
         compare_str = """            # Pure reduction: compare return values
-            if isinstance(pytorch_result, (int, float)):
-                pt_val = pytorch_result
-            elif isinstance(pytorch_result, torch.Tensor):
-                pt_val = pytorch_result.item() if pytorch_result.numel() == 1 else pytorch_result.sum().item()
+            if isinstance(c_result, (int, float)):
+                c_val = c_result
+            elif isinstance(c_result, np.ndarray):
+                c_val = c_result.item() if c_result.size == 1 else c_result.sum()
             else:
-                pt_val = float(pytorch_result)
+                c_val = float(c_result)
 
             if isinstance(triton_result, (int, float)):
                 tr_val = triton_result
@@ -1365,15 +1310,25 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
             else:
                 tr_val = float(triton_result)
 
-            max_error = abs(pt_val - tr_val)"""
-        passed_check_str = "passed = max_error < 1e-3 or (abs(pt_val) > 1e-6 and max_error / abs(pt_val) < 1e-3)"
+            max_error = abs(c_val - tr_val)"""
+        passed_check_str = "passed = max_error < 1e-3 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 1e-3)"
     elif len(output_arrays) == 1:
-        compare_str = f"            max_error = torch.max(torch.abs({output_arrays[0]}_pt - {output_arrays[0]}_tr)).item()"
-        passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({output_arrays[0]}_pt, {output_arrays[0]}_tr, rtol=1e-3, atol=1e-3)"
+        arr = output_arrays[0]
+        compare_str = f"""            # Convert C result back to torch for comparison
+            {arr}_c_torch = torch.from_numpy({arr}_c).cuda()
+            max_error = torch.max(torch.abs({arr}_c_torch - {arr}_tr)).item()"""
+        passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({arr}_c_torch, {arr}_tr, rtol=1e-3, atol=1e-3)"
     elif len(output_arrays) > 1:
-        compare_parts = [f"torch.max(torch.abs({arr}_pt - {arr}_tr)).item()" for arr in output_arrays]
-        compare_str = f"            max_error = max([{', '.join(compare_parts)}])"
-        passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({output_arrays[0]}_pt, {output_arrays[0]}_tr, rtol=1e-3, atol=1e-3)"
+        convert_parts = []
+        compare_parts = []
+        for arr in output_arrays:
+            convert_parts.append(f"{arr}_c_torch = torch.from_numpy({arr}_c).cuda()")
+            compare_parts.append(f"torch.max(torch.abs({arr}_c_torch - {arr}_tr)).item()")
+        convert_str = '\n            '.join(convert_parts)
+        compare_str = f"""            # Convert C results back to torch for comparison
+            {convert_str}
+            max_error = max([{', '.join(compare_parts)}])"""
+        passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({output_arrays[0]}_c_torch, {output_arrays[0]}_tr, rtol=1e-3, atol=1e-3)"
     else:
         compare_str = "            max_error = 0.0"
         passed_check_str = "passed = True"
@@ -1389,6 +1344,7 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
     test_code = f'''#!/usr/bin/env python3
 """
 Correctness Test for {func_name}
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import inspect
@@ -1396,9 +1352,10 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.{func_name}_baseline import {func_name}_pytorch
+    from c_reference.tsvc_all_reference import {func_name}_c
     from test19.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
@@ -1424,6 +1381,7 @@ def test_correctness():
 
     print("="*70)
     print(f"Correctness Testing: {func_name}")
+    print("Comparing Triton vs TSVC C reference")
     print("="*70)
 
     for N in test_sizes:
@@ -1432,18 +1390,18 @@ def test_correctness():
         try:
 {array_init_str}
 
-{pytorch_clone_str}
+{c_ref_clone_str}
 
 {triton_clone_str}
 
-            pt_tensors = {{{', '.join([f'"{arr}": {arr}_pt' for arr in available_arrays])}}}
+            c_tensors = {{{', '.join([f'"{arr}": {arr}_c' for arr in available_arrays])}}}
             tr_tensors = {{{', '.join([f'"{arr}": {arr}_tr' for arr in available_arrays])}}}
             scalars = {{{', '.join([f'"{s}": {s}' for s in available_scalars])}}}
 
-            pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+            c_args = build_args({func_name}_c, c_tensors, scalars)
             tr_args = build_args({func_name}_triton, tr_tensors, scalars)
 
-            pytorch_result = {func_name}_pytorch(*pt_args)
+            c_result = {func_name}_c(*c_args)
             triton_result = {func_name}_triton(*tr_args)
 
 {compare_str}
@@ -1558,7 +1516,10 @@ def run_test(func_name: str, test_file: Path) -> Tuple[bool, dict]:
 
 
 def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -> str:
-    """Generate performance benchmark script for a specific attempt."""
+    """Generate performance benchmark script for a specific attempt.
+
+    Compares Triton implementation against original TSVC C reference.
+    """
     arrays = func_spec['arrays']
     has_offset = func_spec['has_offset']
     has_2d = func_spec.get('has_2d_arrays', False)
@@ -1615,6 +1576,7 @@ def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -
     benchmark_code = f'''#!/usr/bin/env python3
 """
 Performance Benchmark for {func_name}
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import time
@@ -1623,9 +1585,10 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.{func_name}_baseline import {func_name}_pytorch
+    from c_reference.tsvc_all_reference import {func_name}_c
     from test19.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
@@ -1653,54 +1616,54 @@ def benchmark():
 
     print("="*70)
     print(f"Performance Benchmark: {func_name}")
+    print(f"Comparing Triton (GPU) vs TSVC C reference (CPU)")
     print(f"Array size: N={{N}}")
     print("="*70)
 
-    # Initialize arrays
+    # Initialize arrays on GPU
 {array_init_str}
 
-    pt_tensors = {{{', '.join([f'"{arr}": {arr}' for arr in available_arrays])}}}
+    # Create numpy arrays for C reference (on CPU)
+    c_arrays = {{{', '.join([f'"{arr}": {arr}.cpu().numpy().copy()' for arr in available_arrays])}}}
     tr_tensors = {{{', '.join([f'"{arr}": {arr}.clone()' for arr in available_arrays])}}}
     scalars = {{{', '.join([f'"{s}": {s}' for s in available_scalars])}}}
 
-    pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
+    c_args = build_args({func_name}_c, c_arrays, scalars)
     tr_args = build_args({func_name}_triton, tr_tensors, scalars)
 
-    pt_time = None
+    c_time = None
     tr_time = None
 
-    # Benchmark PyTorch (with separate timeout handling)
+    # Benchmark C reference (CPU, with separate timeout handling)
     try:
-        print(f"Warming up PyTorch baseline ({{num_warmup}} iterations)...")
+        print(f"Warming up C reference ({{num_warmup}} iterations)...")
         start_time = time.perf_counter()
         for i in range(num_warmup):
             if time.perf_counter() - start_time > timeout_per_section:
-                raise TimeoutError("PyTorch warmup timeout")
-            for arr in pt_tensors:
-                pt_tensors[arr] = pt_tensors[arr].clone()
-            pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
-            {func_name}_pytorch(*pt_args)
-        torch.cuda.synchronize()
+                raise TimeoutError("C reference warmup timeout")
+            # Reset arrays for each iteration
+            for arr in c_arrays:
+                c_arrays[arr] = c_arrays[arr].copy()
+            c_args = build_args({func_name}_c, c_arrays, scalars)
+            {func_name}_c(*c_args)
 
-        print(f"Benchmarking PyTorch baseline ({{num_iterations}} iterations)...")
-        torch.cuda.synchronize()
-        pt_start = time.perf_counter()
+        print(f"Benchmarking C reference ({{num_iterations}} iterations)...")
+        c_start = time.perf_counter()
         bench_start = time.perf_counter()
         for i in range(num_iterations):
             if time.perf_counter() - bench_start > timeout_per_section:
-                raise TimeoutError("PyTorch benchmark timeout")
-            for arr in pt_tensors:
-                pt_tensors[arr] = pt_tensors[arr].clone()
-            pt_args = build_args({func_name}_pytorch, pt_tensors, scalars)
-            {func_name}_pytorch(*pt_args)
-        torch.cuda.synchronize()
-        pt_time = (time.perf_counter() - pt_start) / num_iterations
-        print(f"  PyTorch time: {{pt_time*1000:.3f}} ms")
+                raise TimeoutError("C reference benchmark timeout")
+            for arr in c_arrays:
+                c_arrays[arr] = c_arrays[arr].copy()
+            c_args = build_args({func_name}_c, c_arrays, scalars)
+            {func_name}_c(*c_args)
+        c_time = (time.perf_counter() - c_start) / num_iterations
+        print(f"  C reference time: {{c_time*1000:.3f}} ms")
     except (TimeoutError, Exception) as e:
-        print(f"  PyTorch benchmark TIMEOUT or ERROR: {{e}}")
-        pt_time = None
+        print(f"  C reference benchmark TIMEOUT or ERROR: {{e}}")
+        c_time = None
 
-    # Benchmark Triton (with separate timeout handling)
+    # Benchmark Triton (GPU, with separate timeout handling)
     try:
         print(f"Warming up Triton implementation ({{num_warmup}} iterations)...")
         start_time = time.perf_counter()
@@ -1732,16 +1695,16 @@ def benchmark():
         tr_time = None
 
     # Calculate speedup (handle None cases)
-    if pt_time is not None and tr_time is not None and tr_time > 0:
-        speedup = pt_time / tr_time
+    if c_time is not None and tr_time is not None and tr_time > 0:
+        speedup = c_time / tr_time
     else:
         speedup = None
 
     print("="*70)
-    if pt_time is not None:
-        print(f"PyTorch time:  {{pt_time*1000:8.3f}} ms")
+    if c_time is not None:
+        print(f"C ref time:    {{c_time*1000:8.3f}} ms")
     else:
-        print(f"PyTorch time:  TIMEOUT")
+        print(f"C ref time:    TIMEOUT")
     if tr_time is not None:
         print(f"Triton time:   {{tr_time*1000:8.3f}} ms")
     else:
@@ -1753,10 +1716,10 @@ def benchmark():
     print("="*70)
 
     # Output machine-readable format for parsing (handle None values)
-    pt_time_ms = pt_time * 1000 if pt_time is not None else -1
+    c_time_ms = c_time * 1000 if c_time is not None else -1
     tr_time_ms = tr_time * 1000 if tr_time is not None else -1
     speedup_val = speedup if speedup is not None else -1
-    print(f"BENCHMARK_RESULT:{{pt_time_ms:.6f}},{{tr_time_ms:.6f}},{{speedup_val:.6f}}")
+    print(f"BENCHMARK_RESULT:{{c_time_ms:.6f}},{{tr_time_ms:.6f}},{{speedup_val:.6f}}")
 
 if __name__ == "__main__":
     try:
@@ -1775,7 +1738,7 @@ def run_benchmark(func_name: str, benchmark_file: Path) -> Optional[dict]:
     """Run performance benchmark and parse results.
 
     Returns:
-        dict with 'pytorch_time_ms', 'triton_time_ms', 'speedup', or None if failed
+        dict with 'c_ref_time_ms', 'triton_time_ms', 'speedup', or None if failed
     """
     try:
         result = subprocess.run(
@@ -1794,7 +1757,7 @@ def run_benchmark(func_name: str, benchmark_file: Path) -> Optional[dict]:
                 parts = line.split(':')[1].split(',')
                 if len(parts) == 3:
                     return {
-                        'pytorch_time_ms': float(parts[0]),
+                        'c_ref_time_ms': float(parts[0]),
                         'triton_time_ms': float(parts[1]),
                         'speedup': float(parts[2])
                     }
@@ -1817,14 +1780,12 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"  Offset: {func_spec['has_offset']}, Conditional: {func_spec['has_conditional']}, Reduction: {func_spec['has_reduction']}")
     print(f"{'=' * 70}")
 
-    baselines_dir = Path("baselines")
     test19_dir = Path("test19")
     llm_triton_dir = test19_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
     test_dir = Path("my_triton_implementations") / func_name
 
-    baselines_dir.mkdir(exist_ok=True)
     test19_dir.mkdir(exist_ok=True)
     llm_triton_dir.mkdir(exist_ok=True)
     func_code_dir.mkdir(exist_ok=True)
@@ -1837,11 +1798,10 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     (llm_triton_dir / "__init__.py").touch()
     (func_code_dir / "__init__.py").touch()
 
-    baseline_file = baselines_dir / f"{func_name}_baseline.py"
     test_file = test_dir / f"test_{func_name}_correctness.py"
 
     results = {
-        "baseline_generated": False,
+        "c_ref_available": True,  # C reference is pre-compiled and always available
         "triton_generated": False,
         "test_generated": False,
         "test_passed": False,
@@ -1849,23 +1809,11 @@ def process_function(func_name: str, func_spec: dict) -> dict:
         "final_error": None
     }
 
-    # Step 1: Generate PyTorch baseline (skip if exists)
-    if baseline_file.exists():
-        print(f"  Baseline already exists: {baseline_file}")
-        results["baseline_generated"] = True
-    else:
-        print(f"  Generating PyTorch baseline...")
-        code = generate_pytorch_baseline(func_name, func_spec)
-        if code:
-            with open(baseline_file, 'w') as f:
-                f.write(code)
-            print(f"  Saved to: {baseline_file}")
-            results["baseline_generated"] = True
-        else:
-            print(f"  Failed to generate baseline")
-            return results
+    # C reference is pre-compiled in c_reference/tsvc_all_reference.py
+    # No need to generate baseline - just verify C reference function exists
+    print(f"  Using TSVC C reference: {func_name}_c")
 
-    # Step 2: Generate Triton with retry loop (5+5 strategy)
+    # Step 1: Generate Triton with retry loop (5+5 strategy)
     # First 5 attempts: normal retry with error feedback
     # After 5 failures: reset and try 5 more times without showing last attempt
     original_prompt = None
@@ -2006,11 +1954,11 @@ def main():
     print(f"\n\n{'=' * 80}")
     print("SUMMARY")
     print(f"{'=' * 80}")
-    print(f"{'Function':<12} {'Baseline':<10} {'Triton':<10} {'Passed':<10} {'Attempts':<10} {'Speedup':<12}")
+    print(f"{'Function':<12} {'C Ref':<10} {'Triton':<10} {'Passed':<10} {'Attempts':<10} {'Speedup':<12}")
     print(f"{'-' * 80}")
 
     for func_name, results in all_results.items():
-        baseline = "Y" if results["baseline_generated"] else "N"
+        c_ref = "Y" if results.get("c_ref_available", True) else "N"
         triton = "Y" if results["triton_generated"] else "N"
         passed = "Y" if results["test_passed"] else "N"
         attempts = str(results["attempts"])
@@ -2018,22 +1966,22 @@ def main():
         if results.get("benchmark"):
             benchmark = results["benchmark"]
             speedup_val = benchmark.get("speedup", -1)
-            pt_time = benchmark.get("pytorch_time_ms", -1)
+            c_time = benchmark.get("c_ref_time_ms", -1)
             tr_time = benchmark.get("triton_time_ms", -1)
 
             if speedup_val == -1:
                 # Timeout case - calculate minimum/maximum speedup
                 timeout_ms = 60000  # 60 seconds timeout per section
-                if pt_time == -1 and tr_time == -1:
+                if c_time == -1 and tr_time == -1:
                     speedup = "Both timeout"
-                elif pt_time == -1 and tr_time > 0:
-                    # PyTorch timed out, Triton completed - calculate minimum speedup
+                elif c_time == -1 and tr_time > 0:
+                    # C reference timed out, Triton completed - calculate minimum speedup
                     min_speedup = timeout_ms / tr_time
-                    speedup = f">{min_speedup:.0f}x (PT>{timeout_ms/1000:.0f}s, TR:{tr_time:.2f}ms)"
-                elif tr_time == -1 and pt_time > 0:
-                    # Triton timed out, PyTorch completed - calculate maximum slowdown
-                    max_slowdown = timeout_ms / pt_time
-                    speedup = f"<{1/max_slowdown:.2f}x (PT:{pt_time:.2f}ms, TR>{timeout_ms/1000:.0f}s)"
+                    speedup = f">{min_speedup:.0f}x (C>{timeout_ms/1000:.0f}s, TR:{tr_time:.2f}ms)"
+                elif tr_time == -1 and c_time > 0:
+                    # Triton timed out, C reference completed - calculate maximum slowdown
+                    max_slowdown = timeout_ms / c_time
+                    speedup = f"<{1/max_slowdown:.2f}x (C:{c_time:.2f}ms, TR>{timeout_ms/1000:.0f}s)"
                 else:
                     speedup = "N/A"
             else:
@@ -2041,13 +1989,13 @@ def main():
         else:
             speedup = "-"
 
-        print(f"{func_name:<12} {baseline:<10} {triton:<10} {passed:<10} {attempts:<10} {speedup:<12}")
+        print(f"{func_name:<12} {c_ref:<10} {triton:<10} {passed:<10} {attempts:<10} {speedup:<12}")
 
     print(f"{'=' * 80}")
 
     # Count successes
     total = len(all_results)
-    baseline_ok = sum(1 for r in all_results.values() if r["baseline_generated"])
+    c_ref_ok = sum(1 for r in all_results.values() if r.get("c_ref_available", True))
     triton_ok = sum(1 for r in all_results.values() if r["triton_generated"])
     passed = sum(1 for r in all_results.values() if r["test_passed"])
     first_try = sum(1 for r in all_results.values() if r["test_passed"] and r["attempts"] == 1)
@@ -2064,22 +2012,22 @@ def main():
         min_speedup = min(speedups) if speedups else 0
         max_speedup = max(speedups) if speedups else 0
 
-    print(f"\nBaselines generated: {baseline_ok}/{total}")
+    print(f"\nC reference available: {c_ref_ok}/{total}")
     print(f"Triton generated: {triton_ok}/{total}")
     print(f"Tests passed: {passed}/{total}")
     print(f"  - Passed on first try: {first_try}")
     print(f"  - Passed after retry: {retried}")
     if benchmarked > 0:
         # Count timeout cases
-        pt_timeouts = sum(1 for r in all_results.values()
-                         if r.get("benchmark") and r["benchmark"].get("pytorch_time_ms") == -1)
+        c_ref_timeouts = sum(1 for r in all_results.values()
+                         if r.get("benchmark") and r["benchmark"].get("c_ref_time_ms") == -1)
         tr_timeouts = sum(1 for r in all_results.values()
                          if r.get("benchmark") and r["benchmark"].get("triton_time_ms") == -1)
         successful_benchmarks = len(speedups)
 
         print(f"\nPerformance benchmarks: {benchmarked}/{total}")
         print(f"  - Successful: {successful_benchmarks}")
-        print(f"  - PyTorch timeouts: {pt_timeouts}")
+        print(f"  - C reference timeouts: {c_ref_timeouts}")
         print(f"  - Triton timeouts: {tr_timeouts}")
         if successful_benchmarks > 0:
             print(f"  - Average speedup: {avg_speedup:.2f}x")
@@ -2111,7 +2059,7 @@ def main():
             }
 
         existing_results[func_name] = {
-            "baseline_generated": results["baseline_generated"],
+            "c_ref_available": results.get("c_ref_available", True),
             "triton_generated": results["triton_generated"],
             "test_passed": results["test_passed"],
             "attempts": results["attempts"],

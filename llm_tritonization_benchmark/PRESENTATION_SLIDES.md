@@ -34,9 +34,9 @@
                │   └─ 5+5 reset strategy
                │
                ├─► Test Infrastructure
-               │   ├─ PyTorch baseline generation
+               │   ├─ TSVC C reference (compiled shared library)
                │   ├─ Triton correctness testing
-               │   └─ Performance benchmarking
+               │   └─ Performance benchmarking vs C reference
                │
                └─► Results Collection
                    ├─ test{N}/llm_triton/  (generated code)
@@ -68,9 +68,10 @@
          │      - Triton compilation rules
          │      - Function signature requirements
          │
-         ├─► 4. Generate Baseline (PyTorch)
-         │      - Sequential implementation
-         │      - Correctness reference
+         ├─► 4. C Reference (Pre-compiled)
+         │      - Original TSVC C kernels
+         │      - Compiled as shared library (libtsvc_all.so)
+         │      - Python wrappers via ctypes
          │
          ├─► 5. Generate Triton Code
          │      ├─ Attempt 1: Initial generation
@@ -79,7 +80,7 @@
          │      └─ Attempts 7-10: Fresh tries
          │
          ├─► 6. Test Correctness
-         │      - Compare vs PyTorch baseline
+         │      - Compare vs TSVC C reference
          │      - Multiple input sizes
          │      - Tolerance: max_error < 1e-3
          │
@@ -173,7 +174,7 @@ For each function, automatically generates:
 # Auto-generated with timeout handling
 - 10 warmup iterations (60s timeout)
 - 100 benchmark iterations (60s timeout)
-- Record PyTorch and Triton times
+- Record C reference (CPU) and Triton (GPU) times
 - Calculate speedup ratio
 - Handle timeouts gracefully
 ```
@@ -207,68 +208,56 @@ For each function, automatically generates:
 
 # Part 2: Correctness Results
 
-## Historical Progress: Test Progression
+## Historical Progress
 
-```
-Test 1  (Nov 2025):   ~97/151 passed  (64.2%) - Initial baseline
-Test 2  (Nov 2025):  ~100/151 passed  (66.2%) - Bug fixes
-Test 3  (Nov 2025):  ~105/151 passed  (69.5%) - More fixes
-...
-Test 16 (Dec 8):     143/151 passed  (94.7%) - Major improvements
-Test 17 (Jan 13):    143/151 passed  (94.7%) - Benchmarking added
-Test 18 (Jan 13):    150/151 passed  (99.3%) - Nearly perfect! 🎉
-```
+*Note: Historical results were measured against LLM-generated PyTorch baseline.*
+*Results with TSVC C reference baseline will be measured in new test runs.*
 
-**Overall improvement: +53 functions (97→150, +54.6% relative)**
+### Design Evolution
+- Tests 1-18: PyTorch baseline (LLM-generated, potential bugs)
+- Test 19+: TSVC C reference (original ground truth)
+
+**Benefit of new design:** Removes baseline bugs, provides authoritative correctness reference.
 
 ---
 
-## Test 18: Current State (99.3% Pass Rate)
+## Current State (To Be Measured)
 
 ### Summary Metrics
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| ✅ **PASSING** | 150 | 99.3% |
-| ❌ **FAILING** | 1 | 0.7% |
-| 📊 **Benchmarked** | 150 | 99.3% |
-| ⚡ **Valid Speedups** | 99 | 65.6% |
-| ⏱️ **PyTorch Timeouts** | 51 | 33.8% |
+| ✅ **PASSING** | TBD | TBD |
+| ❌ **FAILING** | TBD | TBD |
+| 📊 **Benchmarked** | TBD | TBD |
+| ⚡ **Valid Speedups** | TBD | TBD |
+| ⏱️ **C Ref Timeouts** | TBD | TBD |
+
+*Note: Results will be measured against original TSVC C reference functions (ground truth).*
+*Previous results were measured against LLM-generated PyTorch baseline which may have contained bugs.*
 
 ### Pass Rate by Attempt
 | Attempt | New Passes | Cumulative | Rate |
 |---------|------------|------------|------|
-| Attempt 1 | 125 | 125 | 82.8% |
-| Attempt 2 | +14 | 139 | 92.1% |
-| Attempt 3 | +8 | 147 | 97.4% |
-| Attempt 4+ | +3 | 150 | 99.3% |
-
-**Key insight:** 82.8% pass on first try - LLM is highly reliable!
+| TBD | TBD | TBD | TBD |
 
 ---
 
-## Functions Fixed from Test 17 → Test 18 (+7)
+## Correctness Results (To Be Measured)
 
-| Function | Category | Fix Applied |
-|----------|----------|-------------|
-| ✅ s2111 | 2D diagonal with dependency | Improved masking |
-| ✅ s244 | Statement overwrite | Overwrite analysis |
-| ✅ s257 | Scalar expansion | Temporary variables |
-| ✅ s4116 | Indirect addressing | Atomic operations |
-| ✅ vpvtv | Vector function | Control flow |
-| ✅ vsumr | Vector sum reduction | Reduction pattern |
-| ✅ vtv | Vector function | Control flow |
+*Correctness results will be measured against original TSVC C reference functions.*
 
----
+### Key Changes from Previous Design
+- **Old baseline:** LLM-generated PyTorch code (potential bugs)
+- **New baseline:** Original TSVC C functions (ground truth)
+- **Benefit:** Removes potential baseline bugs, provides authoritative reference
 
-## Remaining Failure Analysis (1 function)
-
-### ❌ s421: Storage classes and equivalencing
+### Known Issue: s421
 
 **Error:** `ValueError: arange's arguments must be of type tl.constexpr`
 
 **Root Cause:** LLM consistently generates incorrect kernel signature
 ```python
-# Generated (WRONG) - all 10 attempts:
+# Generated (WRONG):
 @triton.jit
 def s421_kernel(xx_ptr, yy_ptr, a_ptr, n):
     BLOCK_SIZE = 256                    # ❌ Regular variable
@@ -280,11 +269,7 @@ def s421_kernel(xx_ptr, yy_ptr, a_ptr, n, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)  # ✅ Works!
 ```
 
-**Analysis:**
-- Prompt did NOT explicitly instruct about constexpr
-- LLM knows the pattern (used in 150 other functions)
-- But failed to apply it in this specific case
-- **Recommendation:** Add explicit constexpr instruction to prompt
+**Recommendation:** Add explicit constexpr instruction to prompt
 
 ---
 
@@ -292,30 +277,30 @@ def s421_kernel(xx_ptr, yy_ptr, a_ptr, n, BLOCK_SIZE: tl.constexpr):
 
 | Category | Total | Pass | Rate | Notes |
 |----------|-------|------|------|-------|
-| Single dimension ops | 13 | 13 | 100% | All pass |
-| Double dimensions | 6 | 6 | 100% | All pass |
-| Induction variables | 8 | 8 | 100% | All pass |
-| Global data flow | 3 | 3 | 100% | All pass |
-| Nonlinear dependence | 2 | 2 | 100% | All pass |
-| Interprocedural | 2 | 2 | 100% | All pass |
-| Control flow | 20 | 20 | 100% | All pass |
-| Statement reordering | 4 | 4 | 100% | All pass |
-| Loop distribution | 3 | 3 | 100% | All pass |
-| Loop interchange | 6 | 6 | 100% | All pass |
-| Node splitting | 5 | 5 | 100% | All pass |
-| Scalar expansion | 6 | 6 | 100% | All pass |
-| Reductions | 13 | 13 | 100% | All pass |
-| Recurrences | 3 | 3 | 100% | All pass |
-| Search loops | 2 | 2 | 100% | All pass |
-| Packing | 3 | 3 | 100% | All pass |
-| Loop rerolling | 3 | 3 | 100% | All pass |
-| Storage classes | 4 | 3 | **75%** | s421 fails |
-| Intrinsic functions | 3 | 3 | 100% | All pass |
-| Indirect addressing | 6 | 6 | 100% | All pass |
-| Vector operations | 9 | 9 | 100% | All pass |
-| Control loops | 6 | 6 | 100% | All pass |
+| Single dimension ops | 13 | TBD | TBD | |
+| Double dimensions | 6 | TBD | TBD | |
+| Induction variables | 8 | TBD | TBD | |
+| Global data flow | 3 | TBD | TBD | |
+| Nonlinear dependence | 2 | TBD | TBD | |
+| Interprocedural | 2 | TBD | TBD | |
+| Control flow | 20 | TBD | TBD | |
+| Statement reordering | 4 | TBD | TBD | |
+| Loop distribution | 3 | TBD | TBD | |
+| Loop interchange | 6 | TBD | TBD | |
+| Node splitting | 5 | TBD | TBD | |
+| Scalar expansion | 6 | TBD | TBD | |
+| Reductions | 13 | TBD | TBD | |
+| Recurrences | 3 | TBD | TBD | |
+| Search loops | 2 | TBD | TBD | |
+| Packing | 3 | TBD | TBD | |
+| Loop rerolling | 3 | TBD | TBD | |
+| Storage classes | 4 | TBD | TBD | s421 known issue |
+| Intrinsic functions | 3 | TBD | TBD | |
+| Indirect addressing | 6 | TBD | TBD | |
+| Vector operations | 9 | TBD | TBD | |
+| Control loops | 6 | TBD | TBD | |
 
-**Total:** 19/22 categories at 100% pass rate!
+*Results to be measured against TSVC C reference.*
 
 ---
 
@@ -330,18 +315,18 @@ def s421_kernel(xx_ptr, yy_ptr, a_ptr, n, BLOCK_SIZE: tl.constexpr):
 - ✅ Stream compaction with cumsum
 
 ### 2. **Static Analysis is Critical**
-Functions with analysis guidance: **98% pass rate**
-Functions without analysis: **95% pass rate**
+Static analysis guidance improves LLM generation quality.
 
 ### 3. **Retry Strategy Works**
-- 17.2% of functions need retries
-- Most succeed by attempt 3
-- 5+5 reset helps escape error loops
+- 5+5 reset strategy helps escape error loops
+- Most functions succeed within first few attempts
 
 ### 4. **Remaining Challenges**
 - Implicit requirements (constexpr)
 - Edge cases in prompt engineering
 - LLM consistency across attempts
+
+*Detailed statistics to be measured with C reference baseline.*
 
 ---
 
@@ -352,7 +337,7 @@ Functions without analysis: **95% pass rate**
 ### New Features
 ```
 ✅ 60-second timeout per section (warmup/benchmark)
-✅ Separate timeout tracking for PyTorch vs Triton
+✅ Separate timeout tracking for C reference vs Triton
 ✅ Minimum speedup calculation for timeouts
 ✅ Graceful error handling
 ✅ Machine-readable output format
@@ -360,17 +345,16 @@ Functions without analysis: **95% pass rate**
 
 ### Timeout Handling
 ```python
-# PyTorch timeout (51 functions):
+# C reference timeout:
 - Baseline too slow (>60s for 100 iterations)
-- Report: PyTorch time = -1ms
+- Report: C ref time = -1ms
 - Calculate minimum speedup: 60000ms / triton_time
 
-# Triton timeout (0 functions):
-- All Triton implementations complete quickly!
+# Triton timeout:
 - Report: Triton time = -1ms
 
 # Both timeout:
-- Report: "Both timeout" (didn't happen!)
+- Report: "Both timeout"
 ```
 
 ---
@@ -380,149 +364,118 @@ Functions without analysis: **95% pass rate**
 ### Overall Statistics
 | Metric | Value |
 |--------|-------|
-| **Benchmarked** | 150/151 (99.3%) |
-| **Valid Speedups** | 99/151 (65.6%) |
-| **PyTorch Timeouts** | 51/151 (33.8%) |
-| **Triton Timeouts** | 0/151 (0%) |
-| **Average Speedup** | 102.75x |
-| **Median Speedup** | ~50-100x |
+| **Benchmarked** | TBD |
+| **Valid Speedups** | TBD |
+| **C Ref Timeouts** | TBD |
+| **Triton Timeouts** | TBD |
+| **Average Speedup** | TBD |
+| **Median Speedup** | TBD |
+
+*Note: Performance statistics to be measured after running experiments with C reference baseline.*
 
 ### Performance Distribution
 ```
-Functions faster than baseline:  54/99 (54.5%)
-Functions slower than baseline:  45/99 (45.5%)
-Functions with PT timeout:       51/99 (51.5% - unmeasurably fast!)
+Functions faster than baseline:  TBD
+Functions slower than baseline:  TBD
+Functions with C ref timeout:    TBD
 ```
 
 ---
 
-## 🏆 Real Winners: PyTorch Timeout Functions (51)
+## Performance Results (To Be Measured)
 
-**These functions are so fast in Triton that PyTorch couldn't complete 100 iterations in 60 seconds!**
+Performance comparisons will be measured against the original TSVC C reference functions.
 
-### Top 10 "Unmeasurably Fast" Functions
-| Function | Triton Time | Min Speedup | Category |
-|----------|-------------|-------------|----------|
-| s231 | 0.07ms | **>916,170x** | Loop interchange |
-| s1112 | 0.07ms | **>896,901x** | Single dimension |
-| s2102 | 0.08ms | **>799,637x** | 2D diagonal |
-| vas | 0.08ms | **>784,437x** | Vector control |
-| s232 | 0.08ms | **>775,705x** | Loop interchange |
-| s2233 | 0.08ms | **>751,437x** | Loop distribution |
-| s316 | 0.08ms | **>712,411x** | Reduction |
-| s1232 | 0.08ms | **>706,947x** | Induction variables |
-| s1119 | 0.09ms | **>702,165x** | 2D with dependency |
-| s114 | 0.09ms | **>684,752x** | Double dimensions |
+### Expected Comparison
+| Comparison | Notes |
+|------------|-------|
+| Triton (GPU) vs C Reference (CPU) | Measures GPU acceleration benefit |
+| Single kernel launch vs sequential C | Shows parallelization advantage |
 
-**Note:** These are MINIMUM speedups. Actual speedups could be 10-100x higher!
+*Detailed performance results will be populated after running experiments.*
 
 ---
 
 ## Top 10 Measured Speedups
 
-| Function | Speedup | Triton (ms) | PyTorch (ms) | Category |
-|----------|---------|-------------|--------------|----------|
-| s171 | 5,815x | 0.10 | 581.53 | Symbolics/control flow |
-| s122 | 1,706x | 0.09 | 153.50 | Induction variables |
-| s317 | 992x | 0.13 | 128.96 | Reduction |
-| s141 | 983x | 0.07 | 68.80 | Nonlinear dependence |
-| s292 | 222x | 0.07 | 15.55 | Loop peeling |
-| s258 | 149x | 0.66 | 98.55 | Scalar expansion |
-| s132 | 118x | 0.08 | 9.44 | Global data flow |
-| s2275 | 109x | 0.19 | 20.72 | Loop distribution |
-| vbor | 4.3x | 0.30 | 1.29 | Vector control |
-| s31111 | 2.4x | 0.66 | 1.60 | Reduction |
+| Function | Speedup | Triton (ms) | C Ref (ms) | Category |
+|----------|---------|-------------|------------|----------|
+| TBD | TBD | TBD | TBD | TBD |
 
-**Why such high speedups?** PyTorch baseline uses sequential Python loops with scalar GPU ops → massive Python overhead!
+*Speedup measurements will be populated after running experiments with C reference baseline.*
+
+**Note:** C reference runs on CPU, Triton runs on GPU. Speedups reflect GPU parallelization benefits over sequential CPU execution.
 
 ---
 
 ## Performance by Category
 
-### 🚀 Excellent Performance (>100x average)
-| Category | Avg Speedup | Best Function |
-|----------|-------------|---------------|
-| Loop interchange | >800,000x | s231 (>916k) |
-| 2D diagonals | >750,000x | s2102 (>799k) |
-| Loop distribution | >700,000x | s2233 (>751k) |
-| Induction variables | 5,000x | s122 (1,706x) |
-| Symbolics | 2,900x | s171 (5,815x) |
+*Performance by category will be measured after running experiments with C reference baseline.*
 
-### ⚡ Good Performance (10-100x average)
-| Category | Avg Speedup | Note |
-|----------|-------------|------|
-| Nonlinear dependence | 492x | Loop transformations work well |
-| Loop peeling | 111x | Effective kernel fusion |
-| Global data flow | 59x | Good memory access patterns |
-| Scalar expansion | 50x | Effective use of registers |
-
-### 🐌 Limited Performance (<1x average)
-| Category | Avg Speedup | Reason |
-|----------|-------------|--------|
-| Simple operations | 0.04-0.08x | Kernel overhead dominates |
-| Reductions (simple) | 0.04x | PyTorch highly optimized |
-| Trivial loops | 0.00x | No computation to parallelize |
+### Expected Performance Tiers
+| Tier | Expected Categories | Notes |
+|------|---------------------|-------|
+| 🚀 High Speedup | Loop interchange, 2D operations | High parallelism potential |
+| ⚡ Good Speedup | Most vectorizable loops | Standard GPU acceleration |
+| 🐌 Limited Speedup | Simple operations, trivial loops | Kernel launch overhead may dominate |
 
 ---
 
-## Why Massive Speedups?
+## Why GPU Speedups?
 
-### Understanding the Numbers
+### Understanding the Comparison
 
-**The PyTorch Baseline:**
-```python
-# Sequential Python loop with scalar GPU operations
-for i in range(32000):
-    a[i] = b[i] + 1.0  # Each iteration: 3 kernel launches!
+**The C Reference (CPU):**
+```c
+// Sequential C loop on CPU
+for (int i = 0; i < 32000; i++) {
+    a[i] = b[i] + 1.0;
+}
 ```
-- **Problem:** ~96,000 kernel launches for N=32000
-- **Overhead:** Python loop + CUDA synchronization
-- **Reality:** Not a performance baseline, but a correctness reference
+- **Execution:** Sequential on single CPU core
+- **Optimizations:** Compiler auto-vectorization (SIMD)
+- **Baseline:** Represents optimized sequential C code
 
-**The Triton Implementation:**
+**The Triton Implementation (GPU):**
 ```python
-# Single kernel launch, fully parallel
+# Single kernel launch, massively parallel
 @triton.jit
 def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
-    # All 32000 elements in parallel!
+    # All 32000 elements in parallel across GPU cores!
 ```
-- **Benefit:** Single kernel launch
+- **Benefit:** Massive parallelism (thousands of threads)
 - **Parallelism:** All elements processed simultaneously
-- **Overhead:** Minimal
+- **Overhead:** Kernel launch + data transfer
 
-### More Realistic Comparisons
+### Comparison Context
 
-| Comparison Type | Expected Speedup |
-|-----------------|------------------|
-| Triton vs Sequential Python | **1,000-100,000x** ✅ (What we measure) |
-| Triton vs Vectorized PyTorch | **10-100x** (More realistic) |
-| Triton vs Hand-optimized CUDA | **0.5-2x** (State of art) |
+| Comparison Type | Notes |
+|-----------------|-------|
+| Triton (GPU) vs C (CPU) | Measures GPU parallelization benefit |
+| Triton vs Hand-optimized CUDA | ~0.5-2x (Triton generates efficient code) |
 
 ---
 
 ## Performance Insights
 
 ### 1. **What Triton Excels At**
-✅ Loop interchange patterns (>900k speedup)
-✅ 2D operations with dependencies (>700k)
-✅ Complex control flow (5,815x)
-✅ Induction variable computations (1,706x)
-✅ Stream compaction (>600k)
+✅ Loop interchange patterns (high parallelism)
+✅ 2D operations with dependencies
+✅ Complex control flow
+✅ Induction variable computations
+✅ Stream compaction
 
-### 2. **What Doesn't Benefit**
-❌ Trivial operations (0.00x - overhead dominates)
-❌ Simple reductions (0.04x - PyTorch optimized)
-❌ Single scalar updates (0.06x - no parallelism)
+### 2. **What May Not Benefit**
+❌ Trivial operations (kernel overhead may dominate)
+❌ Operations with limited parallelism
+❌ Single scalar updates (no parallelism to exploit)
 
-### 3. **The 60-Second Timeout Impact**
-- **Test 17:** Average 2,381x (misleading, no timeout)
-- **Test 18:** Average 103x (realistic, with timeout)
-- **Reality:** 51 functions "too fast to measure"
+### 3. **Key Observations**
+- GPU parallelization provides significant speedups for vectorizable loops
+- Kernel launch overhead affects small/trivial operations
+- C reference provides a more realistic baseline than Python loops
 
-### 4. **All Triton Implementations are Fast**
-- **0 Triton timeouts** - every implementation completes in <60s
-- **51 PyTorch timeouts** - baseline too slow
-- **Conclusion:** Triton is consistently fast, even for "slow" functions
+*Detailed performance insights will be updated after running experiments.*
 
 ---
 
@@ -537,12 +490,11 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - ✅ Retry logic with context reset
 - ✅ Timeout-aware benchmarking
 
-### Results
-- ✅ **99.3% correctness** (150/151 functions)
-- ✅ **82.8% first-try success** rate
-- ✅ **100% pass rate** in 19/22 categories
-- ✅ **0 Triton timeouts** (all fast!)
-- ✅ **51 "unmeasurably fast"** functions (>600,000x speedup)
+### Results (To Be Measured)
+- ⏳ **Correctness rate** (vs TSVC C reference)
+- ⏳ **First-try success rate**
+- ⏳ **Category pass rates**
+- ⏳ **Performance vs C reference**
 
 ---
 
@@ -554,9 +506,9 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - s421 failure: missing constexpr instruction
 
 ### 2. **Baseline Choice Matters**
-- Sequential Python ≠ performance baseline
-- Good for correctness validation
-- Misleading for performance comparison
+- Now using original TSVC C functions as baseline
+- C reference provides realistic CPU performance
+- GPU vs CPU comparison shows true parallelization benefit
 
 ### 3. **Static Analysis Helps**
 - 98% vs 95% pass rate with/without analysis
@@ -578,10 +530,10 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
    - Provide working example
    - Test on similar patterns
 
-2. **Improve benchmark baseline**
-   - Use vectorized PyTorch operations
+2. **Run performance experiments**
+   - Measure speedups vs C reference baseline
    - Compare against hand-written CUDA
-   - Measure compilation overhead
+   - Analyze kernel launch overhead impact
 
 3. **Add more analysis modules**
    - Memory access pattern analysis
@@ -621,11 +573,10 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - 5+5 retry strategy
 - Comprehensive testing
 
-**Results:**
-- 150/151 passed (99.3%)
-- 82.8% first-try success
-- 51 "unmeasurably fast" functions
-- 19/22 categories at 100%
+**Results (To Be Measured):**
+- Correctness vs TSVC C reference
+- First-try success rate
+- Performance speedups (GPU vs CPU)
 
 **Impact:**
 - Demonstrates LLM capability for specialized code generation
