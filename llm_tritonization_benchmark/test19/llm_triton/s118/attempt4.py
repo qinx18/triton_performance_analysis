@@ -1,73 +1,65 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s118_kernel(a_ptr, bb_ptr, i_val, BLOCK_SIZE: tl.constexpr):
-    j_offset = tl.program_id(0) * BLOCK_SIZE
-    j_offsets = j_offset + tl.arange(0, BLOCK_SIZE)
+def s118_kernel(a_ptr, bb_ptr, i_val, n_cols, BLOCK_SIZE: tl.constexpr):
+    # Get the number of j values to process (0 to i-1, so i total values)
+    n_j = i_val
     
-    j_mask = j_offsets < i_val
+    # Get block of j indices
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_mask = j_offsets < n_j
     
-    bb_offsets = j_offsets * 256 + i_val
-    a_read_offsets = i_val - j_offsets - 1
-    
+    # Load bb[j][i] values - bb is row-major, so bb[j][i] = bb[j * n_cols + i]
+    bb_offsets = j_offsets * n_cols + i_val
     bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
-    a_vals = tl.load(a_ptr + a_read_offsets, mask=j_mask, other=0.0)
     
-    products = bb_vals * a_vals
-    reduction = tl.sum(products)
+    # Load a[i-j-1] values
+    a_indices = i_val - j_offsets - 1
+    # Need to ensure a_indices are valid (>= 0)
+    a_mask = j_mask & (a_indices >= 0)
+    a_vals = tl.load(a_ptr + a_indices, mask=a_mask, other=0.0)
     
-    if tl.program_id(0) == 0:
-        current_a = tl.load(a_ptr + i_val)
-        tl.store(a_ptr + i_val, current_a + reduction)
-
-@triton.jit
-def s118_partial_kernel(a_ptr, bb_ptr, temp_ptr, i_val, BLOCK_SIZE: tl.constexpr):
-    j_offset = tl.program_id(0) * BLOCK_SIZE
-    j_offsets = j_offset + tl.arange(0, BLOCK_SIZE)
+    # Compute bb[j][i] * a[i-j-1] only where both masks are valid
+    products = tl.where(a_mask, bb_vals * a_vals, 0.0)
     
-    j_mask = j_offsets < i_val
+    # Sum all products
+    result = tl.sum(products)
     
-    bb_offsets = j_offsets * 256 + i_val
-    a_read_offsets = i_val - j_offsets - 1
-    
-    bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
-    a_vals = tl.load(a_ptr + a_read_offsets, mask=j_mask, other=0.0)
-    
-    products = bb_vals * a_vals
-    reduction = tl.sum(products)
-    
-    tl.store(temp_ptr + tl.program_id(0), reduction)
-
-@triton.jit  
-def s118_reduce_kernel(temp_ptr, a_ptr, i_val, num_blocks, BLOCK_SIZE: tl.constexpr):
-    block_offsets = tl.arange(0, BLOCK_SIZE)
-    mask = block_offsets < num_blocks
-    
-    partial_sums = tl.load(temp_ptr + block_offsets, mask=mask, other=0.0)
-    total_sum = tl.sum(partial_sums)
-    
-    if tl.program_id(0) == 0:
-        current_a = tl.load(a_ptr + i_val)
-        tl.store(a_ptr + i_val, current_a + total_sum)
+    return result
 
 def s118_triton(a, bb):
-    N = bb.shape[0]
+    # Get dimensions from input tensors
+    LEN_2D = bb.shape[0]
+    n_cols = bb.shape[1]
+    
+    # Sequential loop over i, parallel processing of j
     BLOCK_SIZE = 256
     
-    max_blocks = triton.cdiv(N, BLOCK_SIZE)
-    temp_buffer = torch.zeros(max_blocks, device=a.device, dtype=a.dtype)
-    
-    for i in range(1, N):
-        num_blocks = triton.cdiv(i, BLOCK_SIZE)
+    for i in range(1, LEN_2D):
+        # Calculate the result for this i value
+        partial_result = torch.zeros(1, dtype=a.dtype, device=a.device)
         
-        if num_blocks == 1:
-            grid = (1,)
-            s118_kernel[grid](a, bb, i, BLOCK_SIZE=BLOCK_SIZE)
-        else:
-            grid = (num_blocks,)
-            s118_partial_kernel[grid](a, bb, temp_buffer, i, BLOCK_SIZE=BLOCK_SIZE)
-            
-            reduce_grid = (1,)
-            s118_reduce_kernel[reduce_grid](temp_buffer, a, i, num_blocks, BLOCK_SIZE=BLOCK_SIZE)
+        s118_kernel[(1,)](
+            a, bb, i, n_cols, 
+            BLOCK_SIZE=BLOCK_SIZE
+        )
+        
+        # The kernel doesn't store the result, we need to accumulate manually
+        # Get block of j indices
+        j_vals = torch.arange(i, device=a.device)
+        
+        # Load bb[j][i] values
+        bb_vals = bb[j_vals, i]
+        
+        # Load a[i-j-1] values
+        a_indices = i - j_vals - 1
+        a_vals = a[a_indices]
+        
+        # Compute products and sum
+        products = bb_vals * a_vals
+        result = torch.sum(products)
+        
+        # Add to a[i]
+        a[i] += result

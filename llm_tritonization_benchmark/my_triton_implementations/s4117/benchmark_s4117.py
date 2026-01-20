@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Performance Benchmark for s4117
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import time
@@ -9,10 +10,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s4117_baseline import s4117_pytorch
-    from test16.llm_triton.s4117.attempt1 import s4117_triton
+    from c_reference.tsvc_all_reference import s4117_c
+    from test19.llm_triton.s4117.attempt1 import s4117_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -39,58 +41,58 @@ def benchmark():
 
     print("="*70)
     print(f"Performance Benchmark: s4117")
+    print(f"Comparing Triton (GPU) vs TSVC C reference (CPU)")
     print(f"Array size: N={N}")
     print("="*70)
 
-    # Initialize arrays
+    # Initialize arrays on GPU
     a = torch.randn(N, device='cuda', dtype=torch.float32)
     b = torch.randn(N, device='cuda', dtype=torch.float32)
     c = torch.randn(N, device='cuda', dtype=torch.float32)
     d = torch.randn(N, device='cuda', dtype=torch.float32)
     iterations = 1
 
-    pt_tensors = {"a": a, "b": b, "c": c, "d": d}
+    # Create numpy arrays for C reference (on CPU)
+    c_arrays = {"a": a.cpu().numpy().copy(), "b": b.cpu().numpy().copy(), "c": c.cpu().numpy().copy(), "d": d.cpu().numpy().copy()}
     tr_tensors = {"a": a.clone(), "b": b.clone(), "c": c.clone(), "d": d.clone()}
     scalars = {"iterations": iterations}
 
-    pt_args = build_args(s4117_pytorch, pt_tensors, scalars)
+    c_args = build_args(s4117_c, c_arrays, scalars)
     tr_args = build_args(s4117_triton, tr_tensors, scalars)
 
-    pt_time = None
+    c_time = None
     tr_time = None
 
-    # Benchmark PyTorch (with separate timeout handling)
+    # Benchmark C reference (CPU, with separate timeout handling)
     try:
-        print(f"Warming up PyTorch baseline ({num_warmup} iterations)...")
+        print(f"Warming up C reference ({num_warmup} iterations)...")
         start_time = time.perf_counter()
         for i in range(num_warmup):
             if time.perf_counter() - start_time > timeout_per_section:
-                raise TimeoutError("PyTorch warmup timeout")
-            for arr in pt_tensors:
-                pt_tensors[arr] = pt_tensors[arr].clone()
-            pt_args = build_args(s4117_pytorch, pt_tensors, scalars)
-            s4117_pytorch(*pt_args)
-        torch.cuda.synchronize()
+                raise TimeoutError("C reference warmup timeout")
+            # Reset arrays for each iteration
+            for arr in c_arrays:
+                c_arrays[arr] = c_arrays[arr].copy()
+            c_args = build_args(s4117_c, c_arrays, scalars)
+            s4117_c(*c_args)
 
-        print(f"Benchmarking PyTorch baseline ({num_iterations} iterations)...")
-        torch.cuda.synchronize()
-        pt_start = time.perf_counter()
+        print(f"Benchmarking C reference ({num_iterations} iterations)...")
+        c_start = time.perf_counter()
         bench_start = time.perf_counter()
         for i in range(num_iterations):
             if time.perf_counter() - bench_start > timeout_per_section:
-                raise TimeoutError("PyTorch benchmark timeout")
-            for arr in pt_tensors:
-                pt_tensors[arr] = pt_tensors[arr].clone()
-            pt_args = build_args(s4117_pytorch, pt_tensors, scalars)
-            s4117_pytorch(*pt_args)
-        torch.cuda.synchronize()
-        pt_time = (time.perf_counter() - pt_start) / num_iterations
-        print(f"  PyTorch time: {pt_time*1000:.3f} ms")
+                raise TimeoutError("C reference benchmark timeout")
+            for arr in c_arrays:
+                c_arrays[arr] = c_arrays[arr].copy()
+            c_args = build_args(s4117_c, c_arrays, scalars)
+            s4117_c(*c_args)
+        c_time = (time.perf_counter() - c_start) / num_iterations
+        print(f"  C reference time: {c_time*1000:.3f} ms")
     except (TimeoutError, Exception) as e:
-        print(f"  PyTorch benchmark TIMEOUT or ERROR: {e}")
-        pt_time = None
+        print(f"  C reference benchmark TIMEOUT or ERROR: {e}")
+        c_time = None
 
-    # Benchmark Triton (with separate timeout handling)
+    # Benchmark Triton (GPU, with separate timeout handling)
     try:
         print(f"Warming up Triton implementation ({num_warmup} iterations)...")
         start_time = time.perf_counter()
@@ -122,16 +124,16 @@ def benchmark():
         tr_time = None
 
     # Calculate speedup (handle None cases)
-    if pt_time is not None and tr_time is not None and tr_time > 0:
-        speedup = pt_time / tr_time
+    if c_time is not None and tr_time is not None and tr_time > 0:
+        speedup = c_time / tr_time
     else:
         speedup = None
 
     print("="*70)
-    if pt_time is not None:
-        print(f"PyTorch time:  {pt_time*1000:8.3f} ms")
+    if c_time is not None:
+        print(f"C ref time:    {c_time*1000:8.3f} ms")
     else:
-        print(f"PyTorch time:  TIMEOUT")
+        print(f"C ref time:    TIMEOUT")
     if tr_time is not None:
         print(f"Triton time:   {tr_time*1000:8.3f} ms")
     else:
@@ -143,10 +145,10 @@ def benchmark():
     print("="*70)
 
     # Output machine-readable format for parsing (handle None values)
-    pt_time_ms = pt_time * 1000 if pt_time is not None else -1
+    c_time_ms = c_time * 1000 if c_time is not None else -1
     tr_time_ms = tr_time * 1000 if tr_time is not None else -1
     speedup_val = speedup if speedup is not None else -1
-    print(f"BENCHMARK_RESULT:{pt_time_ms:.6f},{tr_time_ms:.6f},{speedup_val:.6f}")
+    print(f"BENCHMARK_RESULT:{c_time_ms:.6f},{tr_time_ms:.6f},{speedup_val:.6f}")
 
 if __name__ == "__main__":
     try:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s132
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import inspect
@@ -8,10 +9,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s132_baseline import s132_pytorch
-    from test16.llm_triton.s132.attempt1 import s132_triton
+    from c_reference.tsvc_all_reference import s132_c
+    from test19.llm_triton.s132.attempt10 import s132_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -36,6 +38,7 @@ def test_correctness():
 
     print("="*70)
     print(f"Correctness Testing: s132")
+    print("Comparing Triton vs TSVC C reference")
     print("="*70)
 
     for N in test_sizes:
@@ -49,27 +52,29 @@ def test_correctness():
             j = 1
             k = 0
 
-            aa_pt = aa.clone()
-            b_pt = b.clone()
-            c_pt = c.clone()
+            aa_c = aa.cpu().numpy().copy()
+            b_c = b.cpu().numpy().copy()
+            c_c = c.cpu().numpy().copy()
 
             aa_tr = aa.clone()
             b_tr = b.clone()
             c_tr = c.clone()
 
-            pt_tensors = {"aa": aa_pt, "b": b_pt, "c": c_pt}
+            c_tensors = {"aa": aa_c, "b": b_c, "c": c_c}
             tr_tensors = {"aa": aa_tr, "b": b_tr, "c": c_tr}
             scalars = {"iterations": iterations, "j": j, "k": k}
 
-            pt_args = build_args(s132_pytorch, pt_tensors, scalars)
+            c_args = build_args(s132_c, c_tensors, scalars)
             tr_args = build_args(s132_triton, tr_tensors, scalars)
 
-            pytorch_result = s132_pytorch(*pt_args)
+            c_result = s132_c(*c_args)
             triton_result = s132_triton(*tr_args)
 
-            max_error = torch.max(torch.abs(aa_pt - aa_tr)).item()
+            # Convert C result back to torch for comparison
+            aa_c_torch = torch.from_numpy(aa_c).cuda()
+            max_error = torch.max(torch.abs(aa_c_torch - aa_tr)).item()
 
-            passed = max_error < 1e-3 or torch.allclose(aa_pt, aa_tr, rtol=1e-3, atol=1e-3)
+            passed = max_error < 1e-3 or torch.allclose(aa_c_torch, aa_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

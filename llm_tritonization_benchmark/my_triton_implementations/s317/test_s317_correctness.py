@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s317
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import inspect
@@ -8,10 +9,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s317_baseline import s317_pytorch
-    from test16.llm_triton.s317.attempt2 import s317_triton
+    from c_reference.tsvc_all_reference import s317_c
+    from test19.llm_triton.s317.attempt1 import s317_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -36,6 +38,7 @@ def test_correctness():
 
     print("="*70)
     print(f"Correctness Testing: s317")
+    print("Comparing Triton vs TSVC C reference")
     print("="*70)
 
     for N in test_sizes:
@@ -48,14 +51,14 @@ def test_correctness():
 
             pass
 
-            pt_tensors = {}
+            c_tensors = {}
             tr_tensors = {}
             scalars = {"iterations": iterations}
 
-            pt_args = build_args(s317_pytorch, pt_tensors, scalars)
+            c_args = build_args(s317_c, c_tensors, scalars)
             tr_args = build_args(s317_triton, tr_tensors, scalars)
 
-            pytorch_result = s317_pytorch(*pt_args)
+            c_result = s317_c(*c_args)
             triton_result = s317_triton(*tr_args)
 
             max_error = 0.0

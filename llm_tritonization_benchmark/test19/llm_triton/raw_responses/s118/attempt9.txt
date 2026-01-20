@@ -1,10 +1,10 @@
 
 ## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 2.78e+08
+**Max error observed**: 9.32e+06
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -19,36 +19,37 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s118_kernel(a_ptr, bb_ptr, i_val, num_j, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+def s118_kernel(a_ptr, bb_ptr, i_val, N, BLOCK_SIZE: tl.constexpr):
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    mask = j_offsets < i_val
     
-    j_start = pid * BLOCK_SIZE
-    j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
+    # Load bb[j][i] values - bb is row-major, so bb[j][i] = bb[j*N + i]
+    bb_offsets = j_offsets * N + i_val
+    bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask, other=0.0)
     
-    j_mask = j_offsets < num_j
-    
-    bb_offsets = j_offsets * 256 + i_val
-    bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
-    
+    # Load a[i-j-1] values
     a_indices = i_val - j_offsets - 1
-    a_vals = tl.load(a_ptr + a_indices, mask=j_mask, other=0.0)
+    valid_mask = mask & (a_indices >= 0)
+    a_vals = tl.load(a_ptr + a_indices, mask=valid_mask, other=0.0)
     
+    # Apply valid_mask to bb_vals as well
+    bb_vals = tl.where(valid_mask, bb_vals, 0.0)
+    
+    # Compute products and sum
     products = bb_vals * a_vals
-    result = tl.sum(products)
+    result = tl.sum(products, axis=0)
     
-    tl.atomic_add(a_ptr + i_val, result)
+    # Add to a[i]
+    old_val = tl.load(a_ptr + i_val)
+    tl.store(a_ptr + i_val, old_val + result)
 
 def s118_triton(a, bb):
-    LEN_2D = bb.shape[0]
-    BLOCK_SIZE = 64
+    N = bb.shape[0]
+    BLOCK_SIZE = 256
     
-    for i in range(1, LEN_2D):
-        num_j = i
-        if num_j > 0:
-            grid = (triton.cdiv(num_j, BLOCK_SIZE),)
-            s118_kernel[grid](a, bb, i, num_j, BLOCK_SIZE=BLOCK_SIZE)
-    
-    return a
+    for i in range(1, N):
+        grid = (1,)
+        s118_kernel[grid](a, bb, i, N, BLOCK_SIZE=BLOCK_SIZE)
 ```
 
 
@@ -141,7 +142,7 @@ for (int i = 1; i < LEN_2D; i++) {
 Please generate a complete Triton implementation that:
 1. Includes a @triton.jit kernel function named `s118_kernel`
 2. Includes a Python wrapper function named `s118_triton`
-3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation
+3. The wrapper should accept ONLY the tensor arrays used in the computation
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
@@ -237,34 +238,30 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s118_kernel(a_ptr, bb_ptr, i_val, num_j, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+def s118_kernel(a_ptr, bb_ptr, i_val, N, BLOCK_SIZE: tl.constexpr):
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    mask = j_offsets < i_val
     
-    j_start = pid * BLOCK_SIZE
-    j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
+    # Load bb[j][i] values - bb is row-major, so bb[j][i] = bb[j*N + i]
+    bb_offsets = j_offsets * N + i_val
+    bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask, other=0.0)
     
-    j_mask = j_offsets < num_j
+    # Load a[i-j-1] values
+    a_indices = i_val - j_offsets - 1
+    a_vals = tl.load(a_ptr + a_indices, mask=mask, other=0.0)
     
-    bb_offsets = j_offsets * 256 + i_val
-    bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
-    
-    a_read_indices = i_val - j_offsets - 1
-    a_read_mask = j_mask & (a_read_indices >= 0)
-    a_vals = tl.load(a_ptr + a_read_indices, mask=a_read_mask, other=0.0)
-    
+    # Compute products and sum
     products = bb_vals * a_vals
     result = tl.sum(products, axis=0)
     
-    tl.atomic_add(a_ptr + i_val, result)
+    # Add to a[i]
+    old_val = tl.load(a_ptr + i_val)
+    tl.store(a_ptr + i_val, old_val + result)
 
 def s118_triton(a, bb):
-    LEN_2D = bb.shape[0]
-    BLOCK_SIZE = 64
+    N = bb.shape[0]
+    BLOCK_SIZE = 256
     
-    for i in range(1, LEN_2D):
-        num_j = i
-        if num_j > 0:
-            grid = (triton.cdiv(num_j, BLOCK_SIZE),)
-            s118_kernel[grid](a, bb, i, num_j, BLOCK_SIZE=BLOCK_SIZE)
-    
-    return a
+    for i in range(1, N):
+        grid = (1,)
+        s118_kernel[grid](a, bb, i, N, BLOCK_SIZE=BLOCK_SIZE)

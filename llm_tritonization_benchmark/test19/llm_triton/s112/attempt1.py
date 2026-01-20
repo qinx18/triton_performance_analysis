@@ -1,6 +1,5 @@
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s112_kernel(a_ptr, a_copy_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
@@ -20,11 +19,11 @@ def s112_kernel(a_ptr, a_copy_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
     
     # Store to a[i+1] (offset by +1)
     store_indices = indices + 1
-    store_mask = mask & (store_indices < n)
+    store_mask = mask & (store_indices < (n + 1))
     tl.store(a_ptr + store_indices, result, mask=store_mask)
 
 def s112_triton(a, b):
-    n = a.shape[0] - 1  # Process indices 0 to n-2 (i.e., n-1 elements)
+    n = a.shape[0] - 1  # Process indices 0 to LEN_1D-2
     
     # Create read-only copy to handle WAR dependencies
     a_copy = a.clone()
@@ -33,5 +32,6 @@ def s112_triton(a, b):
     grid = (triton.cdiv(n, BLOCK_SIZE),)
     
     s112_kernel[grid](
-        a, a_copy, b, n, BLOCK_SIZE=BLOCK_SIZE
+        a, a_copy, b, n,
+        BLOCK_SIZE=BLOCK_SIZE
     )

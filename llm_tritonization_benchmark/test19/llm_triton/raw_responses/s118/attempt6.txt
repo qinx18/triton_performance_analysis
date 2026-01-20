@@ -1,10 +1,10 @@
 
 ## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected PyTorch baseline.
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 2.03e+07
+**Max error observed**: 5.74e+07
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -107,7 +107,7 @@ for (int i = 1; i < LEN_2D; i++) {
 Please generate a complete Triton implementation that:
 1. Includes a @triton.jit kernel function named `s118_kernel`
 2. Includes a Python wrapper function named `s118_triton`
-3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation
+3. The wrapper should accept ONLY the tensor arrays used in the computation
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
@@ -204,46 +204,30 @@ import triton.language as tl
 
 @triton.jit
 def s118_kernel(a_ptr, bb_ptr, i_val, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for j dimension
-    pid = tl.program_id(0)
-    
-    # Calculate j values for this block
-    j_start = pid * BLOCK_SIZE
-    j_offsets = j_start + tl.arange(0, BLOCK_SIZE)
-    
-    # Mask for valid j values (j <= i-1)
-    j_mask = j_offsets <= (i_val - 1)
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    mask = j_offsets < i_val
     
     # Load bb[j][i] values
-    bb_offsets = j_offsets * 256 + i_val  # bb is 256x256
-    bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
+    bb_offsets = j_offsets * 256 + i_val  # bb is 256x256, row-major
+    bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask, other=0.0)
     
     # Load a[i-j-1] values
     a_indices = i_val - j_offsets - 1
-    a_mask = j_mask & (a_indices >= 0)
-    a_vals = tl.load(a_ptr + a_indices, mask=a_mask, other=0.0)
+    a_vals = tl.load(a_ptr + a_indices, mask=mask, other=0.0)
     
     # Compute products and sum
     products = bb_vals * a_vals
-    products = tl.where(a_mask, products, 0.0)
     result = tl.sum(products)
     
-    # Atomically add to a[i]
-    if pid == 0:  # Only one thread should update
-        tl.atomic_add(a_ptr + i_val, result)
+    # Add to a[i]
+    old_val = tl.load(a_ptr + i_val)
+    tl.store(a_ptr + i_val, old_val + result)
 
 def s118_triton(a, bb):
-    LEN_2D = bb.shape[0]
-    BLOCK_SIZE = 64
+    N = bb.shape[0]  # LEN_2D
+    BLOCK_SIZE = 256
     
-    # Sequential loop over i
-    for i in range(1, LEN_2D):
-        # Number of j values (0 to i-1)
-        num_j = i
-        
-        if num_j > 0:
-            # Launch kernel for this i
-            grid = (triton.cdiv(num_j, BLOCK_SIZE),)
+    for i in range(1, N):
+        if i > 0:  # Only launch kernel if there are j values to process
+            grid = (1,)
             s118_kernel[grid](a, bb, i, BLOCK_SIZE=BLOCK_SIZE)
-    
-    return a

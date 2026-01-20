@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s122
-# Generated: 2026-01-13 22:39:38
+# Generated: 2026-01-19 10:04:35
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -66,7 +66,7 @@ real_t s122(struct args_t * func_args)
 Please generate a complete Triton implementation that:
 1. Includes a @triton.jit kernel function named `s122_kernel`
 2. Includes a Python wrapper function named `s122_triton`
-3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation
+3. The wrapper should accept ONLY the tensor arrays used in the computation
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
@@ -161,45 +161,45 @@ import torch
 
 @triton.jit
 def s122_kernel(a_ptr, b_ptr, n1, n3, N, BLOCK_SIZE: tl.constexpr):
-    # Calculate the number of iterations in the original loop
-    # Original loop: for (int i = n1-1; i < N; i += n3)
-    num_iterations = (N - (n1 - 1) + n3 - 1) // n3  # Ceiling division
+    # Calculate number of iterations in the original loop
+    num_iterations = (N - (n1 - 1) + n3 - 1) // n3
     
-    # Get block of iterations to process
-    block_start = tl.program_id(0) * BLOCK_SIZE
-    iteration_offsets = tl.arange(0, BLOCK_SIZE)
-    iteration_ids = block_start + iteration_offsets
-    iteration_mask = iteration_ids < num_iterations
+    # Get program ID and calculate block boundaries
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     
-    # Calculate i values: i = (n1-1) + iteration_id * n3
-    i_values = (n1 - 1) + iteration_ids * n3
+    # Create offsets for this block
+    offsets = tl.arange(0, BLOCK_SIZE)
+    iteration_indices = block_start + offsets
     
-    # Calculate k values: k = 1 + iteration_id (since j=1 and k += j each iteration)
-    k_values = 1 + iteration_ids
+    # Mask for valid iterations
+    mask = iteration_indices < num_iterations
+    
+    # Calculate i values: i = (n1-1) + iteration_index * n3
+    i_values = (n1 - 1) + iteration_indices * n3
+    
+    # Calculate k values: k = j * (iteration_index + 1), where j = 1
+    k_values = iteration_indices + 1
     
     # Calculate b indices: LEN_1D - k = N - k_values
     b_indices = N - k_values
     
-    # Create masks for valid accesses
-    valid_i = (i_values >= 0) & (i_values < N) & iteration_mask
-    valid_b = (b_indices >= 0) & (b_indices < N) & iteration_mask
+    # Load from a and b arrays
+    a_values = tl.load(a_ptr + i_values, mask=mask)
+    b_values = tl.load(b_ptr + b_indices, mask=mask)
     
-    # Load values
-    a_vals = tl.load(a_ptr + i_values, mask=valid_i, other=0.0)
-    b_vals = tl.load(b_ptr + b_indices, mask=valid_b, other=0.0)
+    # Perform computation: a[i] += b[N - k]
+    result = a_values + b_values
     
-    # Compute and store
-    result = a_vals + b_vals
-    tl.store(a_ptr + i_values, result, mask=valid_i & valid_b)
+    # Store result back to a
+    tl.store(a_ptr + i_values, result, mask=mask)
 
 def s122_triton(a, b, n1, n3):
     N = a.shape[0]
     
-    # Calculate number of iterations
-    if n1 - 1 >= N:
-        return  # No iterations
-    
+    # Calculate number of iterations in the original loop
     num_iterations = (N - (n1 - 1) + n3 - 1) // n3
+    
     if num_iterations <= 0:
         return
     

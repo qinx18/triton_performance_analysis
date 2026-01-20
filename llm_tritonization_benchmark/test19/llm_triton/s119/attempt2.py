@@ -1,49 +1,49 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s119_kernel(aa_ptr, bb_ptr, diag_val, N, BLOCK_SIZE: tl.constexpr):
+def s119_kernel(aa_ptr, bb_ptr, diag, start_i, end_i, N, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    block_start = pid * BLOCK_SIZE
     
-    # For diagonal diag_val, calculate valid range of i
-    start_i = tl.maximum(1, diag_val - N + 1)
-    end_i = tl.minimum(diag_val - 1, N - 1)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
+    mask = (indices < (end_i - start_i)) & (indices >= 0)
     
-    # Calculate i and j for this block
-    i = start_i + offsets
-    j = diag_val - i
+    i_vals = start_i + indices
+    j_vals = diag - i_vals
     
-    # Create mask for valid elements
-    mask = (i <= end_i) & (i >= 1) & (j >= 1) & (j < N)
+    # Check bounds
+    i_mask = (i_vals >= 1) & (i_vals < N)
+    j_mask = (j_vals >= 1) & (j_vals < N)
+    valid_mask = mask & i_mask & j_mask
     
-    # Calculate indices
-    aa_idx = i * N + j
-    bb_idx = i * N + j
-    prev_aa_idx = (i - 1) * N + (j - 1)
+    # Load aa[i-1][j-1] and bb[i][j]
+    aa_read_offsets = (i_vals - 1) * N + (j_vals - 1)
+    bb_read_offsets = i_vals * N + j_vals
+    aa_write_offsets = i_vals * N + j_vals
     
-    # Load previous aa value and current bb value
-    aa_prev = tl.load(aa_ptr + prev_aa_idx, mask=mask, other=0.0)
-    bb_val = tl.load(bb_ptr + bb_idx, mask=mask, other=0.0)
+    aa_vals = tl.load(aa_ptr + aa_read_offsets, mask=valid_mask, other=0.0)
+    bb_vals = tl.load(bb_ptr + bb_read_offsets, mask=valid_mask, other=0.0)
     
-    # Compute result and store
-    result = aa_prev + bb_val
-    tl.store(aa_ptr + aa_idx, result, mask=mask)
+    result = aa_vals + bb_vals
+    
+    tl.store(aa_ptr + aa_write_offsets, result, mask=valid_mask)
 
 def s119_triton(aa, bb):
     N = aa.shape[0]
     BLOCK_SIZE = 256
     
-    # Process each anti-diagonal sequentially
+    # Process anti-diagonals sequentially
     for diag in range(2, 2 * N):
-        start_i = max(1, diag - N + 1)
-        end_i = min(diag - 1, N - 1)
+        start_i = max(1, diag - (N - 1))
+        end_i = min(diag - 1, N - 1) + 1
         
-        if start_i <= end_i:
-            num_elements = end_i - start_i + 1
+        if start_i < end_i:
+            num_elements = end_i - start_i
             grid = (triton.cdiv(num_elements, BLOCK_SIZE),)
             
             s119_kernel[grid](
-                aa, bb, diag, N, BLOCK_SIZE=BLOCK_SIZE
+                aa, bb, diag, start_i, end_i, N, BLOCK_SIZE=BLOCK_SIZE
             )

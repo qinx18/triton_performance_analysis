@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s423
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import inspect
@@ -8,10 +9,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s423_baseline import s423_pytorch
-    from test16.llm_triton.s423.attempt1 import s423_triton
+    from c_reference.tsvc_all_reference import s423_c
+    from test19.llm_triton.s423.attempt10 import s423_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -36,6 +38,7 @@ def test_correctness():
 
     print("="*70)
     print(f"Correctness Testing: s423")
+    print("Comparing Triton vs TSVC C reference")
     print("="*70)
 
     for N in test_sizes:
@@ -46,25 +49,27 @@ def test_correctness():
             flat_2d_array = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)
             iterations = 1
 
-            a_pt = a.clone()
-            flat_2d_array_pt = flat_2d_array.clone()
+            a_c = a.cpu().numpy().copy()
+            flat_2d_array_c = flat_2d_array.cpu().numpy().copy()
 
             a_tr = a.clone()
             flat_2d_array_tr = flat_2d_array.clone()
 
-            pt_tensors = {"a": a_pt, "flat_2d_array": flat_2d_array_pt}
+            c_tensors = {"a": a_c, "flat_2d_array": flat_2d_array_c}
             tr_tensors = {"a": a_tr, "flat_2d_array": flat_2d_array_tr}
             scalars = {"iterations": iterations}
 
-            pt_args = build_args(s423_pytorch, pt_tensors, scalars)
+            c_args = build_args(s423_c, c_tensors, scalars)
             tr_args = build_args(s423_triton, tr_tensors, scalars)
 
-            pytorch_result = s423_pytorch(*pt_args)
+            c_result = s423_c(*c_args)
             triton_result = s423_triton(*tr_args)
 
-            max_error = torch.max(torch.abs(flat_2d_array_pt - flat_2d_array_tr)).item()
+            # Convert C result back to torch for comparison
+            flat_2d_array_c_torch = torch.from_numpy(flat_2d_array_c).cuda()
+            max_error = torch.max(torch.abs(flat_2d_array_c_torch - flat_2d_array_tr)).item()
 
-            passed = max_error < 1e-3 or torch.allclose(flat_2d_array_pt, flat_2d_array_tr, rtol=1e-3, atol=1e-3)
+            passed = max_error < 1e-3 or torch.allclose(flat_2d_array_c_torch, flat_2d_array_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s4116
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import inspect
@@ -8,10 +9,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s4116_baseline import s4116_pytorch
-    from test16.llm_triton.s4116.attempt1 import s4116_triton
+    from c_reference.tsvc_all_reference import s4116_c
+    from test19.llm_triton.s4116.attempt10 import s4116_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -36,6 +38,7 @@ def test_correctness():
 
     print("="*70)
     print(f"Correctness Testing: s4116")
+    print("Comparing Triton vs TSVC C reference")
     print("="*70)
 
     for N in test_sizes:
@@ -49,31 +52,31 @@ def test_correctness():
             iterations = 1
             j = 1
 
-            a_pt = a.clone()
-            aa_pt = aa.clone()
-            ip_pt = ip.clone()
+            a_c = a.cpu().numpy().copy()
+            aa_c = aa.cpu().numpy().copy()
+            ip_c = ip.cpu().numpy().copy()
 
             a_tr = a.clone()
             aa_tr = aa.clone()
             ip_tr = ip.clone()
 
-            pt_tensors = {"a": a_pt, "aa": aa_pt, "ip": ip_pt}
+            c_tensors = {"a": a_c, "aa": aa_c, "ip": ip_c}
             tr_tensors = {"a": a_tr, "aa": aa_tr, "ip": ip_tr}
             scalars = {"inc": inc, "iterations": iterations, "j": j}
 
-            pt_args = build_args(s4116_pytorch, pt_tensors, scalars)
+            c_args = build_args(s4116_c, c_tensors, scalars)
             tr_args = build_args(s4116_triton, tr_tensors, scalars)
 
-            pytorch_result = s4116_pytorch(*pt_args)
+            c_result = s4116_c(*c_args)
             triton_result = s4116_triton(*tr_args)
 
             # Pure reduction: compare return values
-            if isinstance(pytorch_result, (int, float)):
-                pt_val = pytorch_result
-            elif isinstance(pytorch_result, torch.Tensor):
-                pt_val = pytorch_result.item() if pytorch_result.numel() == 1 else pytorch_result.sum().item()
+            if isinstance(c_result, (int, float)):
+                c_val = c_result
+            elif isinstance(c_result, np.ndarray):
+                c_val = c_result.item() if c_result.size == 1 else c_result.sum()
             else:
-                pt_val = float(pytorch_result)
+                c_val = float(c_result)
 
             if isinstance(triton_result, (int, float)):
                 tr_val = triton_result
@@ -82,9 +85,9 @@ def test_correctness():
             else:
                 tr_val = float(triton_result)
 
-            max_error = abs(pt_val - tr_val)
+            max_error = abs(c_val - tr_val)
 
-            passed = max_error < 1e-3 or (abs(pt_val) > 1e-6 and max_error / abs(pt_val) < 1e-3)
+            passed = max_error < 1e-3 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

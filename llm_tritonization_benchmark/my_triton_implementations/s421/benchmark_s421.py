@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Performance Benchmark for s421
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import time
@@ -9,10 +10,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s421_baseline import s421_pytorch
-    from test16.llm_triton.s421.attempt1 import s421_triton
+    from c_reference.tsvc_all_reference import s421_c
+    from test19.llm_triton.s421.attempt1 import s421_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -35,77 +37,117 @@ def benchmark():
     N = 32000
     num_warmup = 10
     num_iterations = 100
+    timeout_per_section = 60  # 60 seconds per section (warmup/benchmark)
 
     print("="*70)
     print(f"Performance Benchmark: s421")
+    print(f"Comparing Triton (GPU) vs TSVC C reference (CPU)")
     print(f"Array size: N={N}")
     print("="*70)
 
-    # Initialize arrays
+    # Initialize arrays on GPU
     a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
     xx = torch.randn(N + 10, device='cuda', dtype=torch.float32)
     yy = torch.randn(N + 10, device='cuda', dtype=torch.float32)
     iterations = 1
 
-    pt_tensors = {"a": a, "xx": xx, "yy": yy}
+    # Create numpy arrays for C reference (on CPU)
+    c_arrays = {"a": a.cpu().numpy().copy(), "xx": xx.cpu().numpy().copy(), "yy": yy.cpu().numpy().copy()}
     tr_tensors = {"a": a.clone(), "xx": xx.clone(), "yy": yy.clone()}
     scalars = {"iterations": iterations}
 
-    pt_args = build_args(s421_pytorch, pt_tensors, scalars)
+    c_args = build_args(s421_c, c_arrays, scalars)
     tr_args = build_args(s421_triton, tr_tensors, scalars)
 
-    # Warmup PyTorch
-    print(f"Warming up PyTorch baseline ({num_warmup} iterations)...")
-    for _ in range(num_warmup):
-        for arr in pt_tensors:
-            pt_tensors[arr] = pt_tensors[arr].clone()
-        pt_args = build_args(s421_pytorch, pt_tensors, scalars)
-        s421_pytorch(*pt_args)
-    torch.cuda.synchronize()
+    c_time = None
+    tr_time = None
 
-    # Benchmark PyTorch
-    print(f"Benchmarking PyTorch baseline ({num_iterations} iterations)...")
-    torch.cuda.synchronize()
-    pt_start = time.perf_counter()
-    for _ in range(num_iterations):
-        for arr in pt_tensors:
-            pt_tensors[arr] = pt_tensors[arr].clone()
-        pt_args = build_args(s421_pytorch, pt_tensors, scalars)
-        s421_pytorch(*pt_args)
-    torch.cuda.synchronize()
-    pt_time = (time.perf_counter() - pt_start) / num_iterations
+    # Benchmark C reference (CPU, with separate timeout handling)
+    try:
+        print(f"Warming up C reference ({num_warmup} iterations)...")
+        start_time = time.perf_counter()
+        for i in range(num_warmup):
+            if time.perf_counter() - start_time > timeout_per_section:
+                raise TimeoutError("C reference warmup timeout")
+            # Reset arrays for each iteration
+            for arr in c_arrays:
+                c_arrays[arr] = c_arrays[arr].copy()
+            c_args = build_args(s421_c, c_arrays, scalars)
+            s421_c(*c_args)
 
-    # Warmup Triton
-    print(f"Warming up Triton implementation ({num_warmup} iterations)...")
-    for _ in range(num_warmup):
-        for arr in tr_tensors:
-            tr_tensors[arr] = tr_tensors[arr].clone()
-        tr_args = build_args(s421_triton, tr_tensors, scalars)
-        s421_triton(*tr_args)
-    torch.cuda.synchronize()
+        print(f"Benchmarking C reference ({num_iterations} iterations)...")
+        c_start = time.perf_counter()
+        bench_start = time.perf_counter()
+        for i in range(num_iterations):
+            if time.perf_counter() - bench_start > timeout_per_section:
+                raise TimeoutError("C reference benchmark timeout")
+            for arr in c_arrays:
+                c_arrays[arr] = c_arrays[arr].copy()
+            c_args = build_args(s421_c, c_arrays, scalars)
+            s421_c(*c_args)
+        c_time = (time.perf_counter() - c_start) / num_iterations
+        print(f"  C reference time: {c_time*1000:.3f} ms")
+    except (TimeoutError, Exception) as e:
+        print(f"  C reference benchmark TIMEOUT or ERROR: {e}")
+        c_time = None
 
-    # Benchmark Triton
-    print(f"Benchmarking Triton implementation ({num_iterations} iterations)...")
-    torch.cuda.synchronize()
-    tr_start = time.perf_counter()
-    for _ in range(num_iterations):
-        for arr in tr_tensors:
-            tr_tensors[arr] = tr_tensors[arr].clone()
-        tr_args = build_args(s421_triton, tr_tensors, scalars)
-        s421_triton(*tr_args)
-    torch.cuda.synchronize()
-    tr_time = (time.perf_counter() - tr_start) / num_iterations
+    # Benchmark Triton (GPU, with separate timeout handling)
+    try:
+        print(f"Warming up Triton implementation ({num_warmup} iterations)...")
+        start_time = time.perf_counter()
+        for i in range(num_warmup):
+            if time.perf_counter() - start_time > timeout_per_section:
+                raise TimeoutError("Triton warmup timeout")
+            for arr in tr_tensors:
+                tr_tensors[arr] = tr_tensors[arr].clone()
+            tr_args = build_args(s421_triton, tr_tensors, scalars)
+            s421_triton(*tr_args)
+        torch.cuda.synchronize()
 
-    speedup = pt_time / tr_time if tr_time > 0 else 0
+        print(f"Benchmarking Triton implementation ({num_iterations} iterations)...")
+        torch.cuda.synchronize()
+        tr_start = time.perf_counter()
+        bench_start = time.perf_counter()
+        for i in range(num_iterations):
+            if time.perf_counter() - bench_start > timeout_per_section:
+                raise TimeoutError("Triton benchmark timeout")
+            for arr in tr_tensors:
+                tr_tensors[arr] = tr_tensors[arr].clone()
+            tr_args = build_args(s421_triton, tr_tensors, scalars)
+            s421_triton(*tr_args)
+        torch.cuda.synchronize()
+        tr_time = (time.perf_counter() - tr_start) / num_iterations
+        print(f"  Triton time: {tr_time*1000:.3f} ms")
+    except (TimeoutError, Exception) as e:
+        print(f"  Triton benchmark TIMEOUT or ERROR: {e}")
+        tr_time = None
+
+    # Calculate speedup (handle None cases)
+    if c_time is not None and tr_time is not None and tr_time > 0:
+        speedup = c_time / tr_time
+    else:
+        speedup = None
 
     print("="*70)
-    print(f"PyTorch time:  {pt_time*1000:8.3f} ms")
-    print(f"Triton time:   {tr_time*1000:8.3f} ms")
-    print(f"Speedup:       {speedup:8.2f}x")
+    if c_time is not None:
+        print(f"C ref time:    {c_time*1000:8.3f} ms")
+    else:
+        print(f"C ref time:    TIMEOUT")
+    if tr_time is not None:
+        print(f"Triton time:   {tr_time*1000:8.3f} ms")
+    else:
+        print(f"Triton time:   TIMEOUT")
+    if speedup is not None:
+        print(f"Speedup:       {speedup:8.2f}x")
+    else:
+        print(f"Speedup:       N/A (timeout)")
     print("="*70)
 
-    # Output machine-readable format for parsing
-    print(f"BENCHMARK_RESULT:{pt_time*1000:.6f},{tr_time*1000:.6f},{speedup:.6f}")
+    # Output machine-readable format for parsing (handle None values)
+    c_time_ms = c_time * 1000 if c_time is not None else -1
+    tr_time_ms = tr_time * 1000 if tr_time is not None else -1
+    speedup_val = speedup if speedup is not None else -1
+    print(f"BENCHMARK_RESULT:{c_time_ms:.6f},{tr_time_ms:.6f},{speedup_val:.6f}")
 
 if __name__ == "__main__":
     try:

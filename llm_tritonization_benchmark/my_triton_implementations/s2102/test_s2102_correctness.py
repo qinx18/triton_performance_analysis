@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s2102
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import inspect
@@ -8,10 +9,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s2102_baseline import s2102_pytorch
-    from test16.llm_triton.s2102.attempt1 import s2102_triton
+    from c_reference.tsvc_all_reference import s2102_c
+    from test19.llm_triton.s2102.attempt10 import s2102_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -36,6 +38,7 @@ def test_correctness():
 
     print("="*70)
     print(f"Correctness Testing: s2102")
+    print("Comparing Triton vs TSVC C reference")
     print("="*70)
 
     for N in test_sizes:
@@ -45,23 +48,25 @@ def test_correctness():
             aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
             iterations = 1
 
-            aa_pt = aa.clone()
+            aa_c = aa.cpu().numpy().copy()
 
             aa_tr = aa.clone()
 
-            pt_tensors = {"aa": aa_pt}
+            c_tensors = {"aa": aa_c}
             tr_tensors = {"aa": aa_tr}
             scalars = {"iterations": iterations}
 
-            pt_args = build_args(s2102_pytorch, pt_tensors, scalars)
+            c_args = build_args(s2102_c, c_tensors, scalars)
             tr_args = build_args(s2102_triton, tr_tensors, scalars)
 
-            pytorch_result = s2102_pytorch(*pt_args)
+            c_result = s2102_c(*c_args)
             triton_result = s2102_triton(*tr_args)
 
-            max_error = torch.max(torch.abs(aa_pt - aa_tr)).item()
+            # Convert C result back to torch for comparison
+            aa_c_torch = torch.from_numpy(aa_c).cuda()
+            max_error = torch.max(torch.abs(aa_c_torch - aa_tr)).item()
 
-            passed = max_error < 1e-3 or torch.allclose(aa_pt, aa_tr, rtol=1e-3, atol=1e-3)
+            passed = max_error < 1e-3 or torch.allclose(aa_c_torch, aa_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s121
-# Generated: 2026-01-13 22:39:04
+# Generated: 2026-01-19 10:04:03
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -52,7 +52,7 @@ real_t s121(struct args_t * func_args)
 Please generate a complete Triton implementation that:
 1. Includes a @triton.jit kernel function named `s121_kernel`
 2. Includes a Python wrapper function named `s121_triton`
-3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation
+3. The wrapper should accept ONLY the tensor arrays used in the computation
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
@@ -141,32 +141,33 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s121_kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
     
-    mask = offsets < n
+    mask = idx < n - 1
     
-    # Load a[j] = a[i+1] and b[i]
-    a_j = tl.load(a_ptr + offsets + 1, mask=mask)
-    b_i = tl.load(b_ptr + offsets, mask=mask)
+    # Load b[i] and a[i+1] (which is a[j])
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    a_next_vals = tl.load(a_ptr + idx + 1, mask=mask)
     
-    # Compute a[i] = a[j] + b[i]
-    result = a_j + b_i
+    # Compute a[i] = a[i+1] + b[i]
+    result = a_next_vals + b_vals
     
-    # Store result
-    tl.store(a_ptr + offsets, result, mask=mask)
+    # Store result to a[i]
+    tl.store(a_ptr + idx, result, mask=mask)
 
 def s121_triton(a, b):
-    n = a.shape[0] - 1  # Process LEN_1D-1 elements
+    n = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
+    grid = (triton.cdiv(n - 1, BLOCK_SIZE),)
     
     s121_kernel[grid](a, b, n, BLOCK_SIZE=BLOCK_SIZE)
 ```

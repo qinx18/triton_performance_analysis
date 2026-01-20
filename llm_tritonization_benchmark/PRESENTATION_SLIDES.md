@@ -221,55 +221,79 @@ For each function, automatically generates:
 
 ---
 
-## Current State (To Be Measured)
+## Current State (Test 19 Results)
 
 ### Summary Metrics
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| ✅ **PASSING** | TBD | TBD |
-| ❌ **FAILING** | TBD | TBD |
-| 📊 **Benchmarked** | TBD | TBD |
-| ⚡ **Valid Speedups** | TBD | TBD |
-| ⏱️ **C Ref Timeouts** | TBD | TBD |
+| ✅ **PASSING** | 108 | 71.5% |
+| ❌ **FAILING** | 43 | 28.5% |
+| 📊 **Benchmarked** | 108 | 71.5% |
+| ⚡ **Valid Speedups** | 106 | 70.2% |
+| ⏱️ **C Ref Timeouts** | 1 | 0.7% |
+| ⏱️ **Triton Timeouts** | 1 | 0.7% |
 
-*Note: Results will be measured against original TSVC C reference functions (ground truth).*
-*Previous results were measured against LLM-generated PyTorch baseline which may have contained bugs.*
+*Results measured against original TSVC C reference functions (ground truth).*
 
 ### Pass Rate by Attempt
 | Attempt | New Passes | Cumulative | Rate |
 |---------|------------|------------|------|
-| TBD | TBD | TBD | TBD |
+| 1 | 93 | 93 | 61.6% |
+| 2 | 10 | 103 | 68.2% |
+| 4 | 1 | 104 | 68.9% |
+| 5 | 1 | 105 | 69.5% |
+| 6 | 2 | 107 | 70.9% |
+| 8 | 1 | 108 | 71.5% |
 
 ---
 
-## Correctness Results (To Be Measured)
+## Correctness Results (Test 19)
 
-*Correctness results will be measured against original TSVC C reference functions.*
+### Failed Functions by Error Type (43 total)
 
-### Key Changes from Previous Design
-- **Old baseline:** LLM-generated PyTorch code (potential bugs)
-- **New baseline:** Original TSVC C functions (ground truth)
-- **Benefit:** Removes potential baseline bugs, provides authoritative reference
+#### Numerical Mismatch (25 functions)
 
-### Known Issue: s421
+Functions where Triton output differs from C reference beyond tolerance (max_error > 1e-3):
 
-**Error:** `ValueError: arange's arguments must be of type tl.constexpr`
+| Function | Max Error | Function | Max Error |
+|----------|-----------|----------|-----------|
+| s1115 | 1.01e+01 | s1119 | 2.16e+01 |
+| s114 | 6.73e+00 | s115 | 1.36e+08 |
+| s118 | 2.10e+08 | s1232 | 6.79e+00 |
+| s126 | 2.81e+01 | s132 | 4.24e+00 |
+| s176 | 1.44e+27 | s2101 | 4.99e+00 |
+| s2102 | 3.85e+00 | s2111 | 1.16e+02 |
+| s2233 | 2.59e+01 | s2275 | 5.27e+00 |
+| s231 | 2.29e+01 | s232 | unknown |
+| s233 | 2.53e+01 | s235 | 3.31e+00 |
+| s256 | 3.62e+00 | s257 | 1.39e+01 |
+| s258 | 8.63e+00 | s275 | 2.14e+01 |
+| s353 | 4.93e+00 | s442 | 1.06e+01 |
+| vbor | 2.88e+03 | | |
 
-**Root Cause:** LLM consistently generates incorrect kernel signature
-```python
-# Generated (WRONG):
-@triton.jit
-def s421_kernel(xx_ptr, yy_ptr, a_ptr, n):
-    BLOCK_SIZE = 256                    # ❌ Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ❌ Compilation error
+#### Runtime Errors (16 functions)
 
-# Expected (CORRECT):
-@triton.jit
-def s421_kernel(xx_ptr, yy_ptr, a_ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # ✅ Works!
-```
+Functions with runtime errors (NoneType returns, missing arguments):
 
-**Recommendation:** Add explicit constexpr instruction to prompt
+- **NoneType returns (10):** s13110, s311, s3110, s3111, s31111, s3113, s312, s318, s4115, s4116, vsumr
+- **Missing C ref arguments (5):** s1281, s255, s281, s423, s424
+
+#### Compilation Errors (1 function)
+
+- **s351:** Type mismatch between pointer and float32
+
+#### Timeout (1 function)
+
+- **s119:** Test timed out after 60 seconds
+
+### Error Analysis
+
+| Error Type | Count | % of Failures | Root Cause |
+|------------|-------|---------------|------------|
+| Numerical | 25 | 58.1% | Algorithm incorrectness, dependency handling |
+| Runtime | 16 | 37.2% | Missing return values, C wrapper issues |
+| Compilation | 1 | 2.3% | Type mismatches in Triton |
+| Timeout | 1 | 2.3% | Infinite loops or very slow execution |
 
 ---
 
@@ -359,65 +383,112 @@ Static analysis guidance improves LLM generation quality.
 
 ---
 
-## Performance Summary
+## Performance Summary (Test 19)
 
 ### Overall Statistics
 | Metric | Value |
 |--------|-------|
-| **Benchmarked** | TBD |
-| **Valid Speedups** | TBD |
-| **C Ref Timeouts** | TBD |
-| **Triton Timeouts** | TBD |
-| **Average Speedup** | TBD |
-| **Median Speedup** | TBD |
+| **Benchmarked** | 108 |
+| **Valid Speedups** | 106 |
+| **C Ref Timeouts** | 1 (s422) |
+| **Triton Timeouts** | 1 (s343) |
+| **Mean Speedup** | 0.71x |
+| **Median Speedup** | 0.48x |
+| **Min Speedup** | 0.0004x |
+| **Max Speedup** | 5.57x |
 
-*Note: Performance statistics to be measured after running experiments with C reference baseline.*
+### Performance Distribution (106 functions with valid speedups)
 
-### Performance Distribution
 ```
-Functions faster than baseline:  TBD
-Functions slower than baseline:  TBD
-Functions with C ref timeout:    TBD
+Speedup Range          Count    %     Distribution
+─────────────────────────────────────────────────────────────────
+>2x faster            :   5   ( 4.7%) ████
+1.5x-2x faster        :  10   ( 9.4%) █████████
+1x-1.5x faster        :  12   (11.3%) ███████████
+0.5x-1x (slower)      :  25   (23.6%) ███████████████████████
+0.1x-0.5x (slower)    :  29   (27.4%) ███████████████████████████
+<0.1x (much slower)   :  25   (23.6%) ████████████████████████
+─────────────────────────────────────────────────────────────────
+Triton faster (>1x)   :  27   (25.5%)
+Triton slower (<1x)   :  79   (74.5%)
+```
+
+### Visual Distribution
+```
+                    SLOWER  ◄─────────────────────►  FASTER
+
+<0.1x  ████████████████████████████████████████████████  25
+0.1-0.5x  ████████████████████████████████████████████████████████████  29
+0.5-1x  ██████████████████████████████████████████████  25
+1-1.5x  ████████████████████████  12
+1.5-2x  ████████████████████  10
+>2x     ██████████  5
+        |----|----|----|----|----|----|
+        0    5    10   15   20   25   30
 ```
 
 ---
 
-## Performance Results (To Be Measured)
+## Top 10 Fastest Functions (Triton vs C)
 
-Performance comparisons will be measured against the original TSVC C reference functions.
+| Rank | Function | Speedup | C Ref (ms) | Triton (ms) | Notes |
+|------|----------|---------|------------|-------------|-------|
+| 1 | s451 | 5.57x | 0.518 | 0.093 | Loop interchange |
+| 2 | vtvtv | 2.16x | 0.174 | 0.080 | Vector operation |
+| 3 | s125 | 2.15x | 0.209 | 0.097 | Induction variable |
+| 4 | vif | 2.14x | 0.144 | 0.067 | Conditional vector |
+| 5 | s273 | 2.02x | 0.243 | 0.120 | Control flow |
+| 6 | s443 | 1.92x | 0.172 | 0.089 | Intrinsic function |
+| 7 | s1161 | 1.91x | 0.182 | 0.096 | Single dimension |
+| 8 | s2710 | 1.89x | 0.180 | 0.095 | Control flow |
+| 9 | s161 | 1.88x | 0.205 | 0.109 | Statement reorder |
+| 10 | s274 | 1.85x | 0.241 | 0.131 | Control flow |
 
-### Expected Comparison
-| Comparison | Notes |
-|------------|-------|
-| Triton (GPU) vs C Reference (CPU) | Measures GPU acceleration benefit |
-| Single kernel launch vs sequential C | Shows parallelization advantage |
-
-*Detailed performance results will be populated after running experiments.*
-
----
-
-## Top 10 Measured Speedups
-
-| Function | Speedup | Triton (ms) | C Ref (ms) | Category |
-|----------|---------|-------------|------------|----------|
-| TBD | TBD | TBD | TBD | TBD |
-
-*Speedup measurements will be populated after running experiments with C reference baseline.*
-
-**Note:** C reference runs on CPU, Triton runs on GPU. Speedups reflect GPU parallelization benefits over sequential CPU execution.
+**Note:** C reference runs on CPU, Triton runs on GPU. Speedups >1x indicate GPU is faster.
 
 ---
 
-## Performance by Category
+## Bottom 10 Slowest Functions
 
-*Performance by category will be measured after running experiments with C reference baseline.*
+| Rank | Function | Speedup | C Ref (ms) | Triton (ms) | Notes |
+|------|----------|---------|------------|-------------|-------|
+| 1 | s1221 | 0.0004x | 0.045 | 120.117 | Severe overhead |
+| 2 | s116 | 0.019x | 0.023 | 1.209 | Loop overhead |
+| 3 | s331 | 0.021x | 0.016 | 0.764 | Packing |
+| 4 | s342 | 0.025x | 0.054 | 2.148 | Search loop |
+| 5 | s3112 | 0.029x | 0.058 | 1.974 | Reduction |
+| 6 | s111 | 0.031x | 0.030 | 0.959 | Single dimension |
+| 7 | s1213 | 0.033x | 0.071 | 2.185 | Double dimension |
+| 8 | s254 | 0.035x | 0.040 | 1.130 | Node splitting |
+| 9 | s292 | 0.036x | 0.055 | 1.549 | Loop rerolling |
+| 10 | s211 | 0.038x | 0.096 | 2.545 | Statement reorder |
 
-### Expected Performance Tiers
-| Tier | Expected Categories | Notes |
-|------|---------------------|-------|
-| 🚀 High Speedup | Loop interchange, 2D operations | High parallelism potential |
-| ⚡ Good Speedup | Most vectorizable loops | Standard GPU acceleration |
-| 🐌 Limited Speedup | Simple operations, trivial loops | Kernel launch overhead may dominate |
+**Note:** Slowdowns are primarily due to kernel launch overhead dominating small operations.
+
+---
+
+## Performance by Category (Test 19)
+
+### Performance Tiers Observed
+
+| Tier | Categories | Avg Speedup | Notes |
+|------|------------|-------------|-------|
+| 🚀 High (>1.5x) | Loop interchange, Control flow | 1.5-5.6x | High parallelism benefit |
+| ⚡ Moderate (1-1.5x) | Vector ops, Statement reorder | 1.0-1.5x | Balanced overhead/benefit |
+| 🐌 Low (<0.5x) | Reductions, Simple loops | 0.02-0.5x | Kernel overhead dominates |
+
+### Key Performance Patterns
+
+**What achieves speedup:**
+- Loop interchange patterns (s451: 5.57x)
+- Complex control flow (s273, s274: ~2x)
+- Conditional vector operations (vif: 2.14x)
+- Operations with sufficient arithmetic intensity
+
+**What suffers slowdown:**
+- Very simple operations (kernel launch overhead > computation)
+- Sequential patterns that can't parallelize
+- Small data sizes where transfer overhead dominates
 
 ---
 
@@ -487,14 +558,15 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - ✅ Fully automated pipeline (TSVC → Triton)
 - ✅ 8 static analysis modules integrated
 - ✅ Comprehensive test harness generation
-- ✅ Retry logic with context reset
+- ✅ Retry logic with context reset (5+5 strategy)
 - ✅ Timeout-aware benchmarking
 
-### Results (To Be Measured)
-- ⏳ **Correctness rate** (vs TSVC C reference)
-- ⏳ **First-try success rate**
-- ⏳ **Category pass rates**
-- ⏳ **Performance vs C reference**
+### Results (Test 19)
+- ✅ **Correctness rate:** 71.5% (108/151 functions)
+- ✅ **First-try success rate:** 61.6% (93/151 functions)
+- ✅ **Retry recovery:** +15 functions via retries
+- ✅ **Performance:** 25.5% faster than C, 74.5% slower
+- ✅ **Max speedup:** 5.57x (s451 - loop interchange)
 
 ---
 
@@ -571,17 +643,19 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - Automated TSVC → Triton pipeline
 - 8 static analysis modules
 - 5+5 retry strategy
-- Comprehensive testing
+- Comprehensive testing vs C reference
 
-**Results (To Be Measured):**
-- Correctness vs TSVC C reference
-- First-try success rate
-- Performance speedups (GPU vs CPU)
+**Results (Test 19):**
+- **71.5% correctness** (108/151 functions pass)
+- **61.6% first-try success** (93 functions)
+- **25.5% achieve GPU speedup** (27/106 functions)
+- **Max 5.57x speedup** (s451 - loop interchange)
+- **Median 0.48x** (kernel overhead often dominates)
 
 **Impact:**
-- Demonstrates LLM capability for specialized code generation
-- Shows value of static analysis integration
-- Provides framework for future GPU kernel automation
+- Demonstrates LLM capability for specialized GPU kernel generation
+- Shows importance of static analysis for complex patterns
+- Identifies performance bottlenecks (kernel launch overhead)
 
 ---
 
@@ -591,4 +665,4 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 🔗 Repository: [Add your repo link]
 📄 Paper: [In progress]
 
-**Next steps:** Fix s421, improve baselines, expand to more benchmarks!
+**Next steps:** Improve numerical accuracy, optimize kernel launch overhead, expand patterns!

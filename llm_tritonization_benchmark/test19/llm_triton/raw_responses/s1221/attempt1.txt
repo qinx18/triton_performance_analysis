@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1221
-# Generated: 2026-01-13 22:40:07
+# Generated: 2026-01-19 10:04:49
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -114,7 +114,7 @@ Each strip must complete before the next strip starts.
 Please generate a complete Triton implementation that:
 1. Includes a @triton.jit kernel function named `s1221_kernel`
 2. Includes a Python wrapper function named `s1221_triton`
-3. The wrapper should accept ONLY the PyTorch tensor arrays used in the computation
+3. The wrapper should accept ONLY the tensor arrays used in the computation
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
@@ -203,39 +203,39 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s1221_kernel(a_ptr, b_ptr, strip_start, n_elements, STRIP_SIZE: tl.constexpr):
-    offsets = tl.arange(0, STRIP_SIZE)
-    idx = strip_start + offsets + 4  # +4 because loop starts from i=4
+def s1221_kernel(a_ptr, b_ptr, strip_start, n, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    idx = strip_start + offsets + 4
     
-    mask = idx < n_elements
+    mask = idx < n
     
-    # Read from b[i-4] and a[i]
-    b_vals = tl.load(b_ptr + idx - 4, mask=mask)
     a_vals = tl.load(a_ptr + idx, mask=mask)
+    b_vals = tl.load(b_ptr + idx - 4, mask=mask)
     
-    # Compute b[i] = b[i-4] + a[i]
     result = b_vals + a_vals
     
-    # Store result
     tl.store(b_ptr + idx, result, mask=mask)
 
 def s1221_triton(a, b):
-    N = a.shape[0]
+    n = a.shape[0]
     STRIP_SIZE = 4
-    n_elements = N - 4  # Elements to process (from i=4 to N-1)
+    BLOCK_SIZE = 4
     
-    # Process strips sequentially to handle loop-carried dependency
-    for strip_start in range(0, n_elements, STRIP_SIZE):
+    n_elements = n - 4
+    
+    for strip_id in range(triton.cdiv(n_elements, STRIP_SIZE)):
+        strip_start = strip_id * STRIP_SIZE
         remaining = min(STRIP_SIZE, n_elements - strip_start)
-        if remaining <= 0:
-            break
-            
-        # Launch kernel for this strip
-        grid = (1,)
-        s1221_kernel[grid](a, b, strip_start, N, STRIP_SIZE=remaining)
+        
+        if remaining > 0:
+            grid = (1,)
+            s1221_kernel[grid](
+                a, b, strip_start, n,
+                BLOCK_SIZE=min(BLOCK_SIZE, remaining)
+            )
 ```

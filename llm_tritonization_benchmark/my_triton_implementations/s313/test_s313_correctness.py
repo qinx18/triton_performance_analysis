@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Correctness Test for s313
+Compares Triton implementation against original TSVC C reference.
 """
 import sys
 import inspect
@@ -8,10 +9,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import torch
+import numpy as np
 
 try:
-    from baselines.s313_baseline import s313_pytorch
-    from test16.llm_triton.s313.attempt1 import s313_triton
+    from c_reference.tsvc_all_reference import s313_c
+    from test19.llm_triton.s313.attempt1 import s313_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -36,6 +38,7 @@ def test_correctness():
 
     print("="*70)
     print(f"Correctness Testing: s313")
+    print("Comparing Triton vs TSVC C reference")
     print("="*70)
 
     for N in test_sizes:
@@ -46,25 +49,27 @@ def test_correctness():
             b = torch.randn(N, device='cuda', dtype=torch.float32)
             iterations = 1
 
-            a_pt = a.clone()
-            b_pt = b.clone()
+            a_c = a.cpu().numpy().copy()
+            b_c = b.cpu().numpy().copy()
 
             a_tr = a.clone()
             b_tr = b.clone()
 
-            pt_tensors = {"a": a_pt, "b": b_pt}
+            c_tensors = {"a": a_c, "b": b_c}
             tr_tensors = {"a": a_tr, "b": b_tr}
             scalars = {"iterations": iterations}
 
-            pt_args = build_args(s313_pytorch, pt_tensors, scalars)
+            c_args = build_args(s313_c, c_tensors, scalars)
             tr_args = build_args(s313_triton, tr_tensors, scalars)
 
-            pytorch_result = s313_pytorch(*pt_args)
+            c_result = s313_c(*c_args)
             triton_result = s313_triton(*tr_args)
 
-            max_error = torch.max(torch.abs(a_pt - a_tr)).item()
+            # Convert C result back to torch for comparison
+            a_c_torch = torch.from_numpy(a_c).cuda()
+            max_error = torch.max(torch.abs(a_c_torch - a_tr)).item()
 
-            passed = max_error < 1e-3 or torch.allclose(a_pt, a_tr, rtol=1e-3, atol=1e-3)
+            passed = max_error < 1e-3 or torch.allclose(a_c_torch, a_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:
