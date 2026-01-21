@@ -1,44 +1,53 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
+def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, n, BLOCK_SIZE: tl.constexpr):
     # Get program ID
     pid = tl.program_id(0)
     
-    # Calculate block boundaries
+    # Calculate block start offset
     block_start = pid * BLOCK_SIZE
+    
+    # Create offset vectors
     offsets = tl.arange(0, BLOCK_SIZE)
-    mask = (block_start + offsets) < N
     
-    # Load data with masking
-    a_vals = tl.load(a_ptr + block_start + offsets, mask=mask, other=0.0)
-    indices = tl.load(ip_ptr + block_start + offsets, mask=mask, other=0)
+    # Initialize accumulator
+    local_sum = 0.0
     
-    # Gather from b using indirect addressing
-    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
+    # Process elements in this block
+    for i in range(BLOCK_SIZE):
+        idx = block_start + i
+        if idx < n:
+            # Load a[idx]
+            a_val = tl.load(a_ptr + idx)
+            
+            # Load ip[idx] and use it to index into b
+            ip_val = tl.load(ip_ptr + idx)
+            b_val = tl.load(b_ptr + ip_val)
+            
+            # Accumulate dot product
+            local_sum += a_val * b_val
     
-    # Compute products and sum
-    products = a_vals * b_vals
-    block_sum = tl.sum(products)
-    
-    # Store the partial sum
-    tl.store(output_ptr + pid, block_sum)
+    # Store partial sum
+    tl.store(output_ptr + pid, local_sum)
 
 def s4115_triton(a, b, ip):
-    N = a.shape[0]
+    n = a.shape[0]
+    
+    # Calculate grid size
     BLOCK_SIZE = 256
-    grid_size = triton.cdiv(N, BLOCK_SIZE)
+    num_blocks = triton.cdiv(n, BLOCK_SIZE)
     
     # Create output tensor for partial sums
-    partial_sums = torch.zeros(grid_size, dtype=a.dtype, device=a.device)
+    partial_sums = torch.zeros(num_blocks, dtype=a.dtype, device=a.device)
     
     # Launch kernel
-    grid = (grid_size,)
-    s4115_kernel[grid](a, b, ip, partial_sums, N, BLOCK_SIZE=BLOCK_SIZE)
+    grid = (num_blocks,)
+    s4115_kernel[grid](a, b, ip, partial_sums, n, BLOCK_SIZE=BLOCK_SIZE)
     
     # Sum all partial results
-    total_sum = torch.sum(partial_sums)
+    result = torch.sum(partial_sums)
     
-    return total_sum
+    return result.item()

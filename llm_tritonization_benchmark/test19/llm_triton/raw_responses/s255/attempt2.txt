@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s255
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: s255_c() missing 1 required positional argument: 'x'
-Testing N=  1000... ERROR: s255_c() missing 1 required positional argument: 'x'
-Testing N= 10000... ERROR: s255_c() missing 1 required positional argument: 'x'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s255/test_s255_correctness.py", line 65, in test_correctness
-    c_result = s255_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s255_c() missing 1 required positional argument: 'x'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s255/test_s255_correctness.py", line 65, in test_correctness
-    c_result = s255_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s255_c() missing 1 required positional argument: 'x'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s255/test_s255_correctness.py", line 65, in test_correctness
-    c_result = s255_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s255_c() missing 1 required positional argument: 'x'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 1.27e+00
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -47,39 +20,49 @@ import torch
 
 @triton.jit
 def s255_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # This kernel handles the sequential dependency by processing one element at a time
-    # Each thread block processes a portion of the array sequentially
+    # Get program ID and calculate block start
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     
-    block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE
+    # Create offset vector
+    offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
+    mask = indices < N
     
-    # Load initial values of x and y
-    x = tl.load(b_ptr + N - 1)  # b[LEN_1D-1]
-    y = tl.load(b_ptr + N - 2)  # b[LEN_1D-2]
+    # Load the entire b array for this block
+    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
     
-    # Process elements sequentially within each block
+    # Initialize x and y (these are the carry-around variables)
+    # x starts as b[N-1], y starts as b[N-2]
+    x = tl.load(b_ptr + N - 1)
+    y = tl.load(b_ptr + N - 2)
+    
+    # For each element in this block, we need to simulate the sequential loop
+    # Since this has dependencies, we need to process sequentially within the block
     for i in range(BLOCK_SIZE):
-        idx = block_start + i
-        if idx < N:
-            b_val = tl.load(b_ptr + idx)
-            result = (b_val + x + y) * 0.333
-            tl.store(a_ptr + idx, result)
+        if block_start + i < N:
+            # Get current b value
+            current_b = tl.load(b_ptr + block_start + i)
             
-            # Update carry-around variables
+            # Calculate result: a[i] = (b[i] + x + y) * 0.333
+            result = (current_b + x + y) * 0.333
+            
+            # Store result
+            tl.store(a_ptr + block_start + i, result)
+            
+            # Update carry variables
             y = x
-            x = b_val
+            x = current_b
 
-def s255_triton(a, b):
+def s255_triton(a, b, x):
     N = a.shape[0]
+    BLOCK_SIZE = 256
     
-    # Use a small block size since we need sequential processing
-    BLOCK_SIZE = 1024
+    # Calculate grid size
     grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    s255_kernel[grid](
-        a, b, N,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Launch kernel
+    s255_kernel[grid](a, b, N, BLOCK_SIZE=BLOCK_SIZE)
 ```
 
 
@@ -155,7 +138,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s255_triton(a, b):
+def s255_triton(a, b, x):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -239,39 +222,36 @@ import torch
 
 @triton.jit
 def s255_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and calculate the starting index for this block
+    # This kernel has sequential dependencies, so we process the entire array in one thread
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
     
-    # Create offset vector
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < N
-    
-    # Load the initial carry-around variables
-    x = tl.load(b_ptr + N - 1)
-    y = tl.load(b_ptr + N - 2)
-    
-    # Process each element sequentially within this block
-    for i in range(BLOCK_SIZE):
-        idx = block_start + i
-        if idx < N:
-            b_val = tl.load(b_ptr + idx)
-            result = (b_val + x + y) * 0.333
-            tl.store(a_ptr + idx, result)
+    # Only process if we're the first program
+    if pid == 0:
+        # Initialize x and y
+        x = tl.load(b_ptr + N - 1)
+        y = tl.load(b_ptr + N - 2)
+        
+        # Process each element sequentially
+        for i in range(N):
+            # Load b[i]
+            b_i = tl.load(b_ptr + i)
             
-            # Update carry-around variables
+            # Compute a[i] = (b[i] + x + y) * 0.333
+            result = (b_i + x + y) * 0.333
+            
+            # Store result
+            tl.store(a_ptr + i, result)
+            
+            # Update carry variables
             y = x
-            x = b_val
+            x = b_i
 
-def s255_triton(a, b):
+def s255_triton(a, b, x):
     N = a.shape[0]
-    
-    # Use small block size since we need sequential processing
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    s255_kernel[grid](
-        a, b, N,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Launch with single thread block since we have sequential dependencies
+    grid = (1,)
+    
+    # Launch kernel
+    s255_kernel[grid](a, b, N, BLOCK_SIZE=BLOCK_SIZE)

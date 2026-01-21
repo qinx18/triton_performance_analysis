@@ -547,7 +547,7 @@ for (int nl = 0; nl < 4*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r', 'd': 'r', 'e': 'r'},  # x is local scalar, not parameter
+        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r', 'd': 'r', 'e': 'r', 'x': 'rw'},  # x passed to C kernel but used as local
         "has_offset": False,
         "has_conditional": False,
         "has_reduction": False,
@@ -594,7 +594,7 @@ for (int nl = 0; nl < 100*(iterations/(LEN_2D)); nl++) {
         "has_conditional": True,
         "has_reduction": True,
         "has_2d_arrays": True,
-        "scalar_params": {'iterations': 'scalar'},
+        "scalar_params": {'iterations': 'scalar', 'len_2d': 'scalar'},  # len_2d needed for C wrapper
     },
     "s132": {
         "name": "s132",
@@ -1271,7 +1271,7 @@ for (int nl = 0; nl < iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'r'},  # x and y are local scalars, not parameters
+        "arrays": {'a': 'rw', 'b': 'r', 'x': 'rw'},  # x passed to C kernel, y is local
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -1628,7 +1628,7 @@ for (int nl = 0; nl < iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r'},  # x is local scalar, not parameter
+        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r', 'x': 'rw'},  # x passed to C kernel but used as local
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -1946,7 +1946,7 @@ L5:
         "has_conditional": True,
         "has_reduction": True,
         "has_2d_arrays": False,
-        "scalar_params": {'iterations': 'scalar', 'inc': 'scalar'},
+        "scalar_params": {'iterations': 'scalar', 'inc': 'scalar', 'abs': 'scalar'},  # abs passed to C kernel
     },
     "s319": {
         "name": "s319",
@@ -2282,7 +2282,7 @@ for (int nl = 0; nl < 100*iterations; nl++) {
         "has_conditional": False,
         "has_reduction": True,
         "has_2d_arrays": True,
-        "scalar_params": {'j': 'scalar', 'iterations': 'scalar', 'inc': 'scalar'},
+        "scalar_params": {'j': 'scalar', 'iterations': 'scalar', 'inc': 'scalar', 'len_2d': 'scalar'},  # len_2d needed for C wrapper
     },
     "s4117": {
         "name": "s4117",
@@ -2358,7 +2358,7 @@ for (int nl = 0; nl < 4*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'r', 'flat_2d_array': 'rw'},
+        "arrays": {'a': 'r', 'flat_2d_array': 'rw', 'xx': 'r'},  # xx is read array
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -2374,7 +2374,7 @@ for (int nl = 0; nl < 4*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'r', 'flat_2d_array': 'rw'},
+        "arrays": {'a': 'r', 'flat_2d_array': 'r', 'xx': 'rw'},  # xx is written array
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,

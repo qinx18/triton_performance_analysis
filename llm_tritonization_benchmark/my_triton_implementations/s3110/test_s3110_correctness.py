@@ -63,14 +63,20 @@ def test_correctness():
             triton_result = s3110_triton(*tr_args)
 
             # Pure reduction: compare return values
-            if isinstance(c_result, (int, float)):
+            # If C returns None (void function), use numpy sum as reference
+            if c_result is None:
+                # C function is void - use numpy sum as baseline reference
+                c_val = float(np.sum(aa_c))
+            elif isinstance(c_result, (int, float)):
                 c_val = c_result
             elif isinstance(c_result, np.ndarray):
                 c_val = c_result.item() if c_result.size == 1 else c_result.sum()
             else:
                 c_val = float(c_result)
 
-            if isinstance(triton_result, (int, float)):
+            if triton_result is None:
+                tr_val = float('inf')  # Triton should return something
+            elif isinstance(triton_result, (int, float)):
                 tr_val = triton_result
             elif isinstance(triton_result, torch.Tensor):
                 tr_val = triton_result.item() if triton_result.numel() == 1 else triton_result.sum().item()

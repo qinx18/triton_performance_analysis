@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s424
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: s424_c() missing 1 required positional argument: 'xx'
-Testing N=  1000... ERROR: s424_c() missing 1 required positional argument: 'xx'
-Testing N= 10000... ERROR: s424_c() missing 1 required positional argument: 'xx'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s424/test_s424_correctness.py", line 65, in test_correctness
-    c_result = s424_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s424_c() missing 1 required positional argument: 'xx'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s424/test_s424_correctness.py", line 65, in test_correctness
-    c_result = s424_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s424_c() missing 1 required positional argument: 'xx'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s424/test_s424_correctness.py", line 65, in test_correctness
-    c_result = s424_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s424_c() missing 1 required positional argument: 'xx'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 5.26e+00
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -46,38 +19,51 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s424_kernel(flat_2d_array_ptr, a_ptr, strip_start, n_elements, BLOCK_SIZE: tl.constexpr):
+def s424_kernel(flat_2d_array_ptr, a_ptr, strip_start, strip_size, total_size, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = strip_start + offsets
     
-    mask = idx < n_elements
+    # Mask for valid indices within the strip
+    mask = offsets < strip_size
     
-    vals = tl.load(flat_2d_array_ptr + idx, mask=mask)
-    a_vals = tl.load(a_ptr + idx, mask=mask)
+    # Load from read positions
+    flat_vals = tl.load(flat_2d_array_ptr + idx, mask=mask, other=0.0)
+    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
     
-    result = vals + a_vals
+    # Compute result
+    result = flat_vals + a_vals
     
+    # Store to write positions (idx + 64)
     write_idx = idx + 64
-    write_mask = (idx < n_elements) & (write_idx < flat_2d_array_ptr.shape[0])
-    
+    # Need to check write bounds too
+    write_mask = mask & (write_idx < total_size)
     tl.store(flat_2d_array_ptr + write_idx, result, mask=write_mask)
 
-def s424_triton(a, flat_2d_array):
+def s424_triton(a, flat_2d_array, xx):
+    n_elements = a.shape[0] - 1
+    total_size = flat_2d_array.shape[0]
     STRIP_SIZE = 64
     BLOCK_SIZE = 64
-    n_elements = a.shape[0] - 1
     
-    # Process in sequential strips due to RAW dependency
-    for strip_start in range(0, n_elements, STRIP_SIZE):
+    n_strips = triton.cdiv(n_elements, STRIP_SIZE)
+    
+    # Process strips sequentially to respect loop-carried dependencies
+    for strip_id in range(n_strips):
+        strip_start = strip_id * STRIP_SIZE
         current_strip_size = min(STRIP_SIZE, n_elements - strip_start)
         
         if current_strip_size <= 0:
             break
-            
+        
+        # Launch kernel for this strip
         grid = (1,)
         s424_kernel[grid](
-            flat_2d_array, a, strip_start, n_elements,
-            BLOCK_SIZE=min(BLOCK_SIZE, current_strip_size)
+            flat_2d_array,
+            a,
+            strip_start,
+            current_strip_size,
+            total_size,
+            BLOCK_SIZE=BLOCK_SIZE
         )
 ```
 
@@ -218,7 +204,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s424_triton(a, flat_2d_array):
+def s424_triton(a, flat_2d_array, xx):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -301,36 +287,49 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s424_kernel(flat_2d_array_ptr, a_ptr, strip_start, n_elements, BLOCK_SIZE: tl.constexpr):
+def s424_kernel(flat_2d_array_ptr, a_ptr, strip_start, strip_size, total_size, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = strip_start + offsets
     
-    mask = idx < n_elements
+    # Mask for valid indices within the strip
+    mask = offsets < strip_size
     
-    vals = tl.load(flat_2d_array_ptr + idx, mask=mask)
-    a_vals = tl.load(a_ptr + idx, mask=mask)
+    # Load from read positions
+    flat_vals = tl.load(flat_2d_array_ptr + idx, mask=mask, other=0.0)
+    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
     
-    result = vals + a_vals
+    # Compute result
+    result = flat_vals + a_vals
     
-    write_idx = idx + 64
-    write_mask = mask & (write_idx < flat_2d_array_ptr.shape[0])
-    
+    # Store to write positions (idx + 1 + 63 = idx + 64)
+    write_idx = idx + 1 + 63
+    # Need to check write bounds too
+    write_mask = mask & (write_idx < total_size)
     tl.store(flat_2d_array_ptr + write_idx, result, mask=write_mask)
 
 def s424_triton(a, flat_2d_array, xx):
+    n_elements = a.shape[0] - 1
+    total_size = flat_2d_array.shape[0]
     STRIP_SIZE = 64
     BLOCK_SIZE = 64
-    n_elements = a.shape[0] - 1
     
-    # Process in sequential strips due to RAW dependency
-    for strip_start in range(0, n_elements, STRIP_SIZE):
+    n_strips = triton.cdiv(n_elements, STRIP_SIZE)
+    
+    # Process strips sequentially to respect loop-carried dependencies
+    for strip_id in range(n_strips):
+        strip_start = strip_id * STRIP_SIZE
         current_strip_size = min(STRIP_SIZE, n_elements - strip_start)
         
         if current_strip_size <= 0:
             break
-            
+        
+        # Launch kernel for this strip
         grid = (1,)
         s424_kernel[grid](
-            flat_2d_array, a, strip_start, n_elements,
-            BLOCK_SIZE=min(BLOCK_SIZE, current_strip_size)
+            flat_2d_array,
+            a,
+            strip_start,
+            current_strip_size,
+            total_size,
+            BLOCK_SIZE=BLOCK_SIZE
         )

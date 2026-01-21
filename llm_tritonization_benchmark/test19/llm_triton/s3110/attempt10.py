@@ -1,17 +1,18 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 def s3110_triton(aa):
-    # Use PyTorch for the 2D argmax reduction
+    N = aa.shape[0]
+    
+    # Use PyTorch for argmax reduction
     flat_aa = aa.flatten()
     max_val = torch.max(flat_aa)
-    max_idx = torch.argmax(flat_aa)
+    flat_idx = torch.argmax(flat_aa)
     
-    N = aa.shape[0]
-    xindex = max_idx // N
-    yindex = max_idx % N
+    xindex = flat_idx // N
+    yindex = flat_idx % N
     
-    # Return max + xindex+1 + yindex+1 as per C code
+    # Return according to C code: max + xindex+1 + yindex+1
     result = max_val + xindex + 1 + yindex + 1
     return result.item()

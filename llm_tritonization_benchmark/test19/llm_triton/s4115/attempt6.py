@@ -3,48 +3,46 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get program ID
-    pid = tl.program_id(0)
-    
-    # Calculate block start and offsets
-    block_start = pid * BLOCK_SIZE
+def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
     
-    # Create mask for valid indices
-    mask = indices < N
+    partial_sum = 0.0
     
-    # Load a values
-    a_vals = tl.load(a_ptr + indices, mask=mask, other=0.0)
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        # Load a[i]
+        a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        
+        # Load ip[i]
+        ip_vals = tl.load(ip_ptr + current_offsets, mask=mask, other=0)
+        
+        # Load b[ip[i]] - gather operation
+        b_vals = tl.load(b_ptr + ip_vals, mask=mask, other=0.0)
+        
+        # Compute a[i] * b[ip[i]]
+        products = a_vals * b_vals
+        
+        # Sum the products
+        partial_sum += tl.sum(products)
     
-    # Load indirect indices
-    ip_vals = tl.load(ip_ptr + indices, mask=mask, other=0)
-    
-    # Load b values using indirect addressing
-    b_vals = tl.load(b_ptr + ip_vals, mask=mask, other=0.0)
-    
-    # Compute products
-    products = a_vals * b_vals
-    
-    # Store products to output for reduction
-    tl.store(output_ptr + indices, products, mask=mask)
+    # Store the partial sum
+    tl.store(output_ptr, partial_sum)
 
 def s4115_triton(a, b, ip):
-    N = a.shape[0]
-    
-    # Allocate output tensor for partial products
-    output = torch.zeros_like(a)
-    
-    # Launch kernel
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
+    # Create output tensor for the sum
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
+    
+    # Launch kernel with single block since we need global reduction
+    grid = (1,)
     s4115_kernel[grid](
         a, b, ip, output,
-        N=N,
+        n_elements=n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Sum all products to get final result
-    return output.sum().item()
+    return output.item()

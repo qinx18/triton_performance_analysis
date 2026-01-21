@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s1281_c
-    from test19.llm_triton.s1281.attempt10 import s1281_triton
+    from test19.llm_triton.s1281.attempt1 import s1281_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -50,6 +50,7 @@ def test_correctness():
             c = torch.randn(N, device='cuda', dtype=torch.float32)
             d = torch.randn(N, device='cuda', dtype=torch.float32)
             e = torch.randn(N, device='cuda', dtype=torch.float32)
+            x = torch.randn(N, device='cuda', dtype=torch.float32)
             iterations = 1
 
             a_c = a.cpu().numpy().copy()
@@ -57,15 +58,17 @@ def test_correctness():
             c_c = c.cpu().numpy().copy()
             d_c = d.cpu().numpy().copy()
             e_c = e.cpu().numpy().copy()
+            x_c = x.cpu().numpy().copy()
 
             a_tr = a.clone()
             b_tr = b.clone()
             c_tr = c.clone()
             d_tr = d.clone()
             e_tr = e.clone()
+            x_tr = x.clone()
 
-            c_tensors = {"a": a_c, "b": b_c, "c": c_c, "d": d_c, "e": e_c}
-            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "d": d_tr, "e": e_tr}
+            c_tensors = {"a": a_c, "b": b_c, "c": c_c, "d": d_c, "e": e_c, "x": x_c}
+            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "d": d_tr, "e": e_tr, "x": x_tr}
             scalars = {"iterations": iterations}
 
             c_args = build_args(s1281_c, c_tensors, scalars)
@@ -77,7 +80,8 @@ def test_correctness():
             # Convert C results back to torch for comparison
             a_c_torch = torch.from_numpy(a_c).cuda()
             b_c_torch = torch.from_numpy(b_c).cuda()
-            max_error = max([torch.max(torch.abs(a_c_torch - a_tr)).item(), torch.max(torch.abs(b_c_torch - b_tr)).item()])
+            x_c_torch = torch.from_numpy(x_c).cuda()
+            max_error = max([torch.max(torch.abs(a_c_torch - a_tr)).item(), torch.max(torch.abs(b_c_torch - b_tr)).item(), torch.max(torch.abs(x_c_torch - x_tr)).item()])
 
             passed = max_error < 1e-3 or torch.allclose(a_c_torch, a_tr, rtol=1e-3, atol=1e-3)
             if passed:

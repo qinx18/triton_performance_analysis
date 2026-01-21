@@ -48,18 +48,21 @@ def test_correctness():
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            x = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1
 
             a_c = a.cpu().numpy().copy()
             b_c = b.cpu().numpy().copy()
             c_c = c.cpu().numpy().copy()
+            x_c = x.cpu().numpy().copy()
 
             a_tr = a.clone()
             b_tr = b.clone()
             c_tr = c.clone()
+            x_tr = x.clone()
 
-            c_tensors = {"a": a_c, "b": b_c, "c": c_c}
-            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr}
+            c_tensors = {"a": a_c, "b": b_c, "c": c_c, "x": x_c}
+            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "x": x_tr}
             scalars = {"iterations": iterations}
 
             c_args = build_args(s281_c, c_tensors, scalars)
@@ -71,7 +74,8 @@ def test_correctness():
             # Convert C results back to torch for comparison
             a_c_torch = torch.from_numpy(a_c).cuda()
             b_c_torch = torch.from_numpy(b_c).cuda()
-            max_error = max([torch.max(torch.abs(a_c_torch - a_tr)).item(), torch.max(torch.abs(b_c_torch - b_tr)).item()])
+            x_c_torch = torch.from_numpy(x_c).cuda()
+            max_error = max([torch.max(torch.abs(a_c_torch - a_tr)).item(), torch.max(torch.abs(b_c_torch - b_tr)).item(), torch.max(torch.abs(x_c_torch - x_tr)).item()])
 
             passed = max_error < 1e-3 or torch.allclose(a_c_torch, a_tr, rtol=1e-3, atol=1e-3)
             if passed:

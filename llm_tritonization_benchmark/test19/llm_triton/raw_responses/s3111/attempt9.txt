@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s3111
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3111/test_s3111_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3111/test_s3111_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3111/test_s3111_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 3.54e+01
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -46,30 +19,36 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3111_kernel(a_ptr, result_ptr, n, BLOCK_SIZE: tl.constexpr):
+def s3111_kernel(a_ptr, partial_sums_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    ptrs = a_ptr + block_start + offsets
-    mask = (block_start + offsets) < n
+    indices = block_start + offsets
     
-    vals = tl.load(ptrs, mask=mask, other=0.0)
-    condition_mask = vals > 0.0
-    conditional_vals = tl.where(condition_mask, vals, 0.0)
-    block_sum = tl.sum(conditional_vals)
+    mask = indices < n_elements
+    vals = tl.load(a_ptr + indices, mask=mask, other=0.0)
     
-    tl.atomic_add(result_ptr, block_sum)
+    # Apply condition: only sum values > 0
+    condition = vals > 0.0
+    masked_vals = tl.where(condition, vals, 0.0)
+    
+    block_sum = tl.sum(masked_vals)
+    tl.store(partial_sums_ptr + pid, block_sum)
 
 def s3111_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
+    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create tensor for partial sums
+    partial_sums = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
     
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
-    s3111_kernel[grid](a, result, n, BLOCK_SIZE=BLOCK_SIZE)
+    # Launch kernel
+    grid = (n_blocks,)
+    s3111_kernel[grid](a, partial_sums, n_elements, BLOCK_SIZE=BLOCK_SIZE)
     
-    return result.item()
+    # Sum partial results on CPU/GPU
+    return partial_sums.sum().item()
 ```
 
 
@@ -243,26 +222,33 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3111_kernel(a_ptr, result_ptr, n, BLOCK_SIZE: tl.constexpr):
+def s3111_kernel(a_ptr, partial_sums_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n
+    offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
     
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    condition_mask = vals > 0.0
-    conditional_vals = tl.where(condition_mask, vals, 0.0)
-    block_sum = tl.sum(conditional_vals)
+    mask = indices < n_elements
+    vals = tl.load(a_ptr + indices, mask=mask, other=0.0)
     
-    tl.atomic_add(result_ptr, block_sum)
+    # Apply condition: only sum values > 0
+    condition = vals > 0.0
+    masked_vals = tl.where(condition, vals, 0.0)
+    
+    block_sum = tl.sum(masked_vals)
+    tl.store(partial_sums_ptr + pid, block_sum)
 
 def s3111_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
+    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create tensor for partial sums
+    partial_sums = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
     
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
-    s3111_kernel[grid](a, result, n, BLOCK_SIZE=BLOCK_SIZE)
+    # Launch kernel
+    grid = (n_blocks,)
+    s3111_kernel[grid](a, partial_sums, n_elements, BLOCK_SIZE=BLOCK_SIZE)
     
-    return result.item()
+    # Sum partial results
+    return partial_sums.sum().item()

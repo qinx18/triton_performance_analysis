@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s3113
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 5.81e+00
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -236,26 +209,37 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3113_kernel(a_ptr, n, BLOCK_SIZE: tl.constexpr):
+def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    block_max = float('-inf')
+    # Initialize with absolute value of first element
+    first_val = tl.load(a_ptr)
+    block_max = tl.abs(first_val)
     
-    for block_start in range(0, n, BLOCK_SIZE):
+    # Process all elements in blocks
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n
+        mask = current_offsets < n_elements
         
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         abs_vals = tl.abs(vals)
-        
         current_max = tl.max(abs_vals)
+        
+        # Update block maximum
         block_max = tl.maximum(block_max, current_max)
     
-    return block_max
+    # Store result
+    tl.store(result_ptr, block_max)
 
 def s3113_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
     
-    result = s3113_kernel[(1,)](a, n, BLOCK_SIZE=BLOCK_SIZE)
-    return result
+    # Create output tensor for result
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    
+    # Launch kernel with single thread block since we need global maximum
+    grid = (1,)
+    s3113_kernel[grid](a, result, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    
+    return result.item()

@@ -1295,15 +1295,23 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
 
     # For pure reductions (all arrays read-only, returns scalar), compare return values
     if is_pure_reduction:
-        compare_str = """            # Pure reduction: compare return values
-            if isinstance(c_result, (int, float)):
+        # Get first array name for numpy reference computation
+        first_arr = array_names[0] if array_names else 'a'
+        compare_str = f"""            # Pure reduction: compare return values
+            # If C returns None (void function), use numpy sum as reference
+            if c_result is None:
+                # C function is void - use numpy sum as baseline reference
+                c_val = float(np.sum({first_arr}_c))
+            elif isinstance(c_result, (int, float)):
                 c_val = c_result
             elif isinstance(c_result, np.ndarray):
                 c_val = c_result.item() if c_result.size == 1 else c_result.sum()
             else:
                 c_val = float(c_result)
 
-            if isinstance(triton_result, (int, float)):
+            if triton_result is None:
+                tr_val = float('inf')  # Triton should return something
+            elif isinstance(triton_result, (int, float)):
                 tr_val = triton_result
             elif isinstance(triton_result, torch.Tensor):
                 tr_val = triton_result.item() if triton_result.numel() == 1 else triton_result.sum().item()

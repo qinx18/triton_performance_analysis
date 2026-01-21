@@ -4,39 +4,36 @@ import torch
 
 @triton.jit
 def s255_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and calculate the starting index for this block
+    # This kernel has sequential dependencies, so we process the entire array in one thread
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
     
-    # Create offset vector
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < N
-    
-    # Load the initial carry-around variables
-    x = tl.load(b_ptr + N - 1)
-    y = tl.load(b_ptr + N - 2)
-    
-    # Process each element sequentially within this block
-    for i in range(BLOCK_SIZE):
-        idx = block_start + i
-        if idx < N:
-            b_val = tl.load(b_ptr + idx)
-            result = (b_val + x + y) * 0.333
-            tl.store(a_ptr + idx, result)
+    # Only process if we're the first program
+    if pid == 0:
+        # Initialize x and y
+        x = tl.load(b_ptr + N - 1)
+        y = tl.load(b_ptr + N - 2)
+        
+        # Process each element sequentially
+        for i in range(N):
+            # Load b[i]
+            b_i = tl.load(b_ptr + i)
             
-            # Update carry-around variables
+            # Compute a[i] = (b[i] + x + y) * 0.333
+            result = (b_i + x + y) * 0.333
+            
+            # Store result
+            tl.store(a_ptr + i, result)
+            
+            # Update carry variables
             y = x
-            x = b_val
+            x = b_i
 
-def s255_triton(a, b):
+def s255_triton(a, b, x):
     N = a.shape[0]
-    
-    # Use small block size since we need sequential processing
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    s255_kernel[grid](
-        a, b, N,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Launch with single thread block since we have sequential dependencies
+    grid = (1,)
+    
+    # Launch kernel
+    s255_kernel[grid](a, b, N, BLOCK_SIZE=BLOCK_SIZE)

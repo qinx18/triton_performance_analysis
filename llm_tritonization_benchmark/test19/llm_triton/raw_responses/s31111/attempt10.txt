@@ -1,114 +1,58 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s31111
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s31111/test_s31111_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s31111/test_s31111_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s31111/test_s31111_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 9.27e+00
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s31111_kernel(a_ptr, sum_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Calculate sum of elements at specific offsets
-    # Each test call sums 4 consecutive elements starting at different bases
+def s31111_kernel(a_ptr, result_ptr, n, BLOCK_SIZE: tl.constexpr):
+    # Single thread computes the entire sum
+    pid = tl.program_id(0)
+    if pid > 0:
+        return
     
     sum_val = 0.0
     
-    # Define offsets for loading 4 consecutive elements
-    offsets = tl.arange(0, 4)
+    # For each of the 8 starting positions: 0, 4, 8, 12, 16, 20, 24, 28
+    # Sum 4 consecutive elements starting from each position
+    for start_idx in range(8):
+        base_offset = start_idx * 4
+        
+        # Load and sum 4 elements starting at base_offset
+        for i in range(4):
+            offset = base_offset + i
+            if offset < n:
+                val = tl.load(a_ptr + offset)
+                sum_val += val
     
-    # sum += test(a) - sum first 4 elements starting at index 0
-    mask = offsets < N
-    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # sum += test(&a[4]) - sum 4 elements starting at index 4
-    mask = (4 + offsets) < N
-    vals = tl.load(a_ptr + 4 + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # sum += test(&a[8]) - sum 4 elements starting at index 8
-    mask = (8 + offsets) < N
-    vals = tl.load(a_ptr + 8 + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # sum += test(&a[12]) - sum 4 elements starting at index 12
-    mask = (12 + offsets) < N
-    vals = tl.load(a_ptr + 12 + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # sum += test(&a[16]) - sum 4 elements starting at index 16
-    mask = (16 + offsets) < N
-    vals = tl.load(a_ptr + 16 + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # sum += test(&a[20]) - sum 4 elements starting at index 20
-    mask = (20 + offsets) < N
-    vals = tl.load(a_ptr + 20 + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # sum += test(&a[24]) - sum 4 elements starting at index 24
-    mask = (24 + offsets) < N
-    vals = tl.load(a_ptr + 24 + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # sum += test(&a[28]) - sum 4 elements starting at index 28
-    mask = (28 + offsets) < N
-    vals = tl.load(a_ptr + 28 + offsets, mask=mask, other=0.0)
-    sum_val += tl.sum(vals)
-    
-    # Store the final sum
-    tl.store(sum_ptr, sum_val)
+    # Store the final result
+    tl.store(result_ptr, sum_val)
 
 def s31111_triton(a):
-    N = a.shape[0]
+    n = a.shape[0]
     
-    # Create output tensor for the sum
-    sum_result = torch.zeros(1, dtype=torch.float32, device=a.device)
+    # Create output tensor for the sum result
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread since we're computing one sum
+    # Launch kernel with single thread
     grid = (1,)
-    s31111_kernel[grid](a, sum_result, N, BLOCK_SIZE=32)
+    s31111_kernel[grid](a, result, n, BLOCK_SIZE=32)
     
-    return sum_result.item()
+    return result[0].item()
 ```
 
 
@@ -278,76 +222,37 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s31111_kernel(a_ptr, sum_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Calculate sum of elements at specific offsets
+def s31111_kernel(a_ptr, result_ptr, n, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid > 0:
+        return
+    
     sum_val = 0.0
     
-    # Define offsets for loading 4 consecutive elements
-    offsets = tl.arange(0, 4)
+    # For each starting position, sum 4 consecutive elements
+    start_positions = [0, 4, 8, 12, 16, 20, 24, 28]
     
-    # sum += test(a) - sum first 4 elements starting at index 0
-    mask0 = offsets < N
-    vals0 = tl.load(a_ptr + offsets, mask=mask0, other=0.0)
-    sum_val += tl.sum(vals0)
+    for start_idx in start_positions:
+        # Sum 4 elements starting at start_idx
+        for i in range(4):
+            offset = start_idx + i
+            if offset < n:
+                val = tl.load(a_ptr + offset)
+                sum_val += val
     
-    # sum += test(&a[4]) - sum 4 elements starting at index 4
-    offsets4 = 4 + offsets
-    mask4 = offsets4 < N
-    vals4 = tl.load(a_ptr + offsets4, mask=mask4, other=0.0)
-    sum_val += tl.sum(vals4)
-    
-    # sum += test(&a[8]) - sum 4 elements starting at index 8
-    offsets8 = 8 + offsets
-    mask8 = offsets8 < N
-    vals8 = tl.load(a_ptr + offsets8, mask=mask8, other=0.0)
-    sum_val += tl.sum(vals8)
-    
-    # sum += test(&a[12]) - sum 4 elements starting at index 12
-    offsets12 = 12 + offsets
-    mask12 = offsets12 < N
-    vals12 = tl.load(a_ptr + offsets12, mask=mask12, other=0.0)
-    sum_val += tl.sum(vals12)
-    
-    # sum += test(&a[16]) - sum 4 elements starting at index 16
-    offsets16 = 16 + offsets
-    mask16 = offsets16 < N
-    vals16 = tl.load(a_ptr + offsets16, mask=mask16, other=0.0)
-    sum_val += tl.sum(vals16)
-    
-    # sum += test(&a[20]) - sum 4 elements starting at index 20
-    offsets20 = 20 + offsets
-    mask20 = offsets20 < N
-    vals20 = tl.load(a_ptr + offsets20, mask=mask20, other=0.0)
-    sum_val += tl.sum(vals20)
-    
-    # sum += test(&a[24]) - sum 4 elements starting at index 24
-    offsets24 = 24 + offsets
-    mask24 = offsets24 < N
-    vals24 = tl.load(a_ptr + offsets24, mask=mask24, other=0.0)
-    sum_val += tl.sum(vals24)
-    
-    # sum += test(&a[28]) - sum 4 elements starting at index 28
-    offsets28 = 28 + offsets
-    mask28 = offsets28 < N
-    vals28 = tl.load(a_ptr + offsets28, mask=mask28, other=0.0)
-    sum_val += tl.sum(vals28)
-    
-    # Store the final sum
-    tl.store(sum_ptr, sum_val)
+    tl.store(result_ptr, sum_val)
 
 def s31111_triton(a):
-    N = a.shape[0]
+    n = a.shape[0]
     
-    # Create output tensor for the sum
-    sum_result = torch.zeros(1, dtype=torch.float32, device=a.device)
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread since we're computing one sum
     grid = (1,)
-    s31111_kernel[grid](a, sum_result, N, BLOCK_SIZE=32)
+    s31111_kernel[grid](a, result, n, BLOCK_SIZE=32)
     
-    return sum_result.item()
+    return result[0].item()

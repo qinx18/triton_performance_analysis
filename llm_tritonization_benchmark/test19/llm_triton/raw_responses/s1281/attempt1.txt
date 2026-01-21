@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1281
-# Generated: 2026-01-19 10:12:16
+# Generated: 2026-01-20 06:44:48
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -127,7 +127,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s1281_triton(a, b, c, d, e):
+def s1281_triton(a, b, c, d, e, x):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -203,55 +203,67 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def expand_x_kernel(b_ptr, c_ptr, a_ptr, d_ptr, e_ptr, x_expanded_ptr, n, BLOCK_SIZE: tl.constexpr):
+def s1281_expand_x_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, x_expanded_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     # Single thread processes all elements sequentially to expand scalar x
-    if tl.program_id(0) != 0:
+    pid = tl.program_id(axis=0)
+    if pid != 0:
         return
     
-    x_val = 0.0
-    for i in range(n):
+    x_val = 0.0  # Initial value of scalar x
+    
+    for i in range(n_elements):
+        # Load values for computation
+        a_val = tl.load(a_ptr + i)
         b_val = tl.load(b_ptr + i)
         c_val = tl.load(c_ptr + i)
-        a_val = tl.load(a_ptr + i)
         d_val = tl.load(d_ptr + i)
         e_val = tl.load(e_ptr + i)
         
+        # Compute new x value
         x_val = b_val * c_val + a_val * d_val + e_val
+        
+        # Store expanded x value
         tl.store(x_expanded_ptr + i, x_val)
 
 @triton.jit
-def s1281_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, x_expanded_ptr, n, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+def s1281_compute_kernel(a_ptr, b_ptr, x_expanded_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n
+    mask = offsets < n_elements
     
     # Load expanded x values
     x_vals = tl.load(x_expanded_ptr + offsets, mask=mask)
     
-    # Compute new values
-    a_new = x_vals - 1.0
+    # Compute a[i] = x - 1.0 and b[i] = x
+    a_vals = x_vals - 1.0
+    b_vals = x_vals
     
     # Store results
-    tl.store(a_ptr + offsets, a_new, mask=mask)
-    tl.store(b_ptr + offsets, x_vals, mask=mask)
+    tl.store(a_ptr + offsets, a_vals, mask=mask)
+    tl.store(b_ptr + offsets, b_vals, mask=mask)
 
-def s1281_triton(a, b, c, d, e):
-    n = a.shape[0]
-    BLOCK_SIZE = 256
+def s1281_triton(a, b, c, d, e, x):
+    n_elements = a.shape[0]
     
     # Create expanded array for scalar x
-    x_expanded = torch.zeros(n, dtype=a.dtype, device=a.device)
+    x_expanded = torch.zeros_like(a)
     
-    # Phase 1: Expand scalar x
-    grid = (1,)
-    expand_x_kernel[grid](b, c, a, d, e, x_expanded, n, BLOCK_SIZE=BLOCK_SIZE)
+    BLOCK_SIZE = 256
+    
+    # Phase 1: Expand scalar x to array using sequential processing
+    grid_expand = (1,)  # Single block for sequential processing
+    s1281_expand_x_kernel[grid_expand](
+        a, b, c, d, e, x_expanded, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
     
     # Phase 2: Use expanded array in parallel computation
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
-    s1281_kernel[grid](a, b, c, d, e, x_expanded, n, BLOCK_SIZE=BLOCK_SIZE)
+    grid_compute = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    s1281_compute_kernel[grid_compute](
+        a, b, x_expanded, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
 ```

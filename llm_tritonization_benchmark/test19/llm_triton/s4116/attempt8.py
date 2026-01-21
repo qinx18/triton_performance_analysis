@@ -1,61 +1,47 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s4116_kernel(a_ptr, aa_ptr, ip_ptr, result_ptr, 
-                 inc, j, n_elements, aa_stride1,
-                 BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    
-    # Calculate offset for this block
-    block_start = pid * BLOCK_SIZE
+def s4116_kernel(a_ptr, aa_ptr, ip_ptr, inc, j, len_2d, sum_ptr, BLOCK_SIZE: tl.constexpr):
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
+    mask = indices < len_2d - 1
     
-    # Mask for valid elements
-    mask = indices < n_elements
-    
-    # Load ip indices - need to ensure they're within bounds
+    # Load ip values for valid indices
     ip_vals = tl.load(ip_ptr + indices, mask=mask, other=0)
     
-    # Calculate a array offsets: off = inc + i
-    a_offsets = inc + indices
+    # Calculate a indices: off = inc + i
+    a_indices = inc + indices
+    a_vals = tl.load(a_ptr + a_indices, mask=mask, other=0.0)
     
-    # Load from a array
-    a_vals = tl.load(a_ptr + a_offsets, mask=mask, other=0.0)
-    
-    # Calculate aa array offsets: aa[j-1][ip[i]]
-    aa_offsets = (j - 1) * aa_stride1 + ip_vals
-    
-    # Load from aa array
-    aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask, other=0.0)
+    # Calculate aa indices: aa[j-1][ip[i]]
+    aa_row = j - 1
+    aa_indices = aa_row * len_2d + ip_vals
+    aa_vals = tl.load(aa_ptr + aa_indices, mask=mask, other=0.0)
     
     # Compute products
     products = a_vals * aa_vals
+    products = tl.where(mask, products, 0.0)
     
-    # Store partial results
-    tl.store(result_ptr + indices, products, mask=mask)
+    # Store products for this block
+    tl.store(sum_ptr + indices, products, mask=mask)
 
-def s4116_triton(a, aa, ip, inc, j):
-    # Get dimensions
-    n_elements = aa.shape[0] - 1  # LEN_2D - 1
+def s4116_triton(a, aa, ip, inc, j, len_2d):
+    n = len_2d - 1
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n, BLOCK_SIZE),)
     
-    # Create output tensor for partial results
-    partial_results = torch.zeros(n_elements, dtype=torch.float32, device=a.device)
-    
-    # Calculate stride for aa array (number of columns)
-    aa_stride1 = aa.shape[1]
+    # Create temporary array to store all products
+    temp_products = torch.zeros(len_2d, dtype=torch.float32, device=a.device)
     
     # Launch kernel
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-    
     s4116_kernel[grid](
-        a, aa, ip, partial_results,
-        inc, j, n_elements, aa_stride1,
+        a, aa, ip, inc, j, len_2d, temp_products, 
         BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Sum all partial results
-    return torch.sum(partial_results).item()
+    # Sum only the first n elements (corresponding to valid loop iterations)
+    result = torch.sum(temp_products[:n])
+    return result

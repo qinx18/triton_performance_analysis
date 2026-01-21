@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s3110
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=    64... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=   128... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=   256... ERROR: float() argument must be a string or a real number, not 'NoneType'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3110/test_s3110_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3110/test_s3110_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3110/test_s3110_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 1.02e+02
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -45,20 +18,69 @@ import torch
 import triton
 import triton.language as tl
 
+@triton.jit
+def s3110_kernel(aa_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_idx = pid * BLOCK_SIZE + j_offsets
+    j_mask = j_idx < N
+    
+    # Initialize block values
+    block_max = tl.full((BLOCK_SIZE,), float('-inf'), dtype=tl.float32)
+    block_xindex = tl.zeros((BLOCK_SIZE,), dtype=tl.int32)
+    block_yindex = j_idx
+    
+    # Sequential loop over i dimension
+    for i in range(N):
+        # Load row i for all valid j positions
+        row_offsets = i * N + j_idx
+        vals = tl.load(aa_ptr + row_offsets, mask=j_mask, other=float('-inf'))
+        
+        # Update max values and indices where new value is greater
+        update_mask = vals > block_max
+        update_mask = update_mask & j_mask
+        block_max = tl.where(update_mask, vals, block_max)
+        block_xindex = tl.where(update_mask, i, block_xindex)
+    
+    # Find the maximum value in this block
+    max_val = tl.max(block_max)
+    
+    # Find elements that have the maximum value
+    is_max_mask = block_max == max_val
+    is_max_mask = is_max_mask & j_mask
+    
+    # Among tied maximum values, find the one with smallest indices
+    # Set non-max elements to large values so they don't interfere with min operations
+    temp_xindex = tl.where(is_max_mask, block_xindex, N)
+    temp_yindex = tl.where(is_max_mask, block_yindex, N)
+    
+    final_xindex = tl.min(temp_xindex)
+    final_yindex = tl.min(temp_yindex)
+    
+    # Only the first thread of the first block writes the result
+    if pid == 0:
+        lane_mask = j_offsets == 0
+        if tl.sum(lane_mask.to(tl.int32)) > 0:
+            tl.store(result_ptr, max_val)
+            tl.store(result_ptr + 1, final_xindex.to(tl.float32))
+            tl.store(result_ptr + 2, final_yindex.to(tl.float32))
+
 def s3110_triton(aa):
-    # Use PyTorch for efficient argmax computation
-    flat_aa = aa.flatten()
-    max_val = torch.max(flat_aa)
-    max_idx = torch.argmax(flat_aa)
-    
     N = aa.shape[0]
-    xindex = max_idx // N
-    yindex = max_idx % N
+    BLOCK_SIZE = 256
     
-    # Return the exact value as C code: max + xindex+1 + yindex+1
-    result = max_val + (xindex + 1).float() + (yindex + 1).float()
+    # Allocate result tensor: [max_val, xindex, yindex]
+    result = torch.zeros(3, dtype=torch.float32, device=aa.device)
     
-    return result
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    s3110_kernel[grid](aa, result, N, BLOCK_SIZE=BLOCK_SIZE)
+    
+    max_val = result[0]
+    xindex = int(result[1].item())
+    yindex = int(result[2].item())
+    
+    return max_val + (xindex + 1) + (yindex + 1)
 ```
 
 
@@ -324,17 +346,14 @@ import triton
 import triton.language as tl
 
 def s3110_triton(aa):
-    # Use PyTorch for efficient argmax computation on flattened array
+    N = aa.shape[0]
+    
+    # Use PyTorch for the argmax reduction
     flat_aa = aa.flatten()
     max_val = torch.max(flat_aa)
     max_idx = torch.argmax(flat_aa)
     
-    # Convert flat index back to 2D coordinates
-    N = aa.shape[0]  # Should be same as aa.shape[1] for square matrix
     xindex = max_idx // N
     yindex = max_idx % N
     
-    # Return the exact value as C code: max + xindex+1 + yindex+1
-    result = max_val + (xindex + 1).float() + (yindex + 1).float()
-    
-    return result.item()
+    return max_val + (xindex + 1) + (yindex + 1)

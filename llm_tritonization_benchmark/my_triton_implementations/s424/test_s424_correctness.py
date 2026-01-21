@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s424_c
-    from test19.llm_triton.s424.attempt10 import s424_triton
+    from test19.llm_triton.s424.attempt7 import s424_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -47,16 +47,19 @@ def test_correctness():
         try:
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             flat_2d_array = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)
+            xx = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1
 
             a_c = a.cpu().numpy().copy()
             flat_2d_array_c = flat_2d_array.cpu().numpy().copy()
+            xx_c = xx.cpu().numpy().copy()
 
             a_tr = a.clone()
             flat_2d_array_tr = flat_2d_array.clone()
+            xx_tr = xx.clone()
 
-            c_tensors = {"a": a_c, "flat_2d_array": flat_2d_array_c}
-            tr_tensors = {"a": a_tr, "flat_2d_array": flat_2d_array_tr}
+            c_tensors = {"a": a_c, "flat_2d_array": flat_2d_array_c, "xx": xx_c}
+            tr_tensors = {"a": a_tr, "flat_2d_array": flat_2d_array_tr, "xx": xx_tr}
             scalars = {"iterations": iterations}
 
             c_args = build_args(s424_c, c_tensors, scalars)
@@ -66,10 +69,10 @@ def test_correctness():
             triton_result = s424_triton(*tr_args)
 
             # Convert C result back to torch for comparison
-            flat_2d_array_c_torch = torch.from_numpy(flat_2d_array_c).cuda()
-            max_error = torch.max(torch.abs(flat_2d_array_c_torch - flat_2d_array_tr)).item()
+            xx_c_torch = torch.from_numpy(xx_c).cuda()
+            max_error = torch.max(torch.abs(xx_c_torch - xx_tr)).item()
 
-            passed = max_error < 1e-3 or torch.allclose(flat_2d_array_c_torch, flat_2d_array_tr, rtol=1e-3, atol=1e-3)
+            passed = max_error < 1e-3 or torch.allclose(xx_c_torch, xx_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

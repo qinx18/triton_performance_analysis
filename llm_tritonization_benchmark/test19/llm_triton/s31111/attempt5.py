@@ -3,42 +3,42 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s31111_kernel(a_ptr, sum_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Single thread to compute the sum
-    thread_id = tl.program_id(0)
+def s31111_kernel(a_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
+    program_id = tl.program_id(0)
     
-    if thread_id == 0:
-        total_sum = 0.0
+    if program_id >= 1:
+        return
+    
+    # Initialize sum
+    sum_val = 0.0
+    
+    # Call test() function 8 times with stride 4: a[0], a[4], a[8], ..., a[28]
+    for base_idx in range(8):
+        start_idx = base_idx * 4
         
-        # Each test() call sums 4 consecutive elements starting at specific offsets
-        # Unroll the 8 calls to test function
-        
-        for call_idx in range(8):
-            group_sum = 0.0
-            start_idx = call_idx * 4
-            
-            for i in range(4):
-                idx = start_idx + i
-                if idx < N:
-                    val = tl.load(a_ptr + idx)
-                    group_sum += val
-            total_sum += group_sum
-        
-        # Store the result
-        tl.store(sum_ptr, total_sum)
+        # test() function: sum 4 consecutive elements starting at start_idx
+        # Ensure we don't go out of bounds
+        if start_idx + 3 < N:
+            offsets = tl.arange(0, 4)
+            indices = start_idx + offsets
+            vals = tl.load(a_ptr + indices)
+            local_sum = tl.sum(vals)
+            sum_val += local_sum
+    
+    # Store the result
+    tl.store(result_ptr, sum_val)
 
 def s31111_triton(a):
     N = a.shape[0]
     
-    # Output tensor for the sum
-    sum_result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create output tensor for the sum result
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread
-    BLOCK_SIZE = 32
+    BLOCK_SIZE = 256
     grid = (1,)
     
     s31111_kernel[grid](
-        a, sum_result, N, BLOCK_SIZE=BLOCK_SIZE
+        a, result, N, BLOCK_SIZE=BLOCK_SIZE
     )
     
-    return sum_result[0]
+    return result.item()

@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s255_c
-    from test19.llm_triton.s255.attempt10 import s255_triton
+    from test19.llm_triton.s255.attempt2 import s255_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -47,16 +47,19 @@ def test_correctness():
         try:
             a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            x = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             iterations = 1
 
             a_c = a.cpu().numpy().copy()
             b_c = b.cpu().numpy().copy()
+            x_c = x.cpu().numpy().copy()
 
             a_tr = a.clone()
             b_tr = b.clone()
+            x_tr = x.clone()
 
-            c_tensors = {"a": a_c, "b": b_c}
-            tr_tensors = {"a": a_tr, "b": b_tr}
+            c_tensors = {"a": a_c, "b": b_c, "x": x_c}
+            tr_tensors = {"a": a_tr, "b": b_tr, "x": x_tr}
             scalars = {"iterations": iterations}
 
             c_args = build_args(s255_c, c_tensors, scalars)
@@ -65,9 +68,10 @@ def test_correctness():
             c_result = s255_c(*c_args)
             triton_result = s255_triton(*tr_args)
 
-            # Convert C result back to torch for comparison
+            # Convert C results back to torch for comparison
             a_c_torch = torch.from_numpy(a_c).cuda()
-            max_error = torch.max(torch.abs(a_c_torch - a_tr)).item()
+            x_c_torch = torch.from_numpy(x_c).cuda()
+            max_error = max([torch.max(torch.abs(a_c_torch - a_tr)).item(), torch.max(torch.abs(x_c_torch - x_tr)).item()])
 
             passed = max_error < 1e-3 or torch.allclose(a_c_torch, a_tr, rtol=1e-3, atol=1e-3)
             if passed:

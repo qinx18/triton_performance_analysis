@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s281
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: s281_c() missing 1 required positional argument: 'x'
-Testing N=  1000... ERROR: s281_c() missing 1 required positional argument: 'x'
-Testing N= 10000... ERROR: s281_c() missing 1 required positional argument: 'x'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s281/test_s281_correctness.py", line 68, in test_correctness
-    c_result = s281_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s281_c() missing 1 required positional argument: 'x'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s281/test_s281_correctness.py", line 68, in test_correctness
-    c_result = s281_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s281_c() missing 1 required positional argument: 'x'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s281/test_s281_correctness.py", line 68, in test_correctness
-    c_result = s281_c(*c_args)
-               ^^^^^^^^^^^^^^^
-TypeError: s281_c() missing 1 required positional argument: 'x'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 6.87e+00
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -236,7 +209,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s281_triton(a, b, c):
+def s281_triton(a, b, c, x):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -314,65 +287,67 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s281_phase1_kernel(a_ptr, a_copy_ptr, b_ptr, c_ptr, n, threshold, BLOCK_SIZE: tl.constexpr):
+def s281_expand_x_kernel(a, b, c, x_expanded, n, BLOCK_SIZE: tl.constexpr):
+    """Sequential kernel to expand scalar x with proper dependency handling"""
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = (indices < threshold) & (indices >= 0)
+    if pid != 0:
+        return
     
-    reverse_indices = n - 1 - indices
-    reverse_mask = mask & (reverse_indices >= 0) & (reverse_indices < n)
-    
-    a_vals = tl.load(a_copy_ptr + reverse_indices, mask=reverse_mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
-    c_vals = tl.load(c_ptr + indices, mask=mask)
-    
-    x_vals = a_vals + b_vals * c_vals
-    a_new = x_vals - 1.0
-    
-    tl.store(a_ptr + indices, a_new, mask=mask)
-    tl.store(b_ptr + indices, x_vals, mask=mask)
+    x_val = 0.0
+    for i in range(n):
+        a_val = tl.load(a + (n - 1 - i))
+        b_val = tl.load(b + i)
+        c_val = tl.load(c + i)
+        x_val = a_val + b_val * c_val
+        tl.store(x_expanded + i, x_val)
 
 @triton.jit
-def s281_phase2_kernel(a_ptr, b_ptr, c_ptr, n, threshold, BLOCK_SIZE: tl.constexpr):
+def s281_phase1_kernel(a, b, c, x_expanded, a_copy, n, threshold, BLOCK_SIZE: tl.constexpr):
+    """Phase 1: Process indices 0 to threshold-1"""
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE + threshold
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = (indices < n) & (indices >= threshold)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = (offsets < threshold)
     
-    reverse_indices = n - 1 - indices
-    reverse_mask = mask & (reverse_indices >= 0) & (reverse_indices < threshold)
-    
-    a_vals = tl.load(a_ptr + reverse_indices, mask=reverse_mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
-    c_vals = tl.load(c_ptr + indices, mask=mask)
-    
-    x_vals = a_vals + b_vals * c_vals
-    a_new = x_vals - 1.0
-    
-    tl.store(a_ptr + indices, a_new, mask=mask)
-    tl.store(b_ptr + indices, x_vals, mask=mask)
+    x_vals = tl.load(x_expanded + offsets, mask=mask)
+    tl.store(a + offsets, x_vals - 1.0, mask=mask)
+    tl.store(b + offsets, x_vals, mask=mask)
 
-def s281_triton(a, b, c):
+@triton.jit
+def s281_phase2_kernel(a, b, c, x_expanded, n, threshold, BLOCK_SIZE: tl.constexpr):
+    """Phase 2: Process indices threshold to n-1"""
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE) + threshold
+    mask = (offsets < n)
+    
+    x_vals = tl.load(x_expanded + offsets, mask=mask)
+    tl.store(a + offsets, x_vals - 1.0, mask=mask)
+    tl.store(b + offsets, x_vals, mask=mask)
+
+def s281_triton(a, b, c, x):
     n = a.shape[0]
     threshold = n // 2
-    
-    a_copy = a.clone()
-    
     BLOCK_SIZE = 256
     
-    # Phase 1
-    grid1 = (triton.cdiv(threshold, BLOCK_SIZE),)
-    s281_phase1_kernel[grid1](a, a_copy, b, c, n, threshold, BLOCK_SIZE=BLOCK_SIZE)
+    # Create expanded array for scalar x
+    x_expanded = torch.zeros(n, dtype=a.dtype, device=a.device)
     
-    # Phase 2
+    # Clone array for phase 1 reads
+    a_copy = a.clone()
+    
+    # Step 1: Expand scalar x sequentially
+    grid = (1,)
+    s281_expand_x_kernel[grid](a, b, c, x_expanded, n, BLOCK_SIZE=BLOCK_SIZE)
+    
+    # Step 2: Phase 1 - parallel processing of first half
+    grid = (triton.cdiv(threshold, BLOCK_SIZE),)
+    s281_phase1_kernel[grid](a, b, c, x_expanded, a_copy, n, threshold, BLOCK_SIZE=BLOCK_SIZE)
+    
+    # Step 3: Phase 2 - parallel processing of second half
     remaining = n - threshold
-    grid2 = (triton.cdiv(remaining, BLOCK_SIZE),)
-    s281_phase2_kernel[grid2](a, b, c, n, threshold, BLOCK_SIZE=BLOCK_SIZE)
+    grid = (triton.cdiv(remaining, BLOCK_SIZE),)
+    s281_phase2_kernel[grid](a, b, c, x_expanded, n, threshold, BLOCK_SIZE=BLOCK_SIZE)

@@ -1,44 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-py", line 216, in make_llir
-    pm.run(mod)
-RuntimeError: PassManager::run failed
-loc("/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test19/llm_triton/s3113/attempt6.py":21:11): error: failed to legalize operation 'tt.return' that was explicitly marked illegal
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 63, in test_correctness
-    triton_result = s3113_triton(*tr_args)
-                    ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test19/llm_triton/s3113/attempt6.py", line 27, in s3113_triton
-    result = s3113_kernel[(1,)](a, n, BLOCK_SIZE=BLOCK_SIZE)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 282, in compile
-    next_module = compile_ir(module, metadata)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/backends/nvidia/compiler.py", line 318, in <lambda>
-    stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
-                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/backends/nvidia/compiler.py", line 216, in make_llir
-    pm.run(mod)
-RuntimeError: PassManager::run failed
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 4.33e+00
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -47,29 +19,40 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3113_kernel(a_ptr, n, BLOCK_SIZE: tl.constexpr):
+def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    block_max = float('-inf')
+    # Initialize with absolute value of first element
+    first_val = tl.load(a_ptr)
+    block_max = tl.abs(first_val)
     
-    for block_start in range(0, n, BLOCK_SIZE):
+    # Process all elements in blocks
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n
+        mask = current_offsets < n_elements
         
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
         abs_vals = tl.abs(vals)
-        
         current_max = tl.max(abs_vals)
+        
+        # Update block maximum
         block_max = tl.maximum(block_max, current_max)
     
-    return block_max
+    # Store result
+    tl.store(result_ptr, block_max)
 
 def s3113_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
     
-    result = s3113_kernel[(1,)](a, n, BLOCK_SIZE=BLOCK_SIZE)
-    return result
+    # Create output tensor for result
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    
+    # Launch kernel with single thread block since we need global maximum
+    grid = (1,)
+    s3113_kernel[grid](a, result, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    
+    return result.item()
 ```
 
 
@@ -264,28 +247,57 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3113_kernel(a_ptr, result_ptr, n, BLOCK_SIZE: tl.constexpr):
+def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    block_max = float('-inf')
+    # Calculate this block's starting position
+    block_start = pid * BLOCK_SIZE
+    current_offsets = block_start + offsets
+    mask = current_offsets < n_elements
     
-    for block_start in range(0, n, BLOCK_SIZE):
+    # Load values and compute absolute values
+    vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+    abs_vals = tl.abs(vals)
+    
+    # Find maximum absolute value in this block
+    block_max = tl.max(abs_vals)
+    
+    # Store the block maximum
+    tl.store(result_ptr + pid, block_max)
+
+@triton.jit
+def s3113_final_kernel(partial_results_ptr, result_ptr, num_blocks, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    
+    global_max = 0.0
+    for block_start in range(0, num_blocks, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < n
+        mask = current_offsets < num_blocks
         
-        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        abs_vals = tl.abs(vals)
-        
-        current_max = tl.max(abs_vals)
-        block_max = tl.maximum(block_max, current_max)
+        vals = tl.load(partial_results_ptr + current_offsets, mask=mask, other=0.0)
+        current_max = tl.max(vals)
+        global_max = tl.maximum(global_max, current_max)
     
-    tl.store(result_ptr, block_max)
+    tl.store(result_ptr, global_max)
 
 def s3113_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
+    # Create tensor for partial results
+    partial_results = torch.zeros(num_blocks, dtype=a.dtype, device=a.device)
+    
+    # Launch first kernel to compute block maximums
+    grid = (num_blocks,)
+    s3113_kernel[grid](a, partial_results, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    
+    # Create final result tensor
     result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    s3113_kernel[(1,)](a, result, n, BLOCK_SIZE=BLOCK_SIZE)
+    # Launch second kernel to find global maximum
+    grid = (1,)
+    s3113_final_kernel[grid](partial_results, result, num_blocks, BLOCK_SIZE=BLOCK_SIZE)
+    
     return result.item()

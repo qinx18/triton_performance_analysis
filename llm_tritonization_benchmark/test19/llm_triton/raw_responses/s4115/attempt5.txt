@@ -1,92 +1,75 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s4115
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s4115/test_s4115_correctness.py", line 77, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s4115/test_s4115_correctness.py", line 77, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s4115/test_s4115_correctness.py", line 77, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 9.74e-02
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
+def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, n, BLOCK_SIZE: tl.constexpr):
     # Get program ID
     pid = tl.program_id(0)
     
-    # Calculate block boundaries
+    # Calculate block start offset
     block_start = pid * BLOCK_SIZE
+    
+    # Create offset vectors
     offsets = tl.arange(0, BLOCK_SIZE)
-    mask = (block_start + offsets) < N
+    idx = block_start + offsets
     
-    # Load data with masking
-    a_vals = tl.load(a_ptr + block_start + offsets, mask=mask, other=0.0)
-    indices = tl.load(ip_ptr + block_start + offsets, mask=mask, other=0)
+    # Create mask for valid indices
+    mask = idx < n
     
-    # Gather from b using indirect addressing
-    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
+    # Load a values for this block
+    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
     
-    # Compute products
-    products = a_vals * b_vals
+    # Load ip values for this block (indices)
+    ip_vals = tl.load(ip_ptr + idx, mask=mask, other=0)
     
-    # Sum the products for this block
-    block_sum = tl.sum(products)
+    # Create mask for valid b indices (ip values should be valid array indices)
+    b_mask = mask & (ip_vals >= 0)
     
-    # Store the partial sum
-    tl.store(output_ptr + pid, block_sum)
+    # Load b values using indirect addressing with proper masking
+    b_vals = tl.load(b_ptr + ip_vals, mask=b_mask, other=0.0)
+    
+    # Compute dot product for this block, only for valid indices
+    products = tl.where(mask, a_vals * b_vals, 0.0)
+    local_sum = tl.sum(products)
+    
+    # Store partial sum
+    tl.store(output_ptr + pid, local_sum)
 
 def s4115_triton(a, b, ip):
-    N = a.shape[0]
+    n = a.shape[0]
+    
+    # Calculate grid size
     BLOCK_SIZE = 256
-    grid_size = triton.cdiv(N, BLOCK_SIZE)
+    num_blocks = triton.cdiv(n, BLOCK_SIZE)
     
     # Create output tensor for partial sums
-    partial_sums = torch.zeros(grid_size, dtype=a.dtype, device=a.device)
+    partial_sums = torch.zeros(num_blocks, dtype=a.dtype, device=a.device)
     
     # Launch kernel
-    grid = (grid_size,)
-    s4115_kernel[grid](a, b, ip, partial_sums, N, BLOCK_SIZE=BLOCK_SIZE)
+    grid = (num_blocks,)
+    s4115_kernel[grid](a, b, ip, partial_sums, n, BLOCK_SIZE=BLOCK_SIZE)
     
-    # Sum all partial results and return as scalar tensor
-    total_sum = torch.sum(partial_sums)
+    # Sum all partial results
+    result = torch.sum(partial_sums)
     
-    return total_sum.item()
+    return result.item()
 ```
 
 
@@ -237,49 +220,56 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr):
+def s4115_kernel(a_ptr, b_ptr, ip_ptr, output_ptr, n, BLOCK_SIZE: tl.constexpr):
     # Get program ID
     pid = tl.program_id(0)
     
-    # Calculate block boundaries
+    # Calculate block start offset
     block_start = pid * BLOCK_SIZE
+    
+    # Create offset vectors
     offsets = tl.arange(0, BLOCK_SIZE)
-    mask = (block_start + offsets) < N
+    idx = block_start + offsets
     
-    # Load data with masking
-    a_vals = tl.load(a_ptr + block_start + offsets, mask=mask, other=0.0)
-    indices = tl.load(ip_ptr + block_start + offsets, mask=mask, other=0)
+    # Create mask for valid indices
+    mask = idx < n
     
-    # Gather from b using indirect addressing
-    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
+    # Load a values for this block
+    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
     
-    # Compute products
+    # Load ip values for this block (indices)
+    ip_vals = tl.load(ip_ptr + idx, mask=mask, other=0)
+    
+    # Load b values using indirect addressing
+    b_vals = tl.load(b_ptr + ip_vals, mask=mask, other=0.0)
+    
+    # Compute products and sum for this block
     products = a_vals * b_vals
+    local_sum = tl.sum(products)
     
-    # Sum the products for this block
-    block_sum = tl.sum(products)
-    
-    # Store the partial sum
-    tl.store(output_ptr + pid, block_sum)
+    # Store partial sum
+    tl.store(output_ptr + pid, local_sum)
 
 def s4115_triton(a, b, ip):
-    N = a.shape[0]
+    n = a.shape[0]
+    
+    # Calculate grid size
     BLOCK_SIZE = 256
-    grid_size = triton.cdiv(N, BLOCK_SIZE)
+    num_blocks = triton.cdiv(n, BLOCK_SIZE)
     
     # Create output tensor for partial sums
-    partial_sums = torch.zeros(grid_size, dtype=a.dtype, device=a.device)
+    partial_sums = torch.zeros(num_blocks, dtype=a.dtype, device=a.device)
     
     # Launch kernel
-    grid = (grid_size,)
-    s4115_kernel[grid](a, b, ip, partial_sums, N, BLOCK_SIZE=BLOCK_SIZE)
+    grid = (num_blocks,)
+    s4115_kernel[grid](a, b, ip, partial_sums, n, BLOCK_SIZE=BLOCK_SIZE)
     
-    # Sum all partial results and return as Python float
-    total_sum = torch.sum(partial_sums)
+    # Sum all partial results
+    result = torch.sum(partial_sums)
     
-    return float(total_sum.item())
+    return result.item()

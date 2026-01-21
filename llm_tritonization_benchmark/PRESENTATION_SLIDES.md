@@ -221,29 +221,27 @@ For each function, automatically generates:
 
 ---
 
-## Current State (Test 19 Results)
+## Current State (Test 19 Results - After Infrastructure Fixes)
 
 ### Summary Metrics
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| ✅ **PASSING** | 108 | 71.5% |
-| ❌ **FAILING** | 43 | 28.5% |
-| 📊 **Benchmarked** | 108 | 71.5% |
+| ✅ **PASSING** | 116 | 76.8% |
+| ❌ **FAILING** | 35 | 23.2% |
+| 📊 **Benchmarked** | 116 | 76.8% |
 | ⚡ **Valid Speedups** | 106 | 70.2% |
 | ⏱️ **C Ref Timeouts** | 1 | 0.7% |
 | ⏱️ **Triton Timeouts** | 1 | 0.7% |
 
-*Results measured against original TSVC C reference functions (ground truth).*
+*Results measured against TSVC C reference (ground truth) with checksum-based verification.*
 
-### Pass Rate by Attempt
+### Pass Rate by Attempt (Original Run)
 | Attempt | New Passes | Cumulative | Rate |
 |---------|------------|------------|------|
 | 1 | 93 | 93 | 61.6% |
 | 2 | 10 | 103 | 68.2% |
-| 4 | 1 | 104 | 68.9% |
-| 5 | 1 | 105 | 69.5% |
-| 6 | 2 | 107 | 70.9% |
-| 8 | 1 | 108 | 71.5% |
+| 4-8 | 5 | 108 | 71.5% |
+| *+infra fixes* | *+8* | *116* | *76.8%* |
 
 ---
 

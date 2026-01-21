@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================================================================
-Correctness Testing: s3113
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-Testing N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 71, in test_correctness
-    c_val = float(c_result)
-            ^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'NoneType'
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 1.18e+01
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -47,41 +20,42 @@ import torch
 
 @triton.jit
 def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
+    # Get program ID
+    pid = tl.program_id(axis=0)
     
-    # Initialize global max with negative infinity
-    global_max = float('-inf')
+    # Calculate block start and create offsets
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    # Process array in blocks
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        abs_vals = tl.abs(vals)
-        block_max = tl.max(abs_vals, axis=0)
-        
-        global_max = tl.maximum(global_max, block_max)
+    # Load data and compute absolute values
+    vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    abs_vals = tl.abs(vals)
     
-    # Store result only from first program
-    if tl.program_id(0) == 0:
-        tl.store(result_ptr, global_max)
+    # Find maximum in this block
+    block_max = tl.max(abs_vals, axis=0)
+    
+    # Store result
+    tl.store(result_ptr + pid, block_max)
 
 def s3113_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     
-    # Create output tensor for result
-    result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create output tensor for partial results
+    BLOCK_SIZE = 256
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    partial_results = torch.zeros(num_blocks, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single program for global reduction
-    BLOCK_SIZE = 1024
-    grid = (1,)
+    # Launch kernel
+    grid = (num_blocks,)
     
     s3113_kernel[grid](
-        a, result, n, BLOCK_SIZE=BLOCK_SIZE
+        a, partial_results, n_elements, 
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    return result.item()
+    # Find final maximum on CPU
+    return torch.max(partial_results).item()
 ```
 
 
@@ -277,30 +251,43 @@ import torch
 
 @triton.jit
 def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    # Get program ID
+    pid = tl.program_id(axis=0)
+    
+    # Calculate block start and create offsets
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
+    # Load data and compute absolute values
     vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
     abs_vals = tl.abs(vals)
-    block_max = tl.max(abs_vals, axis=0)
     
+    # Find maximum in this block
+    block_max = tl.max(abs_vals)
+    
+    # Store result
     tl.store(result_ptr + pid, block_max)
 
 def s3113_triton(a):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     
-    BLOCK_SIZE = 1024
-    n_blocks = triton.cdiv(n, BLOCK_SIZE)
+    # Handle empty array
+    if n_elements == 0:
+        return 0.0
     
     # Create output tensor for partial results
-    partial_results = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
+    BLOCK_SIZE = 256
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    partial_results = torch.zeros(num_blocks, dtype=a.dtype, device=a.device)
     
-    grid = (n_blocks,)
+    # Launch kernel
+    grid = (num_blocks,)
     
     s3113_kernel[grid](
-        a, partial_results, n, BLOCK_SIZE=BLOCK_SIZE
+        a, partial_results, n_elements, 
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Final reduction on CPU
+    # Find final maximum
     return torch.max(partial_results).item()

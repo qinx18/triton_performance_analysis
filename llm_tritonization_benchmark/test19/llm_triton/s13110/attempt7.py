@@ -2,15 +2,18 @@ import torch
 import triton
 import triton.language as tl
 
-def s13110_triton(aa):
-    N = aa.shape[0]
+def s13110_triton(aa, len_2d):
+    # Flatten the 2D array to use torch.argmax
+    aa_flat = aa.flatten()
     
-    # Use PyTorch for argmax reduction
-    flat_aa = aa.flatten()
-    max_val = torch.max(flat_aa).item()
-    flat_idx = torch.argmax(flat_aa).item()
-    xindex = flat_idx // N
-    yindex = flat_idx % N
+    # Find max value and its index
+    max_val = torch.max(aa_flat)
+    max_idx = torch.argmax(aa_flat)
     
-    # Return value matches C code: max + xindex+1 + yindex+1
+    # Convert flat index to 2D coordinates
+    xindex = max_idx // aa.shape[1]
+    yindex = max_idx % aa.shape[1]
+    
+    # Return exactly what C code returns: max + xindex+1 + yindex+1
+    # Note: C uses 0-based indexing but returns xindex+1, yindex+1
     return max_val + xindex + 1 + yindex + 1

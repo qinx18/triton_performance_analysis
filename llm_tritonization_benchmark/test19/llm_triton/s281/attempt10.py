@@ -1,77 +1,87 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s281_expand_x_kernel(a_ptr, b_ptr, c_ptr, x_expanded_ptr, n, BLOCK_SIZE: tl.constexpr):
-    # Single thread processes all elements sequentially to handle scalar expansion
+def s281_kernel(a, b, c, a_orig, n, BLOCK_SIZE: tl.constexpr):
+    """Unified kernel handling both phases based on index position"""
     pid = tl.program_id(0)
-    if pid != 0:
-        return
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n
     
-    x_val = 0.0
-    for i in range(n):
-        # Load values for position i
-        a_val = tl.load(a_ptr + (n - 1 - i))
-        b_val = tl.load(b_ptr + i)
-        c_val = tl.load(c_ptr + i)
-        
-        # Compute x value
-        x_val = a_val + b_val * c_val
-        
-        # Store expanded x value
-        tl.store(x_expanded_ptr + i, x_val)
-
-@triton.jit
-def s281_phase1_kernel(a_ptr, a_copy_ptr, b_ptr, x_expanded_ptr, threshold, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < threshold
+    # Load indices for reverse access
+    reverse_offsets = n - 1 - offsets
     
-    x_vals = tl.load(x_expanded_ptr + indices, mask=mask)
+    # Determine which array to read from based on crossing threshold
+    threshold = n // 2
     
-    a_new = x_vals - 1.0
+    # For indices < threshold: use original array (Phase 1)
+    # For indices >= threshold: use updated array (Phase 2)
+    use_orig = offsets < threshold
     
-    tl.store(a_ptr + indices, a_new, mask=mask)
-    tl.store(b_ptr + indices, x_vals, mask=mask)
-
-@triton.jit
-def s281_phase2_kernel(a_ptr, b_ptr, x_expanded_ptr, n, threshold, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE + threshold
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n
+    # Load from appropriate source
+    a_vals = tl.where(use_orig,
+                      tl.load(a_orig + reverse_offsets, mask=mask),
+                      tl.load(a + reverse_offsets, mask=mask))
     
-    x_vals = tl.load(x_expanded_ptr + indices, mask=mask)
+    b_vals = tl.load(b + offsets, mask=mask)
+    c_vals = tl.load(c + offsets, mask=mask)
     
-    a_new = x_vals - 1.0
+    # Compute x = a[n-1-i] + b[i] * c[i]
+    x_vals = a_vals + b_vals * c_vals
     
-    tl.store(a_ptr + indices, a_new, mask=mask)
-    tl.store(b_ptr + indices, x_vals, mask=mask)
+    # Store results
+    tl.store(a + offsets, x_vals - 1.0, mask=mask)
+    tl.store(b + offsets, x_vals, mask=mask)
 
 def s281_triton(a, b, c, x):
     n = a.shape[0]
     threshold = n // 2
-    
-    # Create expanded array for scalar x
-    x_expanded = torch.zeros_like(a)
-    
     BLOCK_SIZE = 256
     
-    # Step 1: Expand scalar x to array
-    grid_expand = (1,)
-    s281_expand_x_kernel[grid_expand](a, b, c, x_expanded, n, BLOCK_SIZE=BLOCK_SIZE)
+    # Create copy of original array for phase 1 reads
+    a_orig = a.clone()
     
-    # Step 2: Phase 1 - parallel computation for indices 0 to threshold-1
-    a_copy = a.clone()
-    grid1 = (triton.cdiv(threshold, BLOCK_SIZE),)
-    s281_phase1_kernel[grid1](a, a_copy, b, x_expanded, threshold, BLOCK_SIZE=BLOCK_SIZE)
+    # Phase 1: Process indices 0 to threshold-1
+    # These read from original values at high indices
+    if threshold > 0:
+        grid = (triton.cdiv(threshold, BLOCK_SIZE),)
+        s281_kernel[grid](a, b, c, a_orig, threshold, BLOCK_SIZE=BLOCK_SIZE)
     
-    # Step 3: Phase 2 - parallel computation for indices threshold to n-1
+    # Phase 2: Process indices threshold to n-1  
+    # These read from updated values at low indices
     remaining = n - threshold
     if remaining > 0:
-        grid2 = (triton.cdiv(remaining, BLOCK_SIZE),)
-        s281_phase2_kernel[grid2](a, b, x_expanded, n, threshold, BLOCK_SIZE=BLOCK_SIZE)
+        # Shift arrays to process remaining elements
+        a_phase2 = a[threshold:]
+        b_phase2 = b[threshold:]
+        c_phase2 = c[threshold:]
+        
+        grid = (triton.cdiv(remaining, BLOCK_SIZE),)
+        
+        # Create adjusted kernel for phase 2
+        @triton.jit
+        def s281_phase2_kernel(a_out, b_out, c_in, a_full, n_full, offset, n_phase, BLOCK_SIZE: tl.constexpr):
+            pid = tl.program_id(0)
+            offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_phase
+            
+            # Global indices for reverse lookup
+            global_offsets = offsets + offset
+            reverse_offsets = n_full - 1 - global_offsets
+            
+            # Load values
+            a_vals = tl.load(a_full + reverse_offsets, mask=mask)
+            b_vals = tl.load(c_in + offsets, mask=mask)  # b[i] from phase2 slice
+            c_vals = tl.load(c_in + offsets, mask=mask)  # Actually c[i]
+            
+            # Need to load correct b and c values
+            b_vals = tl.load(b_out + offsets, mask=mask)  # Current b values
+            c_vals = tl.load(c_in + offsets, mask=mask)   # Current c values
+            
+            x_vals = a_vals + b_vals * c_vals
+            
+            tl.store(a_out + offsets, x_vals - 1.0, mask=mask)
+            tl.store(b_out + offsets, x_vals, mask=mask)
+        
+        s281_phase2_kernel[grid](a_phase2, b_phase2, c_phase2, a, n, threshold, remaining, BLOCK_SIZE=BLOCK_SIZE)

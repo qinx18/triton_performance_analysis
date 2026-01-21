@@ -3,49 +3,66 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s4116_kernel(a_ptr, aa_ptr, ip_ptr, inc, j, n, aa_stride_0, aa_stride_1, 
-                 partial_sums_ptr, BLOCK_SIZE: tl.constexpr):
+def s4116_kernel(a_ptr, aa_ptr, ip_ptr, inc, j, len_2d, output_ptr,
+                 BLOCK_SIZE: tl.constexpr):
+    # Get program ID and compute offsets
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    idx = block_start + offsets
-    mask = idx < n
+    i_indices = block_start + offsets
     
-    # Load indices
-    ip_vals = tl.load(ip_ptr + idx, mask=mask, other=0)
+    # Mask for valid indices (loop goes to LEN_2D-1, so i < LEN_2D-1)
+    mask = i_indices < (len_2d - 1)
     
-    # Compute array offsets
-    a_offsets = inc + idx
-    aa_offsets = (j - 1) * aa_stride_0 + ip_vals * aa_stride_1
+    # Load ip values for this block
+    ip_vals = tl.load(ip_ptr + i_indices, mask=mask, other=0)
     
-    # Load values
-    a_vals = tl.load(a_ptr + a_offsets, mask=mask, other=0.0)
-    aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask, other=0.0)
+    # Compute a indices: off = inc + i
+    a_indices = inc + i_indices
     
-    # Compute products and sum
+    # Load a values
+    a_vals = tl.load(a_ptr + a_indices, mask=mask, other=0.0)
+    
+    # Compute aa indices: aa[j-1][ip[i]]
+    # aa is stored as flat array, so aa[row][col] = aa[row * len_2d + col]
+    aa_row = j - 1
+    aa_col_indices = ip_vals
+    aa_indices = aa_row * len_2d + aa_col_indices
+    
+    # Load aa values
+    aa_vals = tl.load(aa_ptr + aa_indices, mask=mask, other=0.0)
+    
+    # Compute products
     products = a_vals * aa_vals
-    block_sum = tl.sum(tl.where(mask, products, 0.0))
     
-    # Store partial sum
-    tl.store(partial_sums_ptr + pid, block_sum)
+    # Zero out products for invalid indices
+    products = tl.where(mask, products, 0.0)
+    
+    # Sum the products in this block
+    block_sum = tl.sum(products)
+    
+    # Store partial sum (each thread block stores one value)
+    tl.store(output_ptr + pid, block_sum)
 
-def s4116_triton(a, aa, ip, inc, j):
-    n = aa.shape[0] - 1
-    aa_stride_0 = aa.stride(0)
-    aa_stride_1 = aa.stride(1)
+def s4116_triton(a, aa, ip, inc, j, len_2d):
+    # Ensure tensors are on GPU
+    device = a.device
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
+    num_elements = len_2d - 1
+    num_blocks = triton.cdiv(num_elements, BLOCK_SIZE)
     
     # Create output tensor for partial sums
-    partial_sums = torch.zeros(grid[0], dtype=torch.float32, device=a.device)
+    partial_sums = torch.zeros(num_blocks, dtype=torch.float32, device=device)
     
     # Launch kernel
+    grid = (num_blocks,)
     s4116_kernel[grid](
-        a, aa, ip, inc, j, n, aa_stride_0, aa_stride_1, 
-        partial_sums, BLOCK_SIZE=BLOCK_SIZE
+        a, aa, ip, inc, j, len_2d, partial_sums,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Sum all partial results and return as scalar
-    total_sum = partial_sums.sum()
-    return total_sum
+    # Sum all partial results
+    total_sum = torch.sum(partial_sums)
+    
+    return total_sum.item()

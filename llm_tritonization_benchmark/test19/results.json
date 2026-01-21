@@ -351,13 +351,14 @@
   "s1281": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s1281\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: s1281_c() missing 1 required positional argument: 'x'\nTesting N=  1000... ERROR: s1281_c() missing 1 required positional argument: 'x'\nTesting N= 10000... ERROR: s1281_c() missing 1 required positional argument: 'x'\n==================================================="
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.107056,
+      "triton_time_ms": 1.64679,
+      "speedup": 0.065009
+    }
   },
   "s131": {
     "c_ref_available": true,
@@ -377,8 +378,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s13110\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=    64... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   128... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   256... ERROR: float() argument must be a string or a real number, not 'NoneType'\n==========="
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.09e+03"
     },
     "benchmark": null
   },
@@ -833,13 +834,17 @@
   "s255": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s255\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: s255_c() missing 1 required positional argument: 'x'\nTesting N=  1000... ERROR: s255_c() missing 1 required positional argument: 'x'\nTesting N= 10000... ERROR: s255_c() missing 1 required positional argument: 'x'\n======================================================="
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.27e+00"
     },
-    "benchmark": null
+    "benchmark": {
+      "c_ref_time_ms": 0.055097,
+      "triton_time_ms": 1.337956,
+      "speedup": 0.04118
+    }
   },
   "s256": {
     "c_ref_available": true,
@@ -1041,8 +1046,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s281\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: s281_c() missing 1 required positional argument: 'x'\nTesting N=  1000... ERROR: s281_c() missing 1 required positional argument: 'x'\nTesting N= 10000... ERROR: s281_c() missing 1 required positional argument: 'x'\n======================================================="
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 2.96e+00"
     },
     "benchmark": null
   },
@@ -1085,13 +1090,14 @@
   "s311": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s311\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============="
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.014924,
+      "triton_time_ms": 0.122625,
+      "speedup": 0.121709
+    }
   },
   "s3110": {
     "c_ref_available": true,
@@ -1099,8 +1105,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s3110\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=    64... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   128... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   256... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============"
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.51e+02"
     },
     "benchmark": null
   },
@@ -1110,8 +1116,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s3111\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============"
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 4.47e+01"
     },
     "benchmark": null
   },
@@ -1121,8 +1127,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s31111\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n==========="
+      "type": "compilation",
+      "message": "16, 20, 24, 28]\n\n    for start_idx in start_positions:\n    ^\nAttributeError(\"'Name' object has no attribute 'func'\")\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s31111/test_s31111_correctness.py\", line 63, in test_correctness\n    triton_result = s31111_triton(*tr_args)\n                    ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_ben"
     },
     "benchmark": null
   },
@@ -1144,8 +1150,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s3113\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============"
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 2.98e+00"
     },
     "benchmark": null
   },
@@ -1155,8 +1161,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s312\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============="
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.52e+01"
     },
     "benchmark": null
   },
@@ -1222,12 +1228,12 @@
   },
   "s318": {
     "c_ref_available": true,
-    "triton_generated": true,
+    "triton_generated": false,
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s318\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============="
+      "type": "generation_error",
+      "message": "'NoneType' object is not subscriptable"
     },
     "benchmark": null
   },
@@ -1442,8 +1448,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s4115\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============"
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 5.64e+00"
     },
     "benchmark": null
   },
@@ -1453,8 +1459,8 @@
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s4116\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=    64... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   128... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=   256... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============"
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 4.06e+00"
     },
     "benchmark": null
   },
@@ -1508,25 +1514,29 @@
   },
   "s423": {
     "c_ref_available": true,
-    "triton_generated": true,
+    "triton_generated": false,
     "test_passed": false,
     "attempts": 10,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s423\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: s423_c() missing 1 required positional argument: 'xx'\nTesting N=  1000... ERROR: s423_c() missing 1 required positional argument: 'xx'\nTesting N= 10000... ERROR: s423_c() missing 1 required positional argument: 'xx'\n===================================================="
+      "type": "generation_error",
+      "message": "'NoneType' object is not subscriptable"
     },
     "benchmark": null
   },
   "s424": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
+    "test_passed": true,
+    "attempts": 7,
     "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s424\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: s424_c() missing 1 required positional argument: 'xx'\nTesting N=  1000... ERROR: s424_c() missing 1 required positional argument: 'xx'\nTesting N= 10000... ERROR: s424_c() missing 1 required positional argument: 'xx'\n===================================================="
+      "type": "compilation",
+      "message": "anguage/semantic.py\", line 512, in arange\n    raise ValueError(\"arange's range must be a power of 2\")\nValueError: arange's range must be a power of 2\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s424/test_s424_correctness.py\", line 69, in test_correctness\n    triton_result = s424_triton(*tr_args)\n                    ^^^^^^^"
     },
-    "benchmark": null
+    "benchmark": {
+      "c_ref_time_ms": -1.0,
+      "triton_time_ms": 10.545099,
+      "speedup": -1.0
+    }
   },
   "s431": {
     "c_ref_available": true,
@@ -1781,13 +1791,14 @@
   "vsumr": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: vsumr\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N=  1000... ERROR: float() argument must be a string or a real number, not 'NoneType'\nTesting N= 10000... ERROR: float() argument must be a string or a real number, not 'NoneType'\n============"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.014913,
+      "triton_time_ms": 0.109195,
+      "speedup": 0.136572
+    }
   },
   "vtv": {
     "c_ref_available": true,
