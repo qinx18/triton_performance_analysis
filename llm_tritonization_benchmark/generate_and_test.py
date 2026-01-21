@@ -1364,7 +1364,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test21.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test22.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1597,7 +1597,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test21.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test22.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1788,13 +1788,13 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"  Offset: {func_spec['has_offset']}, Conditional: {func_spec['has_conditional']}, Reduction: {func_spec['has_reduction']}")
     print(f"{'=' * 70}")
 
-    test21_dir = Path("test21")
-    llm_triton_dir = test21_dir / "llm_triton"
+    test22_dir = Path("test22")
+    llm_triton_dir = test22_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
     test_dir = Path("my_triton_implementations") / func_name
 
-    test21_dir.mkdir(exist_ok=True)
+    test22_dir.mkdir(exist_ok=True)
     llm_triton_dir.mkdir(exist_ok=True)
     func_code_dir.mkdir(exist_ok=True)
     (llm_triton_dir / "raw_responses").mkdir(exist_ok=True)
@@ -1802,7 +1802,7 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     test_dir.mkdir(exist_ok=True, parents=True)
 
     # Create __init__.py files to make directories importable
-    (test21_dir / "__init__.py").touch()
+    (test22_dir / "__init__.py").touch()
     (llm_triton_dir / "__init__.py").touch()
     (func_code_dir / "__init__.py").touch()
 
@@ -2045,7 +2045,7 @@ def main():
 
     # Save results to JSON file
     import json
-    results_file = Path("test21") / "results.json"
+    results_file = Path("test22") / "results.json"
 
     # Load existing results if file exists
     existing_results = {}
@@ -2076,7 +2076,7 @@ def main():
         }
 
     # Save updated results
-    Path("test21").mkdir(exist_ok=True)
+    Path("test22").mkdir(exist_ok=True)
     with open(results_file, 'w') as f:
         json.dump(existing_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")
