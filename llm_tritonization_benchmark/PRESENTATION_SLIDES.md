@@ -221,35 +221,33 @@ For each function, automatically generates:
 
 ---
 
-## Current State (Test 19 Results - After Infrastructure Fixes)
+## Current State (Test 19 Results - Final)
 
 ### Summary Metrics
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| ✅ **PASSING** | 116 | 76.8% |
-| ❌ **FAILING** | 35 | 23.2% |
-| 📊 **Benchmarked** | 116 | 76.8% |
-| ⚡ **Valid Speedups** | 106 | 70.2% |
-| ⏱️ **C Ref Timeouts** | 1 | 0.7% |
+| ✅ **PASSING** | 113 | 74.8% |
+| ❌ **FAILING** | 38 | 25.2% |
+| 📊 **Benchmarked** | 113 | 74.8% |
+| ⚡ **Valid Speedups** | 110 | 72.8% |
+| ⏱️ **C Ref Timeouts** | 2 | 1.3% |
 | ⏱️ **Triton Timeouts** | 1 | 0.7% |
 
 *Results measured against TSVC C reference (ground truth) with checksum-based verification.*
 
-### Pass Rate by Attempt (Original Run)
+### Pass Rate by Attempt
 | Attempt | New Passes | Cumulative | Rate |
 |---------|------------|------------|------|
-| 1 | 93 | 93 | 61.6% |
-| 2 | 10 | 103 | 68.2% |
-| 4-8 | 5 | 108 | 71.5% |
-| *+infra fixes* | *+8* | *116* | *76.8%* |
+| 1 | 96 | 96 | 63.6% |
+| 2+ (retry) | 17 | 113 | 74.8% |
 
 ---
 
 ## Correctness Results (Test 19)
 
-### Failed Functions by Error Type (43 total)
+### Failed Functions by Error Type (38 total)
 
-#### Numerical Mismatch (25 functions)
+#### Numerical Mismatch (33 functions)
 
 Functions where Triton output differs from C reference beyond tolerance (max_error > 1e-3):
 
@@ -266,19 +264,22 @@ Functions where Triton output differs from C reference beyond tolerance (max_err
 | s233 | 2.53e+01 | s235 | 3.31e+00 |
 | s256 | 3.62e+00 | s257 | 1.39e+01 |
 | s258 | 8.63e+00 | s275 | 2.14e+01 |
-| s353 | 4.93e+00 | s442 | 1.06e+01 |
-| vbor | 2.88e+03 | | |
+| s281 | 2.96e+00 | s3110 | 1.51e+02 |
+| s3111 | 4.47e+01 | s3113 | 2.98e+00 |
+| s312 | 1.52e+01 | s353 | 4.93e+00 |
+| s4115 | 5.64e+00 | s4116 | 4.06e+00 |
+| s442 | 1.06e+01 | vbor | 2.88e+03 |
+| s13110 | 1.09e+03 | | |
 
-#### Runtime Errors (16 functions)
+#### Generation/Runtime Errors (2 functions)
 
-Functions with runtime errors (NoneType returns, missing arguments):
+- **s318:** 'NoneType' object is not subscriptable
+- **s423:** 'NoneType' object is not subscriptable
 
-- **NoneType returns (10):** s13110, s311, s3110, s3111, s31111, s3113, s312, s318, s4115, s4116, vsumr
-- **Missing C ref arguments (5):** s1281, s255, s281, s423, s424
-
-#### Compilation Errors (1 function)
+#### Compilation Errors (2 functions)
 
 - **s351:** Type mismatch between pointer and float32
+- **s31111:** AttributeError in generated code
 
 #### Timeout (1 function)
 
@@ -288,10 +289,10 @@ Functions with runtime errors (NoneType returns, missing arguments):
 
 | Error Type | Count | % of Failures | Root Cause |
 |------------|-------|---------------|------------|
-| Numerical | 25 | 58.1% | Algorithm incorrectness, dependency handling |
-| Runtime | 16 | 37.2% | Missing return values, C wrapper issues |
-| Compilation | 1 | 2.3% | Type mismatches in Triton |
-| Timeout | 1 | 2.3% | Infinite loops or very slow execution |
+| Numerical | 33 | 86.8% | Algorithm incorrectness, dependency handling |
+| Generation | 2 | 5.3% | LLM failed to generate valid code |
+| Compilation | 2 | 5.3% | Type mismatches in Triton |
+| Timeout | 1 | 2.6% | Infinite loops or very slow execution |
 
 ---
 
@@ -386,42 +387,42 @@ Static analysis guidance improves LLM generation quality.
 ### Overall Statistics
 | Metric | Value |
 |--------|-------|
-| **Benchmarked** | 108 |
-| **Valid Speedups** | 106 |
-| **C Ref Timeouts** | 1 (s422) |
+| **Benchmarked** | 113 |
+| **Valid Speedups** | 110 |
+| **C Ref Timeouts** | 2 (s422, s343) |
 | **Triton Timeouts** | 1 (s343) |
-| **Mean Speedup** | 0.71x |
-| **Median Speedup** | 0.48x |
+| **Mean Speedup** | 0.68x |
+| **Median Speedup** | 0.47x |
 | **Min Speedup** | 0.0004x |
 | **Max Speedup** | 5.57x |
 
-### Performance Distribution (106 functions with valid speedups)
+### Performance Distribution (110 functions with valid speedups)
 
 ```
 Speedup Range          Count    %     Distribution
 ─────────────────────────────────────────────────────────────────
->2x faster            :   5   ( 4.7%) ████
-1.5x-2x faster        :  10   ( 9.4%) █████████
-1x-1.5x faster        :  12   (11.3%) ███████████
-0.5x-1x (slower)      :  25   (23.6%) ███████████████████████
-0.1x-0.5x (slower)    :  29   (27.4%) ███████████████████████████
-<0.1x (much slower)   :  25   (23.6%) ████████████████████████
+>2x faster            :   5   ( 4.5%) ████
+1.5x-2x faster        :  10   ( 9.1%) █████████
+1x-1.5x faster        :  12   (10.9%) ██████████
+0.5x-1x (slower)      :  25   (22.7%) ██████████████████████
+0.1x-0.5x (slower)    :  31   (28.2%) ████████████████████████████
+<0.1x (much slower)   :  27   (24.5%) ████████████████████████
 ─────────────────────────────────────────────────────────────────
-Triton faster (>1x)   :  27   (25.5%)
-Triton slower (<1x)   :  79   (74.5%)
+Triton faster (>1x)   :  27   (24.5%)
+Triton slower (<1x)   :  83   (75.5%)
 ```
 
 ### Visual Distribution
 ```
                     SLOWER  ◄─────────────────────►  FASTER
 
-<0.1x  ████████████████████████████████████████████████  25
-0.1-0.5x  ████████████████████████████████████████████████████████████  29
-0.5-1x  ██████████████████████████████████████████████  25
+<0.1x  ████████████████████████████████████████████████████████  27
+0.1-0.5x  ██████████████████████████████████████████████████████████████  31
+0.5-1x  ██████████████████████████████████████████████████  25
 1-1.5x  ████████████████████████  12
 1.5-2x  ████████████████████  10
 >2x     ██████████  5
-        |----|----|----|----|----|----|
+        |----|----|----|----|----|----|----
         0    5    10   15   20   25   30
 ```
 
@@ -560,10 +561,10 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - ✅ Timeout-aware benchmarking
 
 ### Results (Test 19)
-- ✅ **Correctness rate:** 71.5% (108/151 functions)
-- ✅ **First-try success rate:** 61.6% (93/151 functions)
-- ✅ **Retry recovery:** +15 functions via retries
-- ✅ **Performance:** 25.5% faster than C, 74.5% slower
+- ✅ **Correctness rate:** 74.8% (113/151 functions)
+- ✅ **First-try success rate:** 63.6% (96/151 functions)
+- ✅ **Retry recovery:** +17 functions via retries
+- ✅ **Performance:** 24.5% faster than C, 75.5% slower
 - ✅ **Max speedup:** 5.57x (s451 - loop interchange)
 
 ---
@@ -644,11 +645,11 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - Comprehensive testing vs C reference
 
 **Results (Test 19):**
-- **71.5% correctness** (108/151 functions pass)
-- **61.6% first-try success** (93 functions)
-- **25.5% achieve GPU speedup** (27/106 functions)
+- **74.8% correctness** (113/151 functions pass)
+- **63.6% first-try success** (96 functions)
+- **24.5% achieve GPU speedup** (27/110 functions)
 - **Max 5.57x speedup** (s451 - loop interchange)
-- **Median 0.48x** (kernel overhead often dominates)
+- **Median 0.47x** (kernel overhead often dominates)
 
 **Impact:**
 - Demonstrates LLM capability for specialized GPU kernel generation
