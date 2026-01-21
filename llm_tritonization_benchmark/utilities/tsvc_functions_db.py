@@ -95,7 +95,7 @@ for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r', 'cc': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r', 'cc': 'r'},
         "has_offset": False,
         "has_conditional": False,
         "has_reduction": False,
@@ -113,7 +113,7 @@ for (int nl = 0; nl < 200*(iterations/(LEN_2D)); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -163,7 +163,7 @@ for (int nl = 0; nl < 200*(iterations/(LEN_2D)); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r'},
         "has_offset": False,
         "has_conditional": False,
         "has_reduction": False,
@@ -261,7 +261,7 @@ for (int nl = 0; nl < 200*(iterations/(LEN_2D)); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -370,7 +370,7 @@ for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r', 'cc': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r', 'cc': 'r'},
         "has_offset": False,
         "has_conditional": False,
         "has_reduction": False,
@@ -469,7 +469,7 @@ for (int nl = 0; nl < 10*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'flat_2d_array': 'r', 'bb': 'r', 'cc': 'r'},
+        "arrays": {'flat_2d_array': 'r', 'bb': 'rw', 'cc': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -589,7 +589,7 @@ for (int nl = 0; nl < 100*(iterations/(LEN_2D)); nl++) {
         chksum = max + (real_t) xindex + (real_t) yindex;
     }
 """,
-        "arrays": {'aa': 'r'},
+        "arrays": {'aa': 'rw'},
         "has_offset": False,
         "has_conditional": True,
         "has_reduction": True,
@@ -605,7 +605,7 @@ for (int nl = 0; nl < 400*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'b': 'r', 'c': 'r', 'aa': 'r'},
+        "arrays": {'b': 'r', 'c': 'r', 'aa': 'rw'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -850,7 +850,7 @@ for (int nl = 0; nl < 10*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r', 'cc': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r', 'cc': 'r'},
         "has_offset": False,
         "has_conditional": False,
         "has_reduction": False,
@@ -869,7 +869,7 @@ for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r'},
+        "arrays": {'aa': 'rw'},
         "has_offset": False,
         "has_conditional": False,
         "has_reduction": False,
@@ -904,7 +904,7 @@ for (int nl = 0; nl < 100*(iterations/(LEN_2D)); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r'},
+        "arrays": {'aa': 'rw'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -977,7 +977,7 @@ for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r', 'cc': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r', 'cc': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -1050,7 +1050,7 @@ for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -1068,7 +1068,7 @@ for (int nl = 0; nl < 100*(iterations/(LEN_2D)); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -1089,7 +1089,7 @@ for (int nl = 0; nl < 100*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r', 'cc': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r', 'cc': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,
@@ -1512,7 +1512,7 @@ for (int nl = 0; nl < 10*(iterations/LEN_2D); nl++) {
         }
     }
 """,
-        "arrays": {'aa': 'r', 'bb': 'r', 'cc': 'r'},
+        "arrays": {'aa': 'rw', 'bb': 'r', 'cc': 'r'},
         "has_offset": True,
         "has_conditional": True,
         "has_reduction": False,
@@ -1725,7 +1725,7 @@ for (int nl = 0; nl < 100*(iterations/(LEN_2D)); nl++) {
         chksum = max + (real_t) xindex + (real_t) yindex;
     }
 """,
-        "arrays": {'aa': 'r'},
+        "arrays": {'aa': 'rw'},
         "has_offset": False,
         "has_conditional": True,
         "has_reduction": True,
@@ -2277,7 +2277,7 @@ for (int nl = 0; nl < 100*iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'r', 'aa': 'r', 'ip': 'r'},
+        "arrays": {'a': 'r', 'aa': 'rw', 'ip': 'r'},
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": True,
