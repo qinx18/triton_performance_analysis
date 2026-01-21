@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import vsumr_c
-    from test19.llm_triton.vsumr.attempt1 import vsumr_triton
+    from test20.llm_triton.vsumr.attempt1 import vsumr_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
