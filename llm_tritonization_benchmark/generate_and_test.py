@@ -1323,7 +1323,9 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
     elif len(output_arrays) == 1:
         arr = output_arrays[0]
         compare_str = f"""            # Convert C result back to torch for comparison
-            {arr}_c_torch = torch.from_numpy({arr}_c).cuda()
+            # Use c_result if C function returns modified array, otherwise use in-place modified array
+            c_arr = c_result if c_result is not None else {arr}_c
+            {arr}_c_torch = torch.from_numpy(c_arr).cuda()
             max_error = torch.max(torch.abs({arr}_c_torch - {arr}_tr)).item()"""
         passed_check_str = f"passed = max_error < 1e-3 or torch.allclose({arr}_c_torch, {arr}_tr, rtol=1e-3, atol=1e-3)"
     elif len(output_arrays) > 1:

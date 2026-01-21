@@ -1,0 +1,32 @@
+{
+  "s114": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 2,
+    "final_error": {
+      "type": "runtime",
+      "message": "         ^^^^^^^^^^^^^\n  File \"/home/qinxiao/anaconda3/lib/python3.12/ast.py\", line 415, in generic_visit\n    self.visit(item)\n  File \"/home/qinxiao/anaconda3/lib/python3.12/ast.py\", line 407, in visit\n    return visitor(node)\n           ^^^^^^^^^^^^^\n  File \"/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py\", line 167, in visit_FunctionDef\n    self.generic_visit(node)\n  File \"/home/qinxiao/anaconda3/lib/python3.12/ast.py\", line 415, in generic_visit\n    self.visit(item)"
+    },
+    "benchmark": {
+      "c_ref_time_ms": 0.110805,
+      "triton_time_ms": 0.070881,
+      "speedup": 1.563264
+    }
+  },
+  "s126": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 4,
+    "final_error": {
+      "type": "timeout",
+      "message": "Test timed out after 60 seconds"
+    },
+    "benchmark": {
+      "c_ref_time_ms": 0.281864,
+      "triton_time_ms": 0.123047,
+      "speedup": 2.290699
+    }
+  }
+}
