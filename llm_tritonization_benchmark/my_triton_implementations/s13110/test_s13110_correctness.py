@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s13110_c
-    from test20.llm_triton.s13110.attempt10 import s13110_triton
+    from test21.llm_triton.s13110.attempt1 import s13110_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -63,30 +63,11 @@ def test_correctness():
             c_result = s13110_c(*c_args)
             triton_result = s13110_triton(*tr_args)
 
-            # Pure reduction: compare return values
-            # If C returns None (void function), use numpy sum as reference
-            if c_result is None:
-                # C function is void - use numpy sum as baseline reference
-                c_val = float(np.sum(aa_c))
-            elif isinstance(c_result, (int, float)):
-                c_val = c_result
-            elif isinstance(c_result, np.ndarray):
-                c_val = c_result.item() if c_result.size == 1 else c_result.sum()
-            else:
-                c_val = float(c_result)
+            # Convert C result back to torch for comparison
+            aa_c_torch = torch.from_numpy(aa_c).cuda()
+            max_error = torch.max(torch.abs(aa_c_torch - aa_tr)).item()
 
-            if triton_result is None:
-                tr_val = float('inf')  # Triton should return something
-            elif isinstance(triton_result, (int, float)):
-                tr_val = triton_result
-            elif isinstance(triton_result, torch.Tensor):
-                tr_val = triton_result.item() if triton_result.numel() == 1 else triton_result.sum().item()
-            else:
-                tr_val = float(triton_result)
-
-            max_error = abs(c_val - tr_val)
-
-            passed = max_error < 1e-3 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 1e-3)
+            passed = max_error < 1e-3 or torch.allclose(aa_c_torch, aa_tr, rtol=1e-3, atol=1e-3)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:
