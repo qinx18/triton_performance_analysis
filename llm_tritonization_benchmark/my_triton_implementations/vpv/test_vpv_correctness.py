@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import vpv_c
-    from test22.llm_triton.vpv.attempt1 import vpv_triton
+    from test23.llm_triton.vpv.attempt1 import vpv_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -66,7 +66,9 @@ def test_correctness():
             triton_result = vpv_triton(*tr_args)
 
             # Convert C result back to torch for comparison
-            a_c_torch = torch.from_numpy(a_c).cuda()
+            # Use c_result if C function returns modified array, otherwise use in-place modified array
+            c_arr = c_result if c_result is not None else a_c
+            a_c_torch = torch.from_numpy(c_arr).cuda()
             max_error = torch.max(torch.abs(a_c_torch - a_tr)).item()
 
             passed = max_error < 1e-3 or torch.allclose(a_c_torch, a_tr, rtol=1e-3, atol=1e-3)

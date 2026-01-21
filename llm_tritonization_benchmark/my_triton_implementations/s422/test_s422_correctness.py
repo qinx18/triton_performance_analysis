@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s422_c
-    from test22.llm_triton.s422.attempt1 import s422_triton
+    from test23.llm_triton.s422.attempt1 import s422_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -69,7 +69,9 @@ def test_correctness():
             triton_result = s422_triton(*tr_args)
 
             # Convert C result back to torch for comparison
-            xx_c_torch = torch.from_numpy(xx_c).cuda()
+            # Use c_result if C function returns modified array, otherwise use in-place modified array
+            c_arr = c_result if c_result is not None else xx_c
+            xx_c_torch = torch.from_numpy(c_arr).cuda()
             max_error = torch.max(torch.abs(xx_c_torch - xx_tr)).item()
 
             passed = max_error < 1e-3 or torch.allclose(xx_c_torch, xx_tr, rtol=1e-3, atol=1e-3)

@@ -1,43 +1,40 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s114_kernel(aa_ptr, bb_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def s114_kernel(aa_ptr, bb_ptr, N, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     j_offsets = tl.arange(0, BLOCK_SIZE)
-    j_start = pid * BLOCK_SIZE
+    j_idx = pid * BLOCK_SIZE + j_offsets
     
-    for i in range(1, N):
-        j_indices = j_start + j_offsets
+    for i in range(N):
+        j_mask = (j_idx < i) & (j_idx < N)
         
-        # Mask for valid j values: j < i
-        j_mask = (j_indices < i) & (j_indices >= 0)
-        
-        # Skip if no valid j values in this block for this i
-        if not tl.any(j_mask):
-            continue
+        if tl.sum(j_mask.to(tl.int32)) > 0:
+            # Compute indices for aa[i][j]
+            aa_write_idx = i * N + j_idx
             
-        # Load aa[j][i] (transpose indices)
-        ji_indices = j_indices * N + i
-        aa_ji_vals = tl.load(aa_ptr + ji_indices, mask=j_mask, other=0.0)
-        
-        # Load bb[i][j]
-        ij_indices = i * N + j_indices
-        bb_ij_vals = tl.load(bb_ptr + ij_indices, mask=j_mask, other=0.0)
-        
-        # Compute aa[i][j] = aa[j][i] + bb[i][j]
-        result_vals = aa_ji_vals + bb_ij_vals
-        
-        # Store to aa[i][j]
-        tl.store(aa_ptr + ij_indices, result_vals, mask=j_mask)
+            # Compute indices for aa[j][i]  
+            aa_read_idx = j_idx * N + i
+            
+            # Compute indices for bb[i][j]
+            bb_read_idx = i * N + j_idx
+            
+            # Load aa[j][i] and bb[i][j]
+            aa_vals = tl.load(aa_ptr + aa_read_idx, mask=j_mask, other=0.0)
+            bb_vals = tl.load(bb_ptr + bb_read_idx, mask=j_mask, other=0.0)
+            
+            # Compute result
+            result = aa_vals + bb_vals
+            
+            # Store to aa[i][j]
+            tl.store(aa_ptr + aa_write_idx, result, mask=j_mask)
 
 def s114_triton(aa, bb):
     N = aa.shape[0]
     BLOCK_SIZE = 256
     
-    # Calculate grid size based on maximum j values needed
-    max_j = N - 1  # j ranges from 0 to N-2 (since j < i and i goes up to N-1)
-    grid = (triton.cdiv(max_j, BLOCK_SIZE),)
-    
-    s114_kernel[grid](aa, bb, N=N, BLOCK_SIZE=BLOCK_SIZE)
+    # Launch kernel
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    s114_kernel[grid](aa, bb, N, BLOCK_SIZE)
