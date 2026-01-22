@@ -221,16 +221,16 @@ For each function, automatically generates:
 
 ---
 
-## Current State (Test 21 Results)
+## Current State (Test 23 Results)
 
 ### Summary Metrics
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| ✅ **PASSING** | 117 | 77.5% |
-| ❌ **FAILING** | 34 | 22.5% |
-| 📊 **Benchmarked** | 117 | 77.5% |
-| ⚡ **Valid Speedups** | 114 | 75.5% |
-| ⏱️ **C Ref Timeouts** | 2 | 1.3% |
+| ✅ **PASSING** | 131 | 86.8% |
+| ❌ **FAILING** | 20 | 13.2% |
+| 📊 **Benchmarked** | 131 | 86.8% |
+| ⚡ **Valid Speedups** | 127 | 84.1% |
+| ⏱️ **C Ref Timeouts** | 3 | 2.0% |
 | ⏱️ **Triton Timeouts** | 1 | 0.7% |
 
 *Results measured against TSVC C reference (ground truth) with checksum-based verification.*
@@ -238,36 +238,38 @@ For each function, automatically generates:
 ### Pass Rate by Attempt
 | Attempt | New Passes | Cumulative | Rate |
 |---------|------------|------------|------|
-| 1 | 104 | 104 | 68.9% |
-| 2+ (retry) | 13 | 117 | 77.5% |
+| 1 | 107 | 107 | 70.9% |
+| 2+ (retry) | 24 | 131 | 86.8% |
 
 ---
 
-## Correctness Results (Test 21)
+## Correctness Results (Test 23)
 
-### Failed Functions by Error Type (34 total)
+### Failed Functions by Error Type (20 total)
 
-#### Numerical Mismatch (32 functions)
+#### Numerical Mismatch (15 functions)
 
 Functions where Triton output differs from C reference beyond tolerance (max_error > 1e-3):
 
-s1115, s1119, s114, s115, s118, s1232, s126, s132, s176, s2101, s2102, s2111, s2233, s2275, s231, s232, s233, s235, s256, s257, s258, s275, s3111, s31111, s312, s351, s353, s4115, s424, s442, vbor
+s115, s118, s132, s176, s2111, s235, s257, s258, s3111, s31111, s3113, s312, s353, s4115, s442, vbor
 
-#### Runtime Errors (1 function)
+#### Compilation Errors (3 functions)
 
-- **s318:** Runtime error during execution
+- **s2275:** Compilation error in generated code
+- **s318:** Compilation error in generated code
+- **s351:** Compilation error in generated code
 
-#### Compilation Errors (1 function)
+#### Timeout (1 function)
 
-- **s3113:** Compilation error in generated code
+- **s256:** Test timed out after 60 seconds
 
 ### Error Analysis
 
 | Error Type | Count | % of Failures | Root Cause |
 |------------|-------|---------------|------------|
-| Numerical | 32 | 94.1% | Algorithm incorrectness, dependency handling |
-| Runtime | 1 | 2.9% | Execution errors |
-| Compilation | 1 | 2.9% | Type mismatches in Triton |
+| Numerical | 16 | 80.0% | Algorithm incorrectness, dependency handling |
+| Compilation | 3 | 15.0% | Type mismatches in Triton |
+| Timeout | 1 | 5.0% | Execution too slow |
 
 ---
 
@@ -357,46 +359,46 @@ Static analysis guidance improves LLM generation quality.
 
 ---
 
-## Performance Summary (Test 21)
+## Performance Summary (Test 23)
 
 ### Overall Statistics
 | Metric | Value |
 |--------|-------|
-| **Benchmarked** | 117 |
-| **Valid Speedups** | 114 |
-| **C Ref Timeouts** | 2 |
+| **Benchmarked** | 131 |
+| **Valid Speedups** | 127 |
+| **C Ref Timeouts** | 3 |
 | **Triton Timeouts** | 1 |
-| **Mean Speedup** | 0.67x |
-| **Median Speedup** | 0.45x |
+| **Mean Speedup** | 0.82x |
+| **Median Speedup** | 0.51x |
 | **Min Speedup** | 0.0004x |
-| **Max Speedup** | 5.92x |
+| **Max Speedup** | 6.38x |
 
-### Performance Distribution (114 functions with valid speedups)
+### Performance Distribution (127 functions with valid speedups)
 
 ```
 Speedup Range          Count    %     Distribution
 ─────────────────────────────────────────────────────────────────
->2x faster            :   6   ( 5.3%) █████
-1.5x-2x faster        :   9   ( 7.9%) ███████
-1x-1.5x faster        :  12   (10.5%) ██████████
-0.5x-1x (slower)      :  27   (23.7%) ███████████████████████
-0.1x-0.5x (slower)    :  32   (28.1%) ████████████████████████████████
-<0.1x (much slower)   :  28   (24.6%) ████████████████████████████
+>2x faster            :  15   (11.8%) ███████████████
+1.5x-2x faster        :   9   ( 7.1%) █████████
+1x-1.5x faster        :  13   (10.2%) █████████████
+0.5x-1x (slower)      :  28   (22.0%) ████████████████████████████
+0.1x-0.5x (slower)    :  32   (25.2%) ████████████████████████████████
+<0.1x (much slower)   :  30   (23.6%) ██████████████████████████████
 ─────────────────────────────────────────────────────────────────
-Triton faster (>1x)   :  27   (23.7%)
-Triton slower (<1x)   :  87   (76.3%)
+Triton faster (>=1x)  :  37   (29.1%)
+Triton slower (<1x)   :  90   (70.9%)
 ```
 
 ### Visual Distribution
 ```
                     SLOWER  ◄─────────────────────►  FASTER
 
-<0.1x   ████████████████████████████████████████████████████████  28
+<0.1x   ██████████████████████████████████████████████████████████████  30
 0.1-0.5x████████████████████████████████████████████████████████████████  32
-0.5-1x  ██████████████████████████████████████████████████████  27
-1-1.5x  ████████████████████████  12
+0.5-1x  ████████████████████████████████████████████████████████  28
+1-1.5x  ██████████████████████████  13
 1.5-2x  ██████████████████  9
->2x     ████████████  6
+>2x     ██████████████████████████████  15
         | - - - - | - - - - | - - - - | - - - - | - - - - | - - - - | - - - -
         0         5         10        15        20        25        30
 ```
@@ -407,16 +409,16 @@ Triton slower (<1x)   :  87   (76.3%)
 
 | Rank | Function | Speedup | C Ref (ms) | Triton (ms) | Notes |
 |------|----------|---------|------------|-------------|-------|
-| 1 | s451 | 5.92x | 0.518 | 0.087 | Loop interchange |
-| 2 | s274 | 2.47x | 0.239 | 0.097 | Control flow |
-| 3 | s273 | 2.40x | 0.241 | 0.100 | Control flow |
-| 4 | s441 | 2.31x | 0.204 | 0.088 | Intrinsic function |
-| 5 | vif | 2.17x | 0.145 | 0.067 | Conditional vector |
-| 6 | vtvtv | 2.04x | 0.178 | 0.087 | Vector operation |
-| 7 | s161 | 1.92x | 0.203 | 0.106 | Statement reorder |
-| 8 | s271 | 1.92x | 0.158 | 0.083 | Control flow |
-| 9 | s1161 | 1.89x | 0.184 | 0.097 | Single dimension |
-| 10 | s1279 | 1.85x | 0.217 | 0.117 | Interprocedural |
+| 1 | s451 | 6.38x | 0.517 | 0.081 | Loop interchange |
+| 2 | s233 | 4.04x | 0.391 | 0.097 | Loop interchange |
+| 3 | s2233 | 3.62x | 0.336 | 0.093 | Loop interchange |
+| 4 | s231 | 3.02x | 0.246 | 0.081 | Loop interchange |
+| 5 | s232 | 2.70x | 0.193 | 0.071 | Loop interchange |
+| 6 | s2102 | 2.53x | 0.189 | 0.075 | Statement reorder |
+| 7 | s275 | 2.49x | 0.226 | 0.091 | Control flow |
+| 8 | s1115 | 2.48x | 0.188 | 0.076 | 2D array transpose |
+| 9 | s274 | 2.43x | 0.238 | 0.098 | Control flow |
+| 10 | s125 | 2.34x | 0.208 | 0.089 | Induction variable |
 
 **Note:** C reference runs on CPU, Triton runs on GPU. Speedups >1x indicate GPU is faster.
 
@@ -426,22 +428,22 @@ Triton slower (<1x)   :  87   (76.3%)
 
 | Rank | Function | Speedup | C Ref (ms) | Triton (ms) | Notes |
 |------|----------|---------|------------|-------------|-------|
-| 1 | s1221 | 0.0004x | 0.043 | 100.683 | Severe overhead |
-| 2 | s331 | 0.007x | 0.014 | 1.950 | Packing |
-| 3 | s255 | 0.009x | 0.057 | 6.154 | Node splitting |
-| 4 | s116 | 0.014x | 0.024 | 1.692 | Loop overhead |
-| 5 | s244 | 0.019x | 0.088 | 4.702 | Loop distribution |
-| 6 | s1213 | 0.025x | 0.072 | 2.888 | Double dimension |
-| 7 | s342 | 0.025x | 0.054 | 2.125 | Search loop |
-| 8 | s3112 | 0.029x | 0.057 | 1.981 | Reduction |
-| 9 | s211 | 0.029x | 0.096 | 3.262 | Statement reorder |
-| 10 | s111 | 0.032x | 0.031 | 0.959 | Single dimension |
+| 1 | s1221 | 0.0004x | 0.044 | 97.459 | Severe overhead |
+| 2 | s3112 | 0.008x | 0.057 | 6.867 | Reduction |
+| 3 | s244 | 0.018x | 0.085 | 4.815 | Loop distribution |
+| 4 | s331 | 0.019x | 0.014 | 0.767 | Packing |
+| 5 | s116 | 0.020x | 0.024 | 1.210 | Loop overhead |
+| 6 | s119 | 0.021x | 0.144 | 6.988 | 2D array pattern |
+| 7 | s1213 | 0.024x | 0.072 | 3.051 | Double dimension |
+| 8 | s342 | 0.025x | 0.054 | 2.145 | Search loop |
+| 9 | s126 | 0.026x | 0.280 | 10.580 | 2D array pattern |
+| 10 | s255 | 0.028x | 0.056 | 1.993 | Node splitting |
 
 **Note:** Slowdowns are primarily due to kernel launch overhead dominating small operations.
 
 ---
 
-## Performance by Category (Test 21)
+## Performance by Category (Test 23)
 
 ### Performance Tiers Observed
 
@@ -535,12 +537,12 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - ✅ Retry logic with context reset (5+5 strategy)
 - ✅ Timeout-aware benchmarking
 
-### Results (Test 21)
-- ✅ **Correctness rate:** 77.5% (117/151 functions)
-- ✅ **First-try success rate:** 68.9% (104/151 functions)
-- ✅ **Retry recovery:** +13 functions via retries
-- ✅ **Performance:** 23.7% faster than C, 76.3% slower
-- ✅ **Max speedup:** 5.92x (s451 - loop interchange)
+### Results (Test 23)
+- ✅ **Correctness rate:** 86.8% (131/151 functions)
+- ✅ **First-try success rate:** 70.9% (107/151 functions)
+- ✅ **Retry recovery:** +24 functions via retries
+- ✅ **Performance:** 29.1% faster than C, 70.9% slower
+- ✅ **Max speedup:** 6.38x (s451 - loop interchange)
 
 ---
 
@@ -619,12 +621,12 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - 5+5 retry strategy
 - Comprehensive testing vs C reference
 
-**Results (Test 21):**
-- **77.5% correctness** (117/151 functions pass)
-- **68.9% first-try success** (104 functions)
-- **23.7% achieve GPU speedup** (27/114 functions)
-- **Max 5.92x speedup** (s451 - loop interchange)
-- **Median 0.45x** (kernel overhead often dominates)
+**Results (Test 23):**
+- **86.8% correctness** (131/151 functions pass)
+- **70.9% first-try success** (107 functions)
+- **29.1% achieve GPU speedup** (37/127 functions)
+- **Max 6.38x speedup** (s451 - loop interchange)
+- **Median 0.51x** (kernel overhead often dominates)
 
 **Impact:**
 - Demonstrates LLM capability for specialized GPU kernel generation

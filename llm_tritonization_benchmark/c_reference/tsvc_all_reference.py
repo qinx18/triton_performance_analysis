@@ -1349,7 +1349,7 @@ def s1115_c(aa, bb, cc, len_2d=None):
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s1115_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s1115_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s1119_c(aa, bb, len_2d=None):
     """C reference for s1119"""
@@ -1357,7 +1357,7 @@ def s1119_c(aa, bb, len_2d=None):
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s1119_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s1119_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s112_c(a, b):
     """C reference for s112"""
@@ -1381,14 +1381,15 @@ def s114_c(aa, bb, len_2d=None):
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s114_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s114_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s115_c(a, aa, len_2d=None):
     """C reference for s115"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     n = len(a)
-    _lib.s115_kernel(_to_ptr(a), _to_ptr(aa), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s115_kernel(_to_ptr(a), _to_ptr(aa), n, len_2d if len_2d else aa_shape[0])
     return a
 
 def s116_c(a):
@@ -1412,9 +1413,10 @@ def s1161_c(a, b, c, d, e):
 def s118_c(a, bb, len_2d=None):
     """C reference for s118"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    bb_shape = bb.shape
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(a)
-    _lib.s118_kernel(_to_ptr(a), _to_ptr(bb), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s118_kernel(_to_ptr(a), _to_ptr(bb), n, len_2d if len_2d else bb_shape[0])
     return a
 
 def s119_c(aa, bb, len_2d=None):
@@ -1423,7 +1425,7 @@ def s119_c(aa, bb, len_2d=None):
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s119_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s119_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s121_c(a, b):
     """C reference for s121"""
@@ -1477,7 +1479,7 @@ def s1232_c(aa, bb, cc, len_2d=None):
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s1232_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s1232_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s124_c(a, b, c, d, e):
     """C reference for s124"""
@@ -1502,12 +1504,13 @@ def s1244_c(a, b, c, d):
 
 def s125_c(aa, bb, cc, flat_2d_array, len_2d=None):
     """C reference for s125"""
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     flat_2d_array = np.ascontiguousarray(flat_2d_array, dtype=np.float32)
     n = len(aa)
-    _lib.s125_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), _to_ptr(flat_2d_array), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s125_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), _to_ptr(flat_2d_array), n, len_2d if len_2d else aa_shape[0])
     return flat_2d_array
 
 def s1251_c(a, b, c, d, e):
@@ -1528,7 +1531,7 @@ def s126_c(bb, cc, flat_2d_array, len_2d=None):
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     flat_2d_array = np.ascontiguousarray(flat_2d_array, dtype=np.float32)
     n = len(bb)
-    _lib.s126_kernel(_to_ptr(bb), _to_ptr(cc), _to_ptr(flat_2d_array), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s126_kernel(_to_ptr(bb), _to_ptr(cc), _to_ptr(flat_2d_array), n, len_2d if len_2d else bb_shape[0])
     return bb.reshape(bb_shape)
 def s127_c(a, b, c, d, e):
     """C reference for s127"""
@@ -1587,7 +1590,7 @@ def s13110_c(aa, len_2d=None):
     aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s13110_kernel(_to_ptr(aa), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s13110_kernel(_to_ptr(aa), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s132_c(aa, b, c, len_2d=None, j=1, k=1):
     """C reference for s132"""
@@ -1596,7 +1599,7 @@ def s132_c(aa, b, c, len_2d=None, j=1, k=1):
     b = np.ascontiguousarray(b, dtype=np.float32)
     c = np.ascontiguousarray(c, dtype=np.float32)
     n = len(aa)
-    _lib.s132_kernel(_to_ptr(aa), _to_ptr(b), _to_ptr(c), n, len_2d if len_2d else int(np.sqrt(n)), j, k)
+    _lib.s132_kernel(_to_ptr(aa), _to_ptr(b), _to_ptr(c), n, len_2d if len_2d else aa_shape[0], j, k)
     return aa.reshape(aa_shape)
 def s1351_c(a, b, c):
     """C reference for s1351"""
@@ -1608,10 +1611,11 @@ def s1351_c(a, b, c):
 
 def s141_c(bb, flat_2d_array, len_2d=None):
     """C reference for s141"""
+    bb_shape = bb.shape
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     flat_2d_array = np.ascontiguousarray(flat_2d_array, dtype=np.float32)
     n = len(bb)
-    _lib.s141_kernel(_to_ptr(bb), _to_ptr(flat_2d_array), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s141_kernel(_to_ptr(bb), _to_ptr(flat_2d_array), n, len_2d if len_2d else bb_shape[0])
     return flat_2d_array
 
 def s1421_c(a, b, xx):
@@ -1717,14 +1721,14 @@ def s2101_c(aa, bb, cc, len_2d=None):
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s2101_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s2101_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s2102_c(aa, len_2d=None):
     """C reference for s2102"""
     aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s2102_kernel(_to_ptr(aa), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s2102_kernel(_to_ptr(aa), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s211_c(a, b, c, d, e):
     """C reference for s211"""
@@ -1742,7 +1746,7 @@ def s2111_c(aa, len_2d=None):
     aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s2111_kernel(_to_ptr(aa), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s2111_kernel(_to_ptr(aa), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s212_c(a, b, c, d):
     """C reference for s212"""
@@ -1781,7 +1785,7 @@ def s2233_c(aa, bb, cc, len_2d=None):
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s2233_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s2233_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s2244_c(a, b, c, e):
     """C reference for s2244"""
@@ -1807,6 +1811,7 @@ def s2251_c(a, b, c, d, e):
 def s2275_c(a, aa, b, bb, c, cc, d, len_2d=None):
     """C reference for s2275"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     b = np.ascontiguousarray(b, dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
@@ -1814,7 +1819,7 @@ def s2275_c(a, aa, b, bb, c, cc, d, len_2d=None):
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     d = np.ascontiguousarray(d, dtype=np.float32)
     n = len(a)
-    _lib.s2275_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(bb), _to_ptr(c), _to_ptr(cc), _to_ptr(d), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s2275_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(bb), _to_ptr(c), _to_ptr(cc), _to_ptr(d), n, len_2d if len_2d else aa_shape[0])
     return a
 
 def s231_c(aa, bb, len_2d=None):
@@ -1823,7 +1828,7 @@ def s231_c(aa, bb, len_2d=None):
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s231_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s231_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s232_c(aa, bb, len_2d=None):
     """C reference for s232"""
@@ -1831,7 +1836,7 @@ def s232_c(aa, bb, len_2d=None):
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s232_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s232_kernel(_to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s233_c(aa, bb, cc, len_2d=None):
     """C reference for s233"""
@@ -1840,17 +1845,18 @@ def s233_c(aa, bb, cc, len_2d=None):
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s233_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s233_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s235_c(a, aa, b, bb, c, len_2d=None):
     """C reference for s235"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     b = np.ascontiguousarray(b, dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     c = np.ascontiguousarray(c, dtype=np.float32)
     n = len(a)
-    _lib.s235_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(bb), _to_ptr(c), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s235_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(bb), _to_ptr(c), n, len_2d if len_2d else aa_shape[0])
     return a
 
 def s241_c(a, b, c, d):
@@ -1943,32 +1949,35 @@ def s255_c(a, b, x):
 def s256_c(a, aa, bb, d, len_2d=None):
     """C reference for s256"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     d = np.ascontiguousarray(d, dtype=np.float32)
     n = len(a)
-    _lib.s256_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(bb), _to_ptr(d), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s256_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(bb), _to_ptr(d), n, len_2d if len_2d else aa_shape[0])
     return a
 
 def s257_c(a, aa, bb, len_2d=None):
     """C reference for s257"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(a)
-    _lib.s257_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s257_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else aa_shape[0])
     return a
 
 def s258_c(a, aa, b, c, d, e, len_2d=None):
     """C reference for s258"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     b = np.ascontiguousarray(b, dtype=np.float32)
     c = np.ascontiguousarray(c, dtype=np.float32)
     d = np.ascontiguousarray(d, dtype=np.float32)
     e = np.ascontiguousarray(e, dtype=np.float32)
     n = len(a)
-    _lib.s258_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(c), _to_ptr(d), _to_ptr(e), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s258_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(c), _to_ptr(d), _to_ptr(e), n, len_2d if len_2d else aa_shape[0])
     return b
 
 def s261_c(a, b, c, d):
@@ -2059,7 +2068,7 @@ def s275_c(aa, bb, cc, len_2d=None):
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s275_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s275_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s276_c(a, b, c, d, mid=1):
     """C reference for s276"""
@@ -2148,7 +2157,7 @@ def s3110_c(aa, len_2d=None):
     aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     n = len(aa)
-    _lib.s3110_kernel(_to_ptr(aa), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s3110_kernel(_to_ptr(aa), n, len_2d if len_2d else aa_shape[0])
     return aa.reshape(aa_shape)
 def s3111_c(a):
     """C reference for s3111"""
@@ -2298,11 +2307,12 @@ def s342_c(a, b):
 
 def s343_c(aa, bb, flat_2d_array, len_2d=None):
     """C reference for s343"""
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     flat_2d_array = np.ascontiguousarray(flat_2d_array, dtype=np.float32)
     n = len(aa)
-    _lib.s343_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(flat_2d_array), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.s343_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(flat_2d_array), n, len_2d if len_2d else aa_shape[0])
     return flat_2d_array
 
 def s351_c(a, b, alpha=1):
@@ -2373,7 +2383,7 @@ def s4116_c(a, aa, ip, len_2d=None, inc=1, j=1):
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     ip = np.ascontiguousarray(ip, dtype=np.int32)
     n = len(a)
-    _lib.s4116_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr_int(ip), n, len_2d if len_2d else int(np.sqrt(n)), inc, j)
+    _lib.s4116_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr_int(ip), n, len_2d if len_2d else aa_shape[0], inc, j)
     return aa.reshape(aa_shape)
 
 def s4117_c(a, b, c, d):
@@ -2565,6 +2575,7 @@ def vas_c(a, b, ip):
 def vbor_c(a, aa, b, c, d, e, x, len_2d=None):
     """C reference for vbor"""
     a = np.ascontiguousarray(a, dtype=np.float32)
+    aa_shape = aa.shape
     aa = np.ascontiguousarray(aa.flatten(), dtype=np.float32)
     b = np.ascontiguousarray(b, dtype=np.float32)
     c = np.ascontiguousarray(c, dtype=np.float32)
@@ -2572,7 +2583,7 @@ def vbor_c(a, aa, b, c, d, e, x, len_2d=None):
     e = np.ascontiguousarray(e, dtype=np.float32)
     x = np.ascontiguousarray(x, dtype=np.float32)
     n = len(a)
-    _lib.vbor_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(c), _to_ptr(d), _to_ptr(e), _to_ptr(x), n, len_2d if len_2d else int(np.sqrt(n)))
+    _lib.vbor_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(c), _to_ptr(d), _to_ptr(e), _to_ptr(x), n, len_2d if len_2d else aa_shape[0])
     return x
 
 def vdotr_c(a, b):
