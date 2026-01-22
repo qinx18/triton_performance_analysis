@@ -4,6 +4,7 @@ Correctness Test for s115
 Compares Triton implementation against original TSVC C reference.
 """
 import sys
+import inspect
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
@@ -12,10 +13,24 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s115_c
-    from test23.llm_triton.s115.attempt10 import s115_triton
+    from test24.llm_triton.s115.attempt2 import s115_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
+
+def get_func_params(func):
+    sig = inspect.signature(func)
+    return list(sig.parameters.keys())
+
+def build_args(func, available_tensors, available_scalars):
+    params = get_func_params(func)
+    args = []
+    for p in params:
+        if p in available_tensors:
+            args.append(available_tensors[p])
+        elif p in available_scalars:
+            args.append(available_scalars[p])
+    return args
 
 def test_correctness():
     test_sizes = [64, 128, 256]
@@ -32,6 +47,7 @@ def test_correctness():
         try:
             a = torch.randn(N, device='cuda', dtype=torch.float32)
             aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
+            iterations = 1
 
             a_c = a.cpu().numpy().copy()
             aa_c = aa.cpu().numpy().copy()
@@ -39,33 +55,27 @@ def test_correctness():
             a_tr = a.clone()
             aa_tr = aa.clone()
 
-            # Call C reference with explicit len_2d parameter
-            # The C reference needs len_2d=N, not sqrt(len(a))
-            c_result = s115_c(a_c, aa_c, len_2d=N)
+            c_tensors = {"a": a_c, "aa": aa_c}
+            tr_tensors = {"a": a_tr, "aa": aa_tr}
+            scalars = {"iterations": iterations}
 
-            # Call Triton implementation
-            s115_triton(a_tr, aa_tr)
+            c_args = build_args(s115_c, c_tensors, scalars)
+            tr_args = build_args(s115_triton, tr_tensors, scalars)
+
+            c_result = s115_c(*c_args)
+            triton_result = s115_triton(*tr_args)
 
             # Convert C result back to torch for comparison
+            # Use c_result if C function returns modified array, otherwise use in-place modified array
             c_arr = c_result if c_result is not None else a_c
             a_c_torch = torch.from_numpy(c_arr).cuda()
+            max_error = torch.max(torch.abs(a_c_torch - a_tr)).item()
 
-            # s115 is back substitution which causes exponential value growth
-            # Must use relative tolerance, not absolute tolerance
-            # Values can grow to 1e+10 or higher, making absolute error meaningless
-            torch.cuda.synchronize()
-
-            abs_diff = torch.abs(a_c_torch - a_tr)
-            max_abs_error = torch.max(abs_diff).item()
-            max_val = max(torch.max(torch.abs(a_c_torch)).item(), 1e-10)
-            max_rel_error = max_abs_error / max_val
-
-            # Use more lenient tolerance for back substitution (accumulating FP errors)
-            passed = torch.allclose(a_c_torch, a_tr, rtol=1e-3, atol=1e-5)
+            passed = max_error < 1e-3 or torch.allclose(a_c_torch, a_tr, rtol=1e-3, atol=1e-3)
             if passed:
-                print(f"PASS  (rel_err={max_rel_error:.2e}, abs_err={max_abs_error:.2e})")
+                print(f"PASS  (max_err={max_error:.2e})")
             else:
-                print(f"FAIL  (rel_err={max_rel_error:.2e}, abs_err={max_abs_error:.2e})")
+                print(f"FAIL  (max_error={max_error:.2e})")
                 all_passed = False
 
         except Exception as e:

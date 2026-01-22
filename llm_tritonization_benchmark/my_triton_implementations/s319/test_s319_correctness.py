@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s319_c
-    from test23.llm_triton.s319.attempt3 import s319_triton
+    from test24.llm_triton.s319.attempt1 import s319_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
