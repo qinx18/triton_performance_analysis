@@ -170,13 +170,14 @@
   "s118": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "compilation",
-      "message": "ms=keep_dims)\n           ^\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s118/test_s118_correctness.py\", line 66, in test_correctness\n    triton_result = s118_triton(*tr_args)\n                    ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s1"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.077519,
+      "triton_time_ms": 3.236463,
+      "speedup": 0.023952
+    }
   },
   "s119": {
     "c_ref_available": true,
@@ -408,13 +409,14 @@
   "s132": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 5.45e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.044555,
+      "triton_time_ms": 0.090205,
+      "speedup": 0.493929
+    }
   },
   "s1351": {
     "c_ref_available": true,
@@ -563,13 +565,14 @@
   "s176": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 3.55e+30"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 130.456003,
+      "triton_time_ms": 1.118045,
+      "speedup": 116.682299
+    }
   },
   "s2101": {
     "c_ref_available": true,

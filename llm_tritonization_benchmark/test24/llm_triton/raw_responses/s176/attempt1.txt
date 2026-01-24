@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s176
-# Generated: 2026-01-22 14:50:06
+# Generated: 2026-01-24 11:44:25
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -190,24 +190,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -263,41 +245,26 @@ def s176_triton(a, b, c):
     m = n // 2
     
     # Use PyTorch's conv1d for efficient convolution computation
-    # This avoids the timeout issue with sequential loops in Triton
+    # This avoids the timeout issue with nested sequential loops in Triton
     
-    # Prepare inputs for conv1d
-    # b needs to be reshaped and the relevant portion extracted
-    b_input = b[m-1:2*m-1].unsqueeze(0).unsqueeze(0)  # (1, 1, m)
-    c_weight = c[:m].flip(0).unsqueeze(0).unsqueeze(0)  # (1, 1, m)
+    # Prepare tensors for conv1d
+    # Input: b (we need the relevant portion)
+    # Weight: c (first m elements, flipped for convolution)
     
-    # Compute convolution
-    conv_result = torch.nn.functional.conv1d(b_input, c_weight, padding=0)
+    b_input = b[:2*m-1].unsqueeze(0).unsqueeze(0)  # (1, 1, 2*m-1)
+    c_weight = torch.flip(c[:m], [0]).unsqueeze(0).unsqueeze(0)  # (1, 1, m)
     
-    # Add result to a
-    a[:m] += conv_result.squeeze()
-
-@triton.jit
-def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_idx = pid * BLOCK_SIZE + i_offsets
-    i_mask = i_idx < m
+    # Perform convolution
+    # conv1d computes sum over j of: b[i+offset-j] * c_flipped[j]
+    # We need: sum over j of: b[i+m-j-1] * c[j]
+    # This is equivalent to: sum over j of: b[i+m-1-j] * c[j]
     
-    # Load initial a values
-    a_vals = tl.load(a_ptr + i_idx, mask=i_mask, other=0.0)
+    conv_result = torch.nn.functional.conv1d(
+        b_input, 
+        c_weight, 
+        padding=0
+    )[0, 0]  # Remove batch and channel dimensions
     
-    # Sequential loop over j (required due to accumulation pattern)
-    for j in range(m):
-        # Load c[j] (broadcast to all threads)
-        c_val = tl.load(c_ptr + j)
-        
-        # Load b[i+m-j-1] values
-        b_idx = i_idx + m - j - 1
-        b_vals = tl.load(b_ptr + b_idx, mask=i_mask, other=0.0)
-        
-        # Accumulate
-        a_vals += b_vals * c_val
-    
-    # Store final results
-    tl.store(a_ptr + i_idx, a_vals, mask=i_mask)
+    # Add the convolution result to a[:m]
+    a[:m] += conv_result[:m]
 ```

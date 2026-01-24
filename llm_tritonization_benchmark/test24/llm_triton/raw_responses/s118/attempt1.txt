@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s118
-# Generated: 2026-01-22 14:33:01
+# Generated: 2026-01-24 11:11:53
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -117,24 +117,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -186,50 +168,64 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s118_kernel(a_ptr, bb_ptr, i_val, BLOCK_SIZE: tl.constexpr):
-    # Get current block of j indices
-    block_start = tl.program_id(0) * BLOCK_SIZE
-    j_offsets = block_start + tl.arange(0, BLOCK_SIZE)
+def s118_kernel(a_ptr, bb_ptr, i, LEN_2D, BLOCK_SIZE: tl.constexpr):
+    # Get program ID for j dimension
+    pid = tl.program_id(0)
     
-    # Mask for valid j values (0 <= j <= i-1)
-    mask = (j_offsets >= 0) & (j_offsets < i_val)
+    # Calculate j offsets for this block
+    j_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     
-    # Load bb[j][i] values - bb is stored in row-major order
-    # bb[j][i] = bb_ptr[j * N + i] where N is the second dimension
-    bb_offsets = j_offsets * 256 + i_val  # 256 is LEN_2D derived from bb shape
-    bb_vals = tl.load(bb_ptr + bb_offsets, mask=mask, other=0.0)
+    # Mask for valid j values (j <= i-1)
+    j_mask = j_offsets < i
+    
+    # Load bb[j][i] values
+    bb_offsets = j_offsets * LEN_2D + i
+    bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
+    
+    # Calculate a[i-j-1] indices
+    a_read_indices = i - j_offsets - 1
+    a_read_mask = j_mask & (a_read_indices >= 0)
     
     # Load a[i-j-1] values
-    a_indices = i_val - j_offsets - 1
-    a_mask = mask & (a_indices >= 0)
-    a_vals = tl.load(a_ptr + a_indices, mask=a_mask, other=0.0)
+    a_vals = tl.load(a_ptr + a_read_indices, mask=a_read_mask, other=0.0)
     
-    # Compute products and sum
+    # Compute products
     products = bb_vals * a_vals
-    # Apply mask to zero out invalid contributions
-    products = tl.where(a_mask, products, 0.0)
     
-    # Sum all products in this block
-    block_sum = tl.sum(products)
+    # Mask out invalid products
+    valid_products = tl.where(a_read_mask, products, 0.0)
     
-    # Store the sum back to shared memory for reduction across blocks
-    # We'll use atomic add to accumulate results
-    if block_start == 0:  # Only first thread in first block updates
-        current_val = tl.load(a_ptr + i_val)
-        tl.store(a_ptr + i_val, current_val + block_sum)
+    # Sum across the block
+    result = tl.sum(valid_products)
+    
+    # Atomic add to a[i]
+    if pid == 0:
+        # Load current value of a[i]
+        current_val = tl.load(a_ptr + i)
+        # Store updated value
+        tl.store(a_ptr + i, current_val + result)
     else:
-        # Use atomic add for other blocks
-        tl.atomic_add(a_ptr + i_val, block_sum)
+        # For other blocks, use atomic add
+        tl.atomic_add(a_ptr + i, result)
 
 def s118_triton(a, bb):
-    N = bb.shape[0]  # LEN_2D
+    LEN_2D = bb.shape[0]
+    BLOCK_SIZE = 128
     
-    BLOCK_SIZE = 256
+    # Ensure tensors are contiguous
+    a = a.contiguous()
+    bb = bb.contiguous()
     
-    # Process each i sequentially to maintain dependencies
-    for i in range(1, N):
-        num_j = i  # j ranges from 0 to i-1
+    for i in range(1, LEN_2D):
+        # Calculate number of j values for this i
+        num_j = i
+        
         if num_j > 0:
-            grid = (triton.cdiv(num_j, BLOCK_SIZE),)
-            s118_kernel[grid](a, bb, i, BLOCK_SIZE=BLOCK_SIZE)
+            # Calculate grid size
+            grid_size = triton.cdiv(num_j, BLOCK_SIZE)
+            
+            # Launch kernel
+            s118_kernel[(grid_size,)](
+                a, bb, i, LEN_2D, BLOCK_SIZE
+            )
 ```

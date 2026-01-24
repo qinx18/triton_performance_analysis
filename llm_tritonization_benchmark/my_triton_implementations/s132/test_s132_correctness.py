@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s132_c
-    from test24.llm_triton.s132.attempt10 import s132_triton
+    from test24.llm_triton.s132.attempt1 import s132_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,15 +22,15 @@ def get_func_params(func):
     sig = inspect.signature(func)
     return list(sig.parameters.keys())
 
-def build_args(func, available_tensors, available_scalars):
+def build_kwargs(func, available_tensors, available_scalars):
     params = get_func_params(func)
-    args = []
+    kwargs = {}
     for p in params:
         if p in available_tensors:
-            args.append(available_tensors[p])
+            kwargs[p] = available_tensors[p]
         elif p in available_scalars:
-            args.append(available_scalars[p])
-    return args
+            kwargs[p] = available_scalars[p]
+    return kwargs
 
 def test_correctness():
     test_sizes = [64, 128, 256]
@@ -64,11 +64,11 @@ def test_correctness():
             tr_tensors = {"aa": aa_tr, "b": b_tr, "c": c_tr}
             scalars = {"iterations": iterations, "j": j, "k": k}
 
-            c_args = build_args(s132_c, c_tensors, scalars)
-            tr_args = build_args(s132_triton, tr_tensors, scalars)
+            c_kwargs = build_kwargs(s132_c, c_tensors, scalars)
+            tr_kwargs = build_kwargs(s132_triton, tr_tensors, scalars)
 
-            c_result = s132_c(*c_args)
-            triton_result = s132_triton(*tr_args)
+            c_result = s132_c(**c_kwargs)
+            triton_result = s132_triton(**tr_kwargs)
 
             # Convert C result back to torch for comparison
             # Use c_result if C function returns modified array, otherwise use in-place modified array
