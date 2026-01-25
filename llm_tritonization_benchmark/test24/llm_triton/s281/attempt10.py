@@ -41,9 +41,12 @@ def s281_triton(a, b, c, x):
     n = a.shape[0]
     threshold = n // 2
     BLOCK_SIZE = 256
-    
-    # Create expanded array for scalar x with initial value
-    x_expanded = torch.full((n,), x, dtype=a.dtype, device=a.device)
+
+    # Create expanded array for x values
+    # x is passed as a tensor but used as a local variable in the C code
+    # The initial value doesn't matter since it's immediately overwritten in the loop
+    x_val = x[0].item() if isinstance(x, torch.Tensor) else x
+    x_expanded = torch.full((n,), x_val, dtype=a.dtype, device=a.device)
     
     # Step 1: Expand scalar x to array
     grid = (1,)

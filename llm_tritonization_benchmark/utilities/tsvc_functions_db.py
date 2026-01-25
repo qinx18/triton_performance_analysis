@@ -1628,7 +1628,7 @@ for (int nl = 0; nl < iterations; nl++) {
         }
     }
 """,
-        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r', 'x': 'rw'},  # x passed to C kernel but used as local
+        "arrays": {'a': 'rw', 'b': 'rw', 'c': 'r'},  # x is a local variable, not an array
         "has_offset": True,
         "has_conditional": False,
         "has_reduction": False,

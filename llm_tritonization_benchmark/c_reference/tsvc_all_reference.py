@@ -785,7 +785,6 @@ def _setup_functions():
         ctypes.POINTER(ctypes.c_float),
         ctypes.POINTER(ctypes.c_float),
         ctypes.POINTER(ctypes.c_float),
-        ctypes.POINTER(ctypes.c_float),
         ctypes.c_int
     ]
     _lib.s281_kernel.restype = None
@@ -2115,14 +2114,13 @@ def s279_c(a, b, c, d, e):
     _lib.s279_kernel(_to_ptr(a), _to_ptr(b), _to_ptr(c), _to_ptr(d), _to_ptr(e), n)
     return a
 
-def s281_c(a, b, c, x):
+def s281_c(a, b, c):
     """C reference for s281"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     b = np.ascontiguousarray(b, dtype=np.float32)
     c = np.ascontiguousarray(c, dtype=np.float32)
-    x = np.ascontiguousarray(x, dtype=np.float32)
     n = len(a)
-    _lib.s281_kernel(_to_ptr(a), _to_ptr(b), _to_ptr(c), _to_ptr(x), n)
+    _lib.s281_kernel(_to_ptr(a), _to_ptr(b), _to_ptr(c), n)
     return a
 
 def s291_c(a, b):

@@ -896,12 +896,12 @@ L30:
 }
 
 /* s281 */
-void s281_kernel(real_t* a, real_t* b, real_t* c, real_t* x, int n) {
-    real_t x_local;
+void s281_kernel(real_t* a, real_t* b, real_t* c, int n) {
+    real_t x;
         for (int i = 0; i < n; i++) {
-            x_local = a[n-i-1] + b[i] * c[i];
-            a[i] = x_local-(real_t)1.0;
-            b[i] = x_local;
+            x = a[n-i-1] + b[i] * c[i];
+            a[i] = x-(real_t)1.0;
+            b[i] = x;
         }
 }
 
