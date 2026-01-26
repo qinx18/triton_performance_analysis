@@ -1416,7 +1416,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test24.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test25.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1654,7 +1654,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test24.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test25.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1845,7 +1845,7 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"  Offset: {func_spec['has_offset']}, Conditional: {func_spec['has_conditional']}, Reduction: {func_spec['has_reduction']}")
     print(f"{'=' * 70}")
 
-    test_dir = Path("test24")
+    test_dir = Path("test25")
     llm_triton_dir = test_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
@@ -2104,7 +2104,7 @@ def main():
 
     # Save results to JSON file
     import json
-    results_file = Path("test24") / "results.json"
+    results_file = Path("test25") / "results.json"
 
     # Load existing results if file exists
     existing_results = {}
@@ -2135,7 +2135,7 @@ def main():
         }
 
     # Save updated results
-    Path("test24").mkdir(exist_ok=True)
+    Path("test25").mkdir(exist_ok=True)
     with open(results_file, 'w') as f:
         json.dump(existing_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")

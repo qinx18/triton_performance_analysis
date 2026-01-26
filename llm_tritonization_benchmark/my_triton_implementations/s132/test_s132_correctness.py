@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s132_c
-    from test24.llm_triton.s132.attempt1 import s132_triton
+    from test25.llm_triton.s132.attempt1 import s132_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -51,6 +51,7 @@ def test_correctness():
             iterations = 1
             j = 1
             k = 0
+            len_2d = 1
 
             aa_c = aa.cpu().numpy().copy()
             b_c = b.cpu().numpy().copy()
@@ -62,7 +63,7 @@ def test_correctness():
 
             c_tensors = {"aa": aa_c, "b": b_c, "c": c_c}
             tr_tensors = {"aa": aa_tr, "b": b_tr, "c": c_tr}
-            scalars = {"iterations": iterations, "j": j, "k": k}
+            scalars = {"iterations": iterations, "j": j, "k": k, "len_2d": len_2d}
 
             c_kwargs = build_kwargs(s132_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s132_triton, tr_tensors, scalars)
@@ -70,13 +71,29 @@ def test_correctness():
             c_result = s132_c(**c_kwargs)
             triton_result = s132_triton(**tr_kwargs)
 
-            # Convert C result back to torch for comparison
-            # Use c_result if C function returns modified array, otherwise use in-place modified array
-            c_arr = c_result if c_result is not None else aa_c
-            aa_c_torch = torch.from_numpy(c_arr).cuda()
-            max_error = torch.max(torch.abs(aa_c_torch - aa_tr)).item()
+            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
+            if isinstance(c_result, (int, float)):
+                # Scalar return - compare values directly
+                c_val = float(c_result)
+                if isinstance(triton_result, (int, float)):
+                    tr_val = float(triton_result)
+                elif isinstance(triton_result, torch.Tensor):
+                    tr_val = triton_result.item() if triton_result.numel() == 1 else float(triton_result)
+                else:
+                    tr_val = float(triton_result) if triton_result is not None else float('inf')
+                max_error = abs(c_val - tr_val)
+                is_scalar_comparison = True
+            else:
+                # Array comparison - C function modifies arrays in-place or returns array
+                c_arr = c_result if isinstance(c_result, np.ndarray) else aa_c
+                aa_c_torch = torch.from_numpy(c_arr).cuda()
+                max_error = torch.max(torch.abs(aa_c_torch - aa_tr)).item()
+                is_scalar_comparison = False
 
-            passed = max_error < 1e-3 or torch.allclose(aa_c_torch, aa_tr, rtol=1e-3, atol=1e-3)
+            if is_scalar_comparison:
+                passed = max_error < 0.001 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 0.001)
+            else:
+                passed = max_error < 0.001 or torch.allclose(aa_c_torch, aa_tr, rtol=0.001, atol=0.001)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

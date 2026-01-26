@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s119_c
-    from test24.llm_triton.s119.attempt3 import s119_triton
+    from test25.llm_triton.s119.attempt1 import s119_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -23,15 +23,15 @@ def get_func_params(func):
     sig = inspect.signature(func)
     return list(sig.parameters.keys())
 
-def build_args(func, available_tensors, available_scalars):
+def build_kwargs(func, available_tensors, available_scalars):
     params = get_func_params(func)
-    args = []
+    kwargs = {}
     for p in params:
         if p in available_tensors:
-            args.append(available_tensors[p])
+            kwargs[p] = available_tensors[p]
         elif p in available_scalars:
-            args.append(available_scalars[p])
-    return args
+            kwargs[p] = available_scalars[p]
+    return kwargs
 
 def benchmark():
     N = 256
@@ -48,15 +48,15 @@ def benchmark():
     # Initialize arrays on GPU
     aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
     bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
-    iterations = 1
+    len_2d = 1
 
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {"aa": aa.cpu().numpy().copy(), "bb": bb.cpu().numpy().copy()}
     tr_tensors = {"aa": aa.clone(), "bb": bb.clone()}
-    scalars = {"iterations": iterations}
+    scalars = {"len_2d": len_2d}
 
-    c_args = build_args(s119_c, c_arrays, scalars)
-    tr_args = build_args(s119_triton, tr_tensors, scalars)
+    c_kwargs = build_kwargs(s119_c, c_arrays, scalars)
+    tr_kwargs = build_kwargs(s119_triton, tr_tensors, scalars)
 
     c_time = None
     tr_time = None
@@ -71,8 +71,8 @@ def benchmark():
             # Reset arrays for each iteration
             for arr in c_arrays:
                 c_arrays[arr] = c_arrays[arr].copy()
-            c_args = build_args(s119_c, c_arrays, scalars)
-            s119_c(*c_args)
+            c_kwargs = build_kwargs(s119_c, c_arrays, scalars)
+            s119_c(**c_kwargs)
 
         print(f"Benchmarking C reference ({num_iterations} iterations)...")
         c_start = time.perf_counter()
@@ -82,8 +82,8 @@ def benchmark():
                 raise TimeoutError("C reference benchmark timeout")
             for arr in c_arrays:
                 c_arrays[arr] = c_arrays[arr].copy()
-            c_args = build_args(s119_c, c_arrays, scalars)
-            s119_c(*c_args)
+            c_kwargs = build_kwargs(s119_c, c_arrays, scalars)
+            s119_c(**c_kwargs)
         c_time = (time.perf_counter() - c_start) / num_iterations
         print(f"  C reference time: {c_time*1000:.3f} ms")
     except (TimeoutError, Exception) as e:
@@ -99,8 +99,8 @@ def benchmark():
                 raise TimeoutError("Triton warmup timeout")
             for arr in tr_tensors:
                 tr_tensors[arr] = tr_tensors[arr].clone()
-            tr_args = build_args(s119_triton, tr_tensors, scalars)
-            s119_triton(*tr_args)
+            tr_kwargs = build_kwargs(s119_triton, tr_tensors, scalars)
+            s119_triton(**tr_kwargs)
         torch.cuda.synchronize()
 
         print(f"Benchmarking Triton implementation ({num_iterations} iterations)...")
@@ -112,8 +112,8 @@ def benchmark():
                 raise TimeoutError("Triton benchmark timeout")
             for arr in tr_tensors:
                 tr_tensors[arr] = tr_tensors[arr].clone()
-            tr_args = build_args(s119_triton, tr_tensors, scalars)
-            s119_triton(*tr_args)
+            tr_kwargs = build_kwargs(s119_triton, tr_tensors, scalars)
+            s119_triton(**tr_kwargs)
         torch.cuda.synchronize()
         tr_time = (time.perf_counter() - tr_start) / num_iterations
         print(f"  Triton time: {tr_time*1000:.3f} ms")

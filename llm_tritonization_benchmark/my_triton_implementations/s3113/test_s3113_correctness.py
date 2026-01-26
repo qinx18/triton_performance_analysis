@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s3113_c
-    from test24.llm_triton.s3113.attempt2 import s3113_triton
+    from test25.llm_triton.s3113.attempt1 import s3113_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -46,6 +46,7 @@ def test_correctness():
 
         try:
             a = torch.randn(N, device='cuda', dtype=torch.float32)
+            abs_param = 1
             iterations = 1
 
             a_c = a.cpu().numpy().copy()
@@ -54,7 +55,7 @@ def test_correctness():
 
             c_tensors = {"a": a_c}
             tr_tensors = {"a": a_tr}
-            scalars = {"iterations": iterations}
+            scalars = {"abs": abs_param, "iterations": iterations}
 
             c_kwargs = build_kwargs(s3113_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s3113_triton, tr_tensors, scalars)
