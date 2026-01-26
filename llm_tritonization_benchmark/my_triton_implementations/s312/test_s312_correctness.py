@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s312_c
-    from test24.llm_triton.s312.attempt10 import s312_triton
+    from test24.llm_triton.s312.attempt1 import s312_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -22,15 +22,15 @@ def get_func_params(func):
     sig = inspect.signature(func)
     return list(sig.parameters.keys())
 
-def build_args(func, available_tensors, available_scalars):
+def build_kwargs(func, available_tensors, available_scalars):
     params = get_func_params(func)
-    args = []
+    kwargs = {}
     for p in params:
         if p in available_tensors:
-            args.append(available_tensors[p])
+            kwargs[p] = available_tensors[p]
         elif p in available_scalars:
-            args.append(available_scalars[p])
-    return args
+            kwargs[p] = available_scalars[p]
+    return kwargs
 
 def test_correctness():
     test_sizes = [100, 1000, 10000]
@@ -56,36 +56,35 @@ def test_correctness():
             tr_tensors = {"a": a_tr}
             scalars = {"iterations": iterations}
 
-            c_args = build_args(s312_c, c_tensors, scalars)
-            tr_args = build_args(s312_triton, tr_tensors, scalars)
+            c_kwargs = build_kwargs(s312_c, c_tensors, scalars)
+            tr_kwargs = build_kwargs(s312_triton, tr_tensors, scalars)
 
-            c_result = s312_c(*c_args)
-            triton_result = s312_triton(*tr_args)
+            c_result = s312_c(**c_kwargs)
+            triton_result = s312_triton(**tr_kwargs)
 
-            # Pure reduction: compare return values
-            # If C returns None (void function), use numpy sum as reference
-            if c_result is None:
-                # C function is void - use numpy sum as baseline reference
-                c_val = float(np.sum(a_c))
-            elif isinstance(c_result, (int, float)):
-                c_val = c_result
-            elif isinstance(c_result, np.ndarray):
-                c_val = c_result.item() if c_result.size == 1 else c_result.sum()
-            else:
+            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
+            if isinstance(c_result, (int, float)):
+                # Scalar return - compare values directly
                 c_val = float(c_result)
-
-            if triton_result is None:
-                tr_val = float('inf')  # Triton should return something
-            elif isinstance(triton_result, (int, float)):
-                tr_val = triton_result
-            elif isinstance(triton_result, torch.Tensor):
-                tr_val = triton_result.item() if triton_result.numel() == 1 else triton_result.sum().item()
+                if isinstance(triton_result, (int, float)):
+                    tr_val = float(triton_result)
+                elif isinstance(triton_result, torch.Tensor):
+                    tr_val = triton_result.item() if triton_result.numel() == 1 else float(triton_result)
+                else:
+                    tr_val = float(triton_result) if triton_result is not None else float('inf')
+                max_error = abs(c_val - tr_val)
+                is_scalar_comparison = True
             else:
-                tr_val = float(triton_result)
+                # Array comparison - C function modifies arrays in-place or returns array
+                c_arr = c_result if isinstance(c_result, np.ndarray) else a_c
+                a_c_torch = torch.from_numpy(c_arr).cuda()
+                max_error = torch.max(torch.abs(a_c_torch - a_tr)).item()
+                is_scalar_comparison = False
 
-            max_error = abs(c_val - tr_val)
-
-            passed = max_error < 1e-3 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 1e-3)
+            if is_scalar_comparison:
+                passed = max_error < 0.001 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 0.001)
+            else:
+                passed = max_error < 0.001 or torch.allclose(a_c_torch, a_tr, rtol=0.001, atol=0.001)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

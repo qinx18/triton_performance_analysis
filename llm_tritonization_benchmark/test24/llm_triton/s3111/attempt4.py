@@ -1,36 +1,34 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s3111_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Load values
-    a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    total_sum = 0.0
     
-    # Apply condition: if a[i] > 0, include in sum, else 0
-    condition_mask = a_vals > 0.0
-    filtered_vals = tl.where(condition_mask & mask, a_vals, 0.0)
-    block_sum = tl.sum(filtered_vals)
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        positive_mask = vals > 0.0
+        block_vals = tl.where(positive_mask & mask, vals, 0.0)
+        block_sum = tl.sum(block_vals)
+        total_sum = total_sum + block_sum
     
-    # Store block sum
-    tl.store(output_ptr + pid, block_sum)
+    tl.store(output_ptr, total_sum)
 
 def s3111_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
-    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Create output for block sums
-    block_sums = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel
-    grid = (n_blocks,)
-    s3111_kernel[grid](a, block_sums, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    BLOCK_SIZE = 1024
     
-    # Return total sum as scalar
-    return torch.sum(block_sums).item()
+    s3111_kernel[(1,)](
+        a, output, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    return output.item()

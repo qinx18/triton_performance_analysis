@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s353
-# Generated: 2026-01-22 15:29:23
+# Generated: 2026-01-26 14:04:25
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -132,7 +132,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s353_triton(a, b, c, ip):
+def s353_triton(a, b, ip, alpha):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -143,24 +143,6 @@ IMPORTANT:
 - If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
 
 ## CRITICAL: Triton Compilation Rules
-
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
 
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
@@ -213,35 +195,35 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s353_kernel(a_ptr, b_ptr, c_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s353_kernel(a_ptr, b_ptr, ip_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
+    mask = idx < n_elements
     
-    # Load alpha
-    alpha = tl.load(c_ptr)
+    # Load indices and mask for valid indices
+    ip_vals = tl.load(ip_ptr + idx, mask=mask)
+    ip_mask = (ip_vals >= 0) & (ip_vals < n_elements) & mask
     
-    # Load indices and values
-    ip_vals = tl.load(ip_ptr + offsets, mask=mask)
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + ip_vals, mask=mask)
+    # Load a values
+    a_vals = tl.load(a_ptr + idx, mask=mask)
+    
+    # Gather b values using indices from ip
+    b_vals = tl.load(b_ptr + ip_vals, mask=ip_mask)
     
     # Compute: a[i] += alpha * b[ip[i]]
     result = a_vals + alpha * b_vals
     
-    # Store result
-    tl.store(a_ptr + offsets, result, mask=mask)
+    # Store result back to a
+    tl.store(a_ptr + idx, result, mask=mask)
 
-def s353_triton(a, b, c, ip):
+def s353_triton(a, b, ip, alpha):
     n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s353_kernel[grid](
-        a, b, c, ip,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, ip, alpha, n_elements, BLOCK_SIZE
     )
 ```

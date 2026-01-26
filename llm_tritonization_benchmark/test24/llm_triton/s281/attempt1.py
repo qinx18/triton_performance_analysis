@@ -3,72 +3,58 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s281_expand_x_kernel(a_ptr, b_ptr, c_ptr, x_expanded_ptr, n):
-    # Single thread processes all elements sequentially for scalar expansion
-    pid = tl.program_id(0)
-    if pid != 0:
-        return
-    
-    x_val = 0.0
-    for i in range(n):
-        # Load values
-        a_val = tl.load(a_ptr + (n - i - 1))
-        b_val = tl.load(b_ptr + i)
-        c_val = tl.load(c_ptr + i)
-        
-        # Compute x
-        x_val = a_val + b_val * c_val
-        
-        # Store expanded x value
-        tl.store(x_expanded_ptr + i, x_val)
-
-@triton.jit
-def s281_phase1_kernel(a_copy_ptr, b_ptr, c_ptr, x_expanded_ptr, a_ptr, threshold, BLOCK_SIZE: tl.constexpr):
+def s281_phase1_kernel(a_ptr, a_copy_ptr, b_ptr, c_ptr, n, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < threshold
+    mask = offsets < n // 2
     
-    # Load expanded x values
-    x_vals = tl.load(x_expanded_ptr + offsets, mask=mask)
+    # Phase 1: i = 0 to n//2 - 1
+    # Read from a_copy[n-1-i], write to a[i]
+    read_offsets = n - 1 - offsets
     
-    # Store results
+    a_vals = tl.load(a_copy_ptr + read_offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    
+    x_vals = a_vals + b_vals * c_vals
+    
     tl.store(a_ptr + offsets, x_vals - 1.0, mask=mask)
     tl.store(b_ptr + offsets, x_vals, mask=mask)
 
 @triton.jit
-def s281_phase2_kernel(a_ptr, b_ptr, c_ptr, x_expanded_ptr, n, threshold, BLOCK_SIZE: tl.constexpr):
+def s281_phase2_kernel(a_ptr, b_ptr, c_ptr, n, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE) + threshold
+    base_offset = n // 2
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE) + base_offset
     mask = offsets < n
     
-    # Load expanded x values
-    x_vals = tl.load(x_expanded_ptr + offsets, mask=mask)
+    # Phase 2: i = n//2 to n-1
+    # Read from a[n-1-i] (updated values from Phase 1)
+    read_offsets = n - 1 - offsets
     
-    # Store results
+    a_vals = tl.load(a_ptr + read_offsets, mask=mask)
+    b_vals = tl.load(b_ptr + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    
+    x_vals = a_vals + b_vals * c_vals
+    
     tl.store(a_ptr + offsets, x_vals - 1.0, mask=mask)
     tl.store(b_ptr + offsets, x_vals, mask=mask)
 
-def s281_triton(a, b, c, x):
+def s281_triton(a, b, c):
     n = a.shape[0]
-    threshold = (n - 1 + 1) // 2
-    BLOCK_SIZE = 256
+    threshold = n // 2
     
-    # Create expanded array for scalar x
-    x_expanded = torch.zeros(n, dtype=a.dtype, device=a.device)
-    
-    # Clone array for crossing threshold pattern
+    # Clone array for Phase 1 reads
     a_copy = a.clone()
     
-    # Step 1: Expand scalar x
-    grid = (1,)
-    s281_expand_x_kernel[grid](a_copy, b, c, x_expanded, n)
+    BLOCK_SIZE = 256
     
-    # Step 2: Phase 1 - parallel execution for indices 0 to threshold-1
+    # Phase 1: Process first half
     grid1 = (triton.cdiv(threshold, BLOCK_SIZE),)
-    s281_phase1_kernel[grid1](a_copy, b, c, x_expanded, a, threshold, BLOCK_SIZE=BLOCK_SIZE)
+    s281_phase1_kernel[grid1](a, a_copy, b, c, n, BLOCK_SIZE)
     
-    # Step 3: Phase 2 - parallel execution for indices threshold to n-1
+    # Phase 2: Process second half
     remaining = n - threshold
-    if remaining > 0:
-        grid2 = (triton.cdiv(remaining, BLOCK_SIZE),)
-        s281_phase2_kernel[grid2](a, b, c, x_expanded, n, threshold, BLOCK_SIZE=BLOCK_SIZE)
+    grid2 = (triton.cdiv(remaining, BLOCK_SIZE),)
+    s281_phase2_kernel[grid2](a, b, c, n, BLOCK_SIZE)

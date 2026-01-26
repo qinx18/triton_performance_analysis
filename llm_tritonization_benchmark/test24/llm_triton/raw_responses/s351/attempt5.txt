@@ -3,41 +3,11 @@
 
 Your last attempt failed with a compilation or runtime error:
 
-**Error type**: compilation
+**Error type**: runtime
 **Error message**:
 ```
-anguage.float32')
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s351/test_s351_correctness.py", line 69, in test_correctness
-    triton_result = s351_triton(*tr_args)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s351/attempt4.py", line 25, in s351_triton
-    s351_kernel[grid](a, b, alpha, n, BLOCK_SIZE=BLOCK_SIZE)
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 10:22:
-def s351_kernel(a_ptr, b_ptr, alpha, n, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n
-
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    b_vals = tl.load(b_ptr + offsets, mask=mask)
-
-    result = a_vals + alpha * b_vals
-                      ^
-IncompatibleTypeErrorImpl('invalid operands of type pointer<fp32> and triton.language.float32')
+Error: mkl-service + Intel(R) MKL: MKL_THREADING_LAYER=INTEL is incompatible with libgomp-a34b3233.so.1 library.
+	Try to import numpy first or set the threading layer accordingly. Set MKL_SERVICE_FORCE_INTEL to force it.
 
 ```
 
@@ -48,15 +18,18 @@ Please fix the error. Make sure to:
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import os
+os.environ['MKL_THREADING_LAYER'] = 'GNU'
+import numpy
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s351_kernel(a_ptr, b_ptr, alpha, n, BLOCK_SIZE: tl.constexpr):
+def s351_kernel(a_ptr, b_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     b_vals = tl.load(b_ptr + offsets, mask=mask)
@@ -65,14 +38,16 @@ def s351_kernel(a_ptr, b_ptr, alpha, n, BLOCK_SIZE: tl.constexpr):
     
     tl.store(a_ptr + offsets, result, mask=mask)
 
-def s351_triton(a, b, c):
-    n = a.shape[0]
-    alpha = c[0]
-    
+def s351_triton(a, b, alpha):
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s351_kernel[grid](a, b, alpha, n, BLOCK_SIZE=BLOCK_SIZE)
+    s351_kernel[grid](
+        a, b, alpha, n_elements, BLOCK_SIZE
+    )
+    
+    return a
 ```
 
 
@@ -202,7 +177,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s351_triton(a, b, c):
+def s351_triton(a, b, alpha):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -213,24 +188,6 @@ IMPORTANT:
 - If parallelization analysis is shown above, you MUST follow the specified parallelization strategy
 
 ## CRITICAL: Triton Compilation Rules
-
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
 
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
@@ -280,15 +237,16 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import numpy
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s351_kernel(a_ptr, b_ptr, alpha, n, BLOCK_SIZE: tl.constexpr):
+def s351_kernel(a_ptr, b_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
     a_vals = tl.load(a_ptr + offsets, mask=mask)
     b_vals = tl.load(b_ptr + offsets, mask=mask)
@@ -297,11 +255,13 @@ def s351_kernel(a_ptr, b_ptr, alpha, n, BLOCK_SIZE: tl.constexpr):
     
     tl.store(a_ptr + offsets, result, mask=mask)
 
-def s351_triton(a, b, c):
-    n = a.shape[0]
-    alpha = c[0].item()
-    
+def s351_triton(a, b, alpha):
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n, BLOCK_SIZE),)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s351_kernel[grid](a, b, alpha, n, BLOCK_SIZE=BLOCK_SIZE)
+    s351_kernel[grid](
+        a, b, alpha, n_elements, BLOCK_SIZE
+    )
+    
+    return a

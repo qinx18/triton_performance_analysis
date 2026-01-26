@@ -3,51 +3,34 @@
 
 Your last attempt failed with a compilation or runtime error:
 
-**Error type**: compilation
+**Error type**: runtime
 **Error message**:
 ```
-n - 1) * inc
-
-    # Process elements with stride
-    k = inc
-    for i in range(1, n):
-        if k >= n:
-            break
-            ^
-unsupported AST node type: Break
+======================================================================
+Correctness Testing: s318
+Comparing Triton vs TSVC C reference
+======================================================================
+Testing N=   100... ERROR: s318_triton() missing 1 required positional argument: 'abs_tensor'
+Testing N=  1000... ERROR: s318_triton() missing 1 required positional argument: 'abs_tensor'
+Testing N= 10000... ERROR: s318_triton() missing 1 required positional argument: 'abs_tensor'
+======================================================================
+Some tests FAILED!
+======================================================================
 Traceback (most recent call last):
   File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s318/test_s318_correctness.py", line 65, in test_correctness
-    triton_result = s318_triton(*tr_args)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s318/attempt8.py", line 47, in s318_triton
-    s318_kernel[grid](
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.UnsupportedLanguageConstruct: at 15:12:
-    # Initialize max value and index
-    max_val = tl.abs(tl.load(a_ptr))
-    max_idx = 0
-
-    # Calculate how many elements we can access with stride
-    max_k = (n - 1) * inc
-
-    # Process elements with stride
-    k = inc
-    for i in range(1, n):
-        if k >= n:
-            break
-            ^
-unsupported AST node type: Break
+    triton_result = s318_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: s318_triton() missing 1 required positional argument: 'abs_tensor'
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s318/test_s318_correctness.py", line 65, in test_correctness
+    triton_result = s318_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: s318_triton() missing 1 required positional argument: 'abs_tensor'
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s318/test_s318_correctness.py", line 65, in test_correctness
+    triton_result = s318_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: s318_triton() missing 1 required positional argument: 'abs_tensor'
 
 ```
 
@@ -58,55 +41,54 @@ Please fix the error. Make sure to:
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s318_kernel(a_ptr, output_ptr, inc, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
+def s318_kernel(a_ptr, output_ptr, inc, n):
+    # This is a reduction that needs to be done sequentially
+    # due to the dependency on finding max and its index
     
-    # Initialize max value and index
-    max_val = tl.abs(tl.load(a_ptr))
-    max_idx = 0
+    pid = tl.program_id(0)
+    if pid != 0:
+        return
     
-    # Calculate how many elements we can access with stride
-    max_k = (n - 1) * inc
+    # Initialize
+    k = 0
+    index = 0
     
-    # Process elements with stride
-    k = inc
+    # Load first element
+    first_val = tl.load(a_ptr + 0)
+    max_val = tl.abs(first_val)
+    k += inc
+    
+    # Sequential loop to find max absolute value and index
     for i in range(1, n):
-        if k >= n:
-            break
+        if k < n:
+            current_val = tl.load(a_ptr + k)
+            abs_val = tl.abs(current_val)
             
-        abs_val = tl.abs(tl.load(a_ptr + k))
+            if abs_val > max_val:
+                index = i
+                max_val = abs_val
         
-        # Update max if current value is greater
-        if abs_val > max_val:
-            max_val = abs_val
-            max_idx = i
-            
         k += inc
-        
-        # Break if we would go out of bounds
-        if k >= n:
-            break
     
-    # Store result: max + index + 1
-    result = max_val + max_idx + 1
+    # Store result
+    result = max_val + index + 1
     tl.store(output_ptr, result)
 
-def s318_triton(a, abs, inc):
+def s318_triton(a, abs_tensor, inc):
     n = a.shape[0]
     
-    # Create output tensor
+    # Output tensor for result
     output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread
+    # Launch kernel with single thread since this is inherently sequential
     grid = (1,)
     s318_kernel[grid](
-        a, output, inc, n,
-        BLOCK_SIZE=1
+        a, output, inc, n
     )
     
     return output.item()
@@ -238,24 +220,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -304,49 +268,54 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s318_kernel(a_ptr, output_ptr, inc, n, BLOCK_SIZE: tl.constexpr):
-    # Initialize max value and index
-    max_val = tl.abs(tl.load(a_ptr))
-    max_idx = 0
+def s318_kernel(a_ptr, output_ptr, inc, n):
+    # This is a reduction that needs to be done sequentially
+    # due to the dependency on finding max and its index
     
-    # Process elements with stride
-    k = inc
+    pid = tl.program_id(0)
+    if pid != 0:
+        return
+    
+    # Initialize
+    k = 0
+    index = 0
+    
+    # Load first element
+    first_val = tl.load(a_ptr + 0)
+    max_val = tl.abs(first_val)
+    k += inc
+    
+    # Sequential loop to find max absolute value and index
     for i in range(1, n):
-        # Check bounds
-        valid = k < n
-        if not valid:
-            k += inc
-            continue
+        if k < n:
+            current_val = tl.load(a_ptr + k)
+            abs_val = tl.abs(current_val)
             
-        abs_val = tl.abs(tl.load(a_ptr + k))
+            if abs_val > max_val:
+                index = i
+                max_val = abs_val
         
-        # Update max if current value is greater
-        is_greater = abs_val > max_val
-        max_val = tl.where(is_greater, abs_val, max_val)
-        max_idx = tl.where(is_greater, i, max_idx)
-            
         k += inc
     
-    # Store result: max + index + 1
-    result = max_val + max_idx + 1
+    # Store result
+    result = max_val + index + 1
     tl.store(output_ptr, result)
 
 def s318_triton(a, abs, inc):
     n = a.shape[0]
     
-    # Create output tensor
+    # Output tensor for result
     output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread
+    # Launch kernel with single thread since this is inherently sequential
     grid = (1,)
     s318_kernel[grid](
-        a, output, inc, n,
-        BLOCK_SIZE=1
+        a, output, inc, n
     )
     
     return output.item()

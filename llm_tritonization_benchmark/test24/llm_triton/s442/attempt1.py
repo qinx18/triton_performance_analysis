@@ -5,51 +5,57 @@ import torch
 @triton.jit
 def s442_kernel(
     a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, indx_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
+    N,
+    BLOCK_SIZE: tl.constexpr
 ):
-    block_start = tl.program_id(0) * BLOCK_SIZE
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets
-    mask = idx < n_elements
+    mask = idx < N
     
-    # Load indices
-    indices = tl.load(indx_ptr + idx, mask=mask, other=0)
+    # Load arrays
+    a_vals = tl.load(a_ptr + idx, mask=mask)
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    c_vals = tl.load(c_ptr + idx, mask=mask)
+    d_vals = tl.load(d_ptr + idx, mask=mask)
+    e_vals = tl.load(e_ptr + idx, mask=mask)
+    indx_vals = tl.load(indx_ptr + idx, mask=mask)
     
-    # Load current values of a
-    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
+    # Compute squared values
+    b_sq = b_vals * b_vals
+    c_sq = c_vals * c_vals
+    d_sq = d_vals * d_vals
+    e_sq = e_vals * e_vals
     
-    # Load values from other arrays
-    b_vals = tl.load(b_ptr + idx, mask=mask, other=0.0)
-    c_vals = tl.load(c_ptr + idx, mask=mask, other=0.0)
-    d_vals = tl.load(d_ptr + idx, mask=mask, other=0.0)
-    e_vals = tl.load(e_ptr + idx, mask=mask, other=0.0)
+    # Create condition masks
+    is_case1 = indx_vals == 1
+    is_case2 = indx_vals == 2
+    is_case3 = indx_vals == 3
+    is_case4 = indx_vals == 4
     
-    # Compute updates based on switch/goto logic
-    case1_mask = indices == 1
-    case2_mask = indices == 2
-    case3_mask = indices == 3
-    case4_mask = indices == 4
+    # Compute updates based on conditions
+    update = tl.where(is_case1, b_sq,
+             tl.where(is_case2, c_sq,
+             tl.where(is_case3, d_sq,
+             tl.where(is_case4, e_sq, 0.0))))
     
-    # Apply updates conditionally
-    update = tl.where(case1_mask, b_vals * b_vals,
-             tl.where(case2_mask, c_vals * c_vals,
-             tl.where(case3_mask, d_vals * d_vals,
-             tl.where(case4_mask, e_vals * e_vals, 0.0))))
+    # Update a array
+    result = a_vals + update
     
-    # Update a values
-    new_a_vals = a_vals + update
-    
-    # Store results
-    tl.store(a_ptr + idx, new_a_vals, mask=mask)
+    # Store result
+    tl.store(a_ptr + idx, result, mask=mask)
 
 def s442_triton(a, b, c, d, e, indx):
-    n_elements = a.shape[0]
+    N = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
     s442_kernel[grid](
         a, b, c, d, e, indx,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
+        N,
+        BLOCK_SIZE=BLOCK_SIZE
     )
+    
+    return a

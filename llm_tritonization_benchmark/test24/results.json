@@ -3,12 +3,15 @@
     "c_ref_available": true,
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
+    "attempts": 2,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 5.85e+00"
+    },
     "benchmark": {
-      "c_ref_time_ms": 0.03992,
-      "triton_time_ms": 0.088659,
-      "speedup": 0.450268
+      "c_ref_time_ms": 0.042706,
+      "triton_time_ms": 0.068721,
+      "speedup": 0.621435
     }
   },
   "s111": {
@@ -1154,24 +1157,26 @@
   "s3111": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 3.58e+01"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.154647,
+      "triton_time_ms": 0.107532,
+      "speedup": 1.438151
+    }
   },
   "s31111": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "compilation",
-      "message": "File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s31111/test_s31111_correctness.py\", line 63, in test_correctness\n    triton_result = s31111_triton(*tr_args)\n                    ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s31111/attempt10.py\", line 53, in s31111_triton\n    s31111_kernel[grid](\n  File \"/home/qinxiao/anaconda3/lib/python3.12/site-pack"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.014778,
+      "triton_time_ms": 0.089814,
+      "speedup": 0.164537
+    }
   },
   "s3112": {
     "c_ref_available": true,
@@ -1191,24 +1196,29 @@
   "s3113": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 5.56e+00"
+      "type": "compilation",
+      "message": "ernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):\n    offsets = tl.arange(0, BLOCK_SIZE)\n\n    # Initialize max with absolute value of first element\n    if offsets[0] == 0:\n       ^\nValueError('unsupported tensor index: constexpr[0]')\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py\", line 63, in test_correctness\n    triton_result = s3113_triton(**tr_kw"
     },
-    "benchmark": null
+    "benchmark": {
+      "c_ref_time_ms": 0.143019,
+      "triton_time_ms": 0.112711,
+      "speedup": 1.268897
+    }
   },
   "s312": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 5.10e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.047792,
+      "triton_time_ms": 0.09421,
+      "speedup": 0.507289
+    }
   },
   "s313": {
     "c_ref_available": true,
@@ -1236,14 +1246,15 @@
   },
   "s315": {
     "c_ref_available": true,
-    "triton_generated": false,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "generation_error",
-      "message": "'NoneType' object is not subscriptable"
-    },
-    "benchmark": null
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.047151,
+      "triton_time_ms": 0.076435,
+      "speedup": 0.616884
+    }
   },
   "s316": {
     "c_ref_available": true,
@@ -1272,13 +1283,17 @@
   "s318": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
+    "test_passed": true,
     "attempts": 10,
     "final_error": {
       "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s318\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: 'int' object is not callable\nTesting N=  1000... ERROR: 'int' object is not callable\nTesting N= 10000... ERROR: 'int' object is not callable\n======================================================================\nSome tests FAILED!\n====================================="
+      "message": "======================================================================\nCorrectness Testing: s318\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: s318_triton() missing 1 required positional argument: 'abs'\nTesting N=  1000... ERROR: s318_triton() missing 1 required positional argument: 'abs'\nTesting N= 10000... ERROR: s318_triton() missing 1 required positional argument: 'abs'\n=================================="
     },
-    "benchmark": null
+    "benchmark": {
+      "c_ref_time_ms": 0.017766,
+      "triton_time_ms": 1.000125,
+      "speedup": 0.017764
+    }
   },
   "s319": {
     "c_ref_available": true,
@@ -1412,13 +1427,14 @@
   "s351": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "compilation",
-      "message": "erands of type pointer<fp32> and triton.language.float32')\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s351/test_s351_correctness.py\", line 69, in test_correctness\n    triton_result = s351_triton(*tr_args)\n                    ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s351/attempt10.py\", line 24, in s351_trit"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.039205,
+      "triton_time_ms": 0.068326,
+      "speedup": 0.57379
+    }
   },
   "s352": {
     "c_ref_available": true,
@@ -1435,13 +1451,14 @@
   "s353": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 8.57e-01"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.079328,
+      "triton_time_ms": 0.084137,
+      "speedup": 0.942844
+    }
   },
   "s4112": {
     "c_ref_available": true,
@@ -1482,13 +1499,14 @@
   "s4115": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.04e+01"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.088724,
+      "triton_time_ms": 0.094914,
+      "speedup": 0.934784
+    }
   },
   "s4116": {
     "c_ref_available": true,
@@ -1601,13 +1619,14 @@
   "s442": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.85e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.267139,
+      "triton_time_ms": 0.11711,
+      "speedup": 2.281092
+    }
   },
   "s443": {
     "c_ref_available": true,

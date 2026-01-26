@@ -826,14 +826,13 @@ def _setup_functions():
         ctypes.POINTER(ctypes.c_float),
         ctypes.c_int
     ]
-    _lib.s3111_kernel.restype = None
+    _lib.s3111_kernel.restype = ctypes.c_float
     # s31111
     _lib.s31111_kernel.argtypes = [
         ctypes.POINTER(ctypes.c_float),
-        ctypes.c_int,
         ctypes.c_int
     ]
-    _lib.s31111_kernel.restype = None
+    _lib.s31111_kernel.restype = ctypes.c_float
     # s3112
     _lib.s3112_kernel.argtypes = [
         ctypes.POINTER(ctypes.c_float),
@@ -847,13 +846,13 @@ def _setup_functions():
         ctypes.c_int,
         ctypes.c_int
     ]
-    _lib.s3113_kernel.restype = None
+    _lib.s3113_kernel.restype = ctypes.c_float
     # s312
     _lib.s312_kernel.argtypes = [
         ctypes.POINTER(ctypes.c_float),
         ctypes.c_int
     ]
-    _lib.s312_kernel.restype = None
+    _lib.s312_kernel.restype = ctypes.c_float
     # s313
     _lib.s313_kernel.argtypes = [
         ctypes.POINTER(ctypes.c_float),
@@ -872,7 +871,7 @@ def _setup_functions():
         ctypes.POINTER(ctypes.c_float),
         ctypes.c_int
     ]
-    _lib.s315_kernel.restype = None
+    _lib.s315_kernel.restype = ctypes.c_float
     # s316
     _lib.s316_kernel.argtypes = [
         ctypes.POINTER(ctypes.c_float),
@@ -1033,7 +1032,7 @@ def _setup_functions():
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_int
     ]
-    _lib.s4115_kernel.restype = None
+    _lib.s4115_kernel.restype = ctypes.c_float
     # s4116
     _lib.s4116_kernel.argtypes = [
         ctypes.POINTER(ctypes.c_float),
@@ -2163,13 +2162,13 @@ def s3111_c(a):
     """C reference for s3111"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     n = len(a)
-    _lib.s3111_kernel(_to_ptr(a), n)
+    return _lib.s3111_kernel(_to_ptr(a), n)
 
-def s31111_c(a, test=1):
+def s31111_c(a):
     """C reference for s31111"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     n = len(a)
-    _lib.s31111_kernel(_to_ptr(a), n, test)
+    return _lib.s31111_kernel(_to_ptr(a), n)
 
 def s3112_c(a, b):
     """C reference for s3112"""
@@ -2183,13 +2182,13 @@ def s3113_c(a, abs=1):
     """C reference for s3113"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     n = len(a)
-    _lib.s3113_kernel(_to_ptr(a), n, abs)
+    return _lib.s3113_kernel(_to_ptr(a), n, abs)
 
 def s312_c(a):
     """C reference for s312"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     n = len(a)
-    _lib.s312_kernel(_to_ptr(a), n)
+    return _lib.s312_kernel(_to_ptr(a), n)
 
 def s313_c(a, b):
     """C reference for s313"""
@@ -2208,7 +2207,7 @@ def s315_c(a):
     """C reference for s315"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     n = len(a)
-    _lib.s315_kernel(_to_ptr(a), n)
+    return _lib.s315_kernel(_to_ptr(a), n)
 
 def s316_c(a):
     """C reference for s316"""
@@ -2374,7 +2373,7 @@ def s4115_c(a, b, ip):
     b = np.ascontiguousarray(b, dtype=np.float32)
     ip = np.ascontiguousarray(ip, dtype=np.int32)
     n = len(a)
-    _lib.s4115_kernel(_to_ptr(a), _to_ptr(b), _to_ptr_int(ip), n)
+    return _lib.s4115_kernel(_to_ptr(a), _to_ptr(b), _to_ptr_int(ip), n)
 
 def s4116_c(a, aa, ip, len_2d=None, inc=1, j=1):
     """C reference for s4116"""

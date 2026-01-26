@@ -1,16 +1,51 @@
 
-## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
+Your last attempt failed with a compilation or runtime error:
 
-**Error type**: Numerical error (values don't match)
-**Max error observed**: 1.66e+00
+**Error type**: compilation
+**Error message**:
+```
+ernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
 
-Please fix the numerical computation. Common causes:
-- Incorrect loop bounds or indices
-- Wrong array access patterns
-- Missing or incorrect operations
-- Off-by-one errors in indexing
+    # Initialize max with absolute value of first element
+    if offsets[0] == 0:
+       ^
+ValueError('unsupported tensor index: constexpr[0]')
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3113/test_s3113_correctness.py", line 63, in test_correctness
+    triton_result = s3113_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s3113/attempt1.py", line 39, in s3113_triton
+    s3113_kernel[(1,)](
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
+    kernel = self.compile(
+             ^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
+    module = src.make_ir(options, codegen_fns, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 5:7:
+def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+
+    # Initialize max with absolute value of first element
+    if offsets[0] == 0:
+       ^
+ValueError('unsupported tensor index: constexpr[0]')
+
+```
+
+Please fix the error. Make sure to:
+- Follow all Triton compilation rules
+- Use correct Triton API functions
+- Avoid Python constructs not supported in Triton kernels
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -19,45 +54,44 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3113_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize running maximum
-    running_max = 0.0
+    # Initialize max with absolute value of first element
+    if offsets[0] == 0:
+        first_val = tl.load(a_ptr)
+        current_max = tl.abs(first_val)
+    else:
+        current_max = 0.0
     
-    # Process array in blocks
+    # Process array in blocks to find maximum absolute value
     for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
         mask = current_offsets < n_elements
         
-        # Load values
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        
-        # Compute absolute values and find block maximum
         abs_vals = tl.abs(vals)
-        block_max = tl.max(abs_vals)
+        block_max = tl.max(abs_vals, axis=0)
         
-        # Update running maximum
-        running_max = tl.maximum(running_max, block_max)
+        current_max = tl.maximum(current_max, block_max)
     
-    # Store result (only first thread writes)
-    if tl.program_id(0) == 0:
-        tl.store(output_ptr, running_max)
+    # Store result
+    tl.store(result_ptr, current_max)
 
 def s3113_triton(a):
     n_elements = a.shape[0]
     
-    # Output tensor for the maximum value
-    output = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create result tensor
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    BLOCK_SIZE = 256
-    grid = (1,)  # Single block to handle reduction
+    BLOCK_SIZE = 1024
     
-    s3113_kernel[grid](
-        a, output, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    # Launch kernel with single block to handle reduction
+    s3113_kernel[(1,)](
+        a, result, n_elements, BLOCK_SIZE
     )
     
-    return output.item()
+    return result.item()
 ```
 
 
@@ -181,24 +215,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -252,57 +268,37 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3113_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+def s3113_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
-    current_offsets = block_start + offsets
-    mask = current_offsets < n_elements
     
-    # Load values
-    vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+    # Initialize with negative infinity to find maximum
+    current_max = float('-inf')
     
-    # Compute absolute values and find block maximum
-    abs_vals = tl.abs(vals)
-    block_max = tl.max(abs_vals)
+    # Process array in blocks to find maximum absolute value
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        abs_vals = tl.abs(vals)
+        block_max = tl.max(abs_vals, axis=0)
+        
+        current_max = tl.maximum(current_max, block_max)
     
-    # Store block result
-    tl.store(output_ptr + pid, block_max)
-
-@triton.jit
-def s3113_reduction_kernel(partial_results_ptr, output_ptr, num_blocks, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
-    mask = offsets < num_blocks
-    
-    # Load partial results
-    vals = tl.load(partial_results_ptr + offsets, mask=mask, other=0.0)
-    
-    # Find global maximum
-    global_max = tl.max(vals)
-    
-    # Store final result (only first thread writes)
-    if tl.program_id(0) == 0:
-        tl.store(output_ptr, global_max)
+    # Store result
+    tl.store(result_ptr, current_max)
 
 def s3113_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
-    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # First pass: compute block maxima
-    partial_results = torch.zeros(num_blocks, dtype=a.dtype, device=a.device)
-    grid = (num_blocks,)
+    # Create result tensor
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    s3113_kernel[grid](
-        a, partial_results, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    BLOCK_SIZE = 1024
+    
+    # Launch kernel with single block to handle reduction
+    s3113_kernel[(1,)](
+        a, result, n_elements, BLOCK_SIZE
     )
     
-    # Second pass: reduce block maxima to final result
-    output = torch.zeros(1, dtype=a.dtype, device=a.device)
-    reduction_grid = (1,)
-    
-    s3113_reduction_kernel[reduction_grid](
-        partial_results, output, num_blocks, BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return output.item()
+    return result.item()

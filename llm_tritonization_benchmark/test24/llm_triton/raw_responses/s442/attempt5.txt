@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 1.23e+01
+**Max error observed**: 7.63e+00
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -14,65 +14,66 @@ Please fix the numerical computation. Common causes:
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s442_kernel(
     a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, indx_ptr,
-    n_elements,
+    N,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_start = tl.program_id(0) * BLOCK_SIZE
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    idx = block_start + offsets
-    mask = idx < n_elements
+    mask = (block_start + offsets) < N
     
     # Load indices
-    indices = tl.load(indx_ptr + idx, mask=mask, other=0)
+    indx_offsets = block_start + offsets
+    indices = tl.load(indx_ptr + indx_offsets, mask=mask, other=0)
     
     # Load current values of a
-    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
+    a_vals = tl.load(a_ptr + indx_offsets, mask=mask, other=0.0)
     
-    # Load values from other arrays
-    b_vals = tl.load(b_ptr + idx, mask=mask, other=0.0)
-    c_vals = tl.load(c_ptr + idx, mask=mask, other=0.0)
-    d_vals = tl.load(d_ptr + idx, mask=mask, other=0.0)
-    e_vals = tl.load(e_ptr + idx, mask=mask, other=0.0)
+    # Load arrays b, c, d, e
+    b_vals = tl.load(b_ptr + indx_offsets, mask=mask, other=0.0)
+    c_vals = tl.load(c_ptr + indx_offsets, mask=mask, other=0.0)
+    d_vals = tl.load(d_ptr + indx_offsets, mask=mask, other=0.0)
+    e_vals = tl.load(e_ptr + indx_offsets, mask=mask, other=0.0)
     
-    # Compute updates based on switch logic - only for indices 1,2,3,4
-    case1_mask = (indices == 1) & mask
-    case2_mask = (indices == 2) & mask
-    case3_mask = (indices == 3) & mask 
-    case4_mask = (indices == 4) & mask
+    # Compute squares
+    b_squared = b_vals * b_vals
+    c_squared = c_vals * c_vals
+    d_squared = d_vals * d_vals
+    e_squared = e_vals * e_vals
     
-    # Apply updates - note that case 4 doesn't have explicit goto like others
-    # but still updates a[i] before reaching L50
-    update1 = tl.where(case1_mask, b_vals * b_vals, 0.0)
-    update2 = tl.where(case2_mask, c_vals * c_vals, 0.0)
-    update3 = tl.where(case3_mask, d_vals * d_vals, 0.0)
-    update4 = tl.where(case4_mask, e_vals * e_vals, 0.0)
+    # Select which value to add based on index, but make sure all valid indices get an addition
+    valid_indices = (indices >= 1) & (indices <= 4)
+    add_val = tl.where(indices == 1, b_squared,
+              tl.where(indices == 2, c_squared,
+              tl.where(indices == 3, d_squared,
+              tl.where(indices == 4, e_squared, 0.0))))
     
-    # Sum all updates (only one will be non-zero per element)
-    total_update = update1 + update2 + update3 + update4
+    # Only add for valid indices, otherwise keep original value
+    final_result = tl.where(valid_indices, a_vals + add_val, a_vals)
     
-    # Update a values
-    new_a_vals = a_vals + total_update
-    
-    # Store results
-    tl.store(a_ptr + idx, new_a_vals, mask=mask)
+    # Store result
+    tl.store(a_ptr + indx_offsets, final_result, mask=mask)
 
 def s442_triton(a, b, c, d, e, indx):
-    n_elements = a.shape[0]
+    N = a.shape[0]
+    
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
     s442_kernel[grid](
         a, b, c, d, e, indx,
-        n_elements,
+        N,
         BLOCK_SIZE=BLOCK_SIZE,
     )
+    
+    return a
 ```
 
 
@@ -183,24 +184,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -249,55 +232,63 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s442_kernel(
     a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, indx_ptr,
-    n_elements,
+    N,
     BLOCK_SIZE: tl.constexpr,
 ):
-    block_start = tl.program_id(0) * BLOCK_SIZE
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    idx = block_start + offsets
-    mask = idx < n_elements
+    mask = (block_start + offsets) < N
     
     # Load indices
-    indices = tl.load(indx_ptr + idx, mask=mask, other=0)
+    indx_offsets = block_start + offsets
+    indices = tl.load(indx_ptr + indx_offsets, mask=mask, other=0)
     
     # Load current values of a
-    a_vals = tl.load(a_ptr + idx, mask=mask, other=0.0)
+    a_vals = tl.load(a_ptr + indx_offsets, mask=mask, other=0.0)
     
-    # Load values from other arrays
-    b_vals = tl.load(b_ptr + idx, mask=mask, other=0.0)
-    c_vals = tl.load(c_ptr + idx, mask=mask, other=0.0)
-    d_vals = tl.load(d_ptr + idx, mask=mask, other=0.0)
-    e_vals = tl.load(e_ptr + idx, mask=mask, other=0.0)
+    # Load arrays b, c, d, e
+    b_vals = tl.load(b_ptr + indx_offsets, mask=mask, other=0.0)
+    c_vals = tl.load(c_ptr + indx_offsets, mask=mask, other=0.0)
+    d_vals = tl.load(d_ptr + indx_offsets, mask=mask, other=0.0)
+    e_vals = tl.load(e_ptr + indx_offsets, mask=mask, other=0.0)
     
-    # Compute updates based on switch logic
-    case1_mask = (indices == 1) & mask
-    case2_mask = (indices == 2) & mask
-    case3_mask = (indices == 3) & mask 
-    case4_mask = (indices == 4) & mask
+    # Compute squares
+    b_squared = b_vals * b_vals
+    c_squared = c_vals * c_vals
+    d_squared = d_vals * d_vals
+    e_squared = e_vals * e_vals
     
-    # Apply conditional updates
-    new_a_vals = tl.where(case1_mask, a_vals + b_vals * b_vals, a_vals)
-    new_a_vals = tl.where(case2_mask, new_a_vals + c_vals * c_vals, new_a_vals)
-    new_a_vals = tl.where(case3_mask, new_a_vals + d_vals * d_vals, new_a_vals)
-    new_a_vals = tl.where(case4_mask, new_a_vals + e_vals * e_vals, new_a_vals)
+    # Select which value to add based on index
+    add_val = tl.where(indices == 1, b_squared,
+              tl.where(indices == 2, c_squared,
+              tl.where(indices == 3, d_squared,
+              tl.where(indices == 4, e_squared, 0.0))))
     
-    # Store results
-    tl.store(a_ptr + idx, new_a_vals, mask=mask)
+    # Add to a only when index is valid (1-4)
+    valid_mask = (indices >= 1) & (indices <= 4) & mask
+    final_result = tl.where(valid_mask, a_vals + add_val, a_vals)
+    
+    # Store result
+    tl.store(a_ptr + indx_offsets, final_result, mask=mask)
 
 def s442_triton(a, b, c, d, e, indx):
-    n_elements = a.shape[0]
+    N = a.shape[0]
+    
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
     s442_kernel[grid](
         a, b, c, d, e, indx,
-        n_elements,
+        N,
         BLOCK_SIZE=BLOCK_SIZE,
     )
+    
+    return a

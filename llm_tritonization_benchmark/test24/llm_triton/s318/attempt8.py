@@ -1,52 +1,51 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s318_kernel(a_ptr, output_ptr, inc, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
+def s318_kernel(a_ptr, output_ptr, inc, n):
+    # This is a reduction that needs to be done sequentially
+    # due to the dependency on finding max and its index
     
-    # Initialize max value and index
-    max_val = tl.abs(tl.load(a_ptr))
-    max_idx = 0
+    pid = tl.program_id(0)
+    if pid != 0:
+        return
     
-    # Calculate how many elements we can access with stride
-    max_k = (n - 1) * inc
+    # Initialize
+    k = 0
+    index = 0
     
-    # Process elements with stride
-    k = inc
+    # Load first element
+    first_val = tl.load(a_ptr + 0)
+    max_val = tl.abs(first_val)
+    k += inc
+    
+    # Sequential loop to find max absolute value and index
     for i in range(1, n):
-        if k >= n:
-            break
+        if k < n:
+            current_val = tl.load(a_ptr + k)
+            abs_val = tl.abs(current_val)
             
-        abs_val = tl.abs(tl.load(a_ptr + k))
+            if abs_val > max_val:
+                index = i
+                max_val = abs_val
         
-        # Update max if current value is greater
-        if abs_val > max_val:
-            max_val = abs_val
-            max_idx = i
-            
         k += inc
-        
-        # Break if we would go out of bounds
-        if k >= n:
-            break
     
-    # Store result: max + index + 1
-    result = max_val + max_idx + 1
+    # Store result
+    result = max_val + index + 1
     tl.store(output_ptr, result)
 
-def s318_triton(a, abs, inc):
+def s318_triton(a, abs_tensor, inc):
     n = a.shape[0]
     
-    # Create output tensor
+    # Output tensor for result
     output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single thread
+    # Launch kernel with single thread since this is inherently sequential
     grid = (1,)
     s318_kernel[grid](
-        a, output, inc, n,
-        BLOCK_SIZE=1
+        a, output, inc, n
     )
     
     return output.item()

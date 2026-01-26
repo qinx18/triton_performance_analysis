@@ -1,62 +1,108 @@
 
-## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
+Your last attempt failed with a compilation or runtime error:
 
-**Error type**: Numerical error (values don't match)
-**Max error observed**: 4.52e+00
+**Error type**: compilation
+**Error message**:
+```
+ was the direct cause of the following exception:
 
-Please fix the numerical computation. Common causes:
-- Incorrect loop bounds or indices
-- Wrong array access patterns
-- Missing or incorrect operations
-- Off-by-one errors in indexing
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s31111/test_s31111_correctness.py", line 63, in test_correctness
+    triton_result = s31111_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s31111/attempt1.py", line 49, in s31111_triton
+    s31111_kernel[grid](
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
+    kernel = self.compile(
+             ^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
+    module = src.make_ir(options, codegen_fns, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 25:22:
+
+    # Process 8 groups of 4 elements each (indices 0, 4, 8, 12, 16, 20, 24, 28)
+    for group in range(8):
+        start_idx = group * 4
+        group_sum = 0.0
+
+        # Sum 4 elements starting from start_idx
+        for i in range(4):
+            idx = start_idx + i
+            if idx < N:
+                mask = offsets == 0  # Only first thread loads
+                val = tl.load(a_ptr + idx, mask=mask, other=0.0)
+                      ^
+
+```
+
+Please fix the error. Make sure to:
+- Follow all Triton compilation rules
+- Use correct Triton API functions
+- Avoid Python constructs not supported in Triton kernels
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s31111_kernel(a_ptr, sum_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Each program handles one iteration independently
+def s31111_kernel(a_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
+    # Get program ID
     pid = tl.program_id(0)
     
-    # Initialize sum for this program
+    # Since we only have one block processing the entire computation
+    if pid != 0:
+        return
+    
+    # Define offsets once
+    offsets = tl.arange(0, BLOCK_SIZE)
+    
+    # Initialize sum
     sum_val = 0.0
     
-    # Process 8 groups of 4 elements each (starting at indices 0, 4, 8, 12, 16, 20, 24, 28)
-    for group_idx in range(8):
-        start_idx = group_idx * 4
+    # Process 8 groups of 4 elements each (indices 0, 4, 8, 12, 16, 20, 24, 28)
+    for group in range(8):
+        start_idx = group * 4
+        group_sum = 0.0
         
-        # Load 4 consecutive elements starting at start_idx
-        offsets = start_idx + tl.arange(0, 4)
-        mask = offsets < N
-        vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+        # Sum 4 elements starting from start_idx
+        for i in range(4):
+            idx = start_idx + i
+            if idx < N:
+                mask = offsets == 0  # Only first thread loads
+                val = tl.load(a_ptr + idx, mask=mask, other=0.0)
+                group_sum += val
         
-        # Sum the 4 elements (equivalent to test() function)
-        group_sum = tl.sum(vals)
         sum_val += group_sum
     
-    # Store the result
-    tl.store(sum_ptr + pid, sum_val)
+    # Store result (only first thread)
+    mask = offsets == 0
+    tl.store(result_ptr, sum_val, mask=mask)
 
 def s31111_triton(a):
     N = a.shape[0]
     
-    # Create output tensor for the sum
-    sum_result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create output tensor
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single program
-    BLOCK_SIZE = 32
+    # Launch kernel with single block
+    BLOCK_SIZE = 128
     grid = (1,)
     
     s31111_kernel[grid](
-        a, sum_result, N, BLOCK_SIZE
+        a, result, N, BLOCK_SIZE
     )
     
-    return sum_result[0].item()
+    return result.item()
 ```
 
 
@@ -160,24 +206,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -226,48 +254,51 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s31111_kernel(a_ptr, sum_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Single program computes the entire sum
+def s31111_kernel(a_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
+    # Get program ID
     pid = tl.program_id(0)
     
+    # Since we only have one block processing the entire computation
     if pid != 0:
         return
     
+    # Initialize sum
     sum_val = 0.0
     
-    # Process each group of 4 elements: indices 0-3, 4-7, 8-11, 12-15, 16-19, 20-23, 24-27, 28-31
-    for start_idx in range(8):
-        base_idx = start_idx * 4
+    # Process 8 groups of 4 elements each (indices 0, 4, 8, 12, 16, 20, 24, 28)
+    for group in range(8):
+        start_idx = group * 4
+        group_sum = 0.0
         
-        # Load 4 elements starting at base_idx
-        offsets = tl.arange(0, 4) + base_idx
-        mask = offsets < N
-        vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+        # Sum 4 elements starting from start_idx
+        for i in range(4):
+            idx = start_idx + i
+            if idx < N:
+                val = tl.load(a_ptr + idx)
+                group_sum += val
         
-        # Sum the 4 elements (test function equivalent)
-        group_sum = tl.sum(vals)
         sum_val += group_sum
     
-    # Store the final sum
-    tl.store(sum_ptr, sum_val)
+    # Store result
+    tl.store(result_ptr, sum_val)
 
 def s31111_triton(a):
     N = a.shape[0]
     
-    # Create output tensor for the sum
-    sum_result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create output tensor
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel with single program
-    BLOCK_SIZE = 32
+    # Launch kernel with single block
+    BLOCK_SIZE = 128
     grid = (1,)
     
     s31111_kernel[grid](
-        a, sum_result, N, BLOCK_SIZE
+        a, result, N, BLOCK_SIZE
     )
     
-    return sum_result[0].item()
+    return result.item()

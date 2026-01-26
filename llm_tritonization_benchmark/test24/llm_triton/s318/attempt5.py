@@ -3,48 +3,49 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s318_kernel(a_ptr, result_ptr, inc, n, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    if pid > 0:
-        return
+def s318_kernel(a_ptr, result_ptr, inc, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Find max absolute value and its index with stride
+    max_val = 0.0
+    max_idx = 0
     
-    # Initialize with first element
+    # Start from index 0
     k = 0
-    index = 0
     first_val = tl.load(a_ptr + k)
-    max_val = tl.where(first_val < 0, -first_val, first_val)
+    max_val = tl.abs(first_val)
     k += inc
     
-    # Sequential search through strided array
-    for i in range(1, n):
-        if k >= 0:
-            current_val = tl.load(a_ptr + k)
-            current_abs = tl.where(current_val < 0, -current_val, current_val)
+    # Loop through remaining elements
+    for i in range(1, n_elements):
+        if k < n_elements:
+            val = tl.load(a_ptr + k)
+            abs_val = tl.abs(val)
             
-            # Update only if current is strictly greater than max
-            if current_abs > max_val:
-                index = i
-                max_val = current_abs
+            # Update max and index if current value is greater
+            if abs_val > max_val:
+                max_val = abs_val
+                max_idx = i
         
         k += inc
     
-    # Store result (max + index + 1 as per C return)
-    result = max_val + index + 1
-    tl.store(result_ptr, result)
+    # Store results
+    tl.store(result_ptr, max_val)
+    tl.store(result_ptr + 1, max_idx)
 
 def s318_triton(a, abs, inc):
-    n = a.shape[0]
+    n_elements = a.shape[0]
     
-    # Result tensor
-    result = torch.zeros(1, dtype=a.dtype, device=a.device)
+    # Create result tensor to store max value and index
+    result = torch.zeros(2, dtype=torch.float32, device=a.device)
     
-    # Launch kernel with single thread since this is a sequential reduction
-    BLOCK_SIZE = 256
-    grid = (1,)
+    # Launch kernel with single thread block
+    BLOCK_SIZE = 128
     
-    s318_kernel[grid](
-        a, result, inc, n,
-        BLOCK_SIZE=BLOCK_SIZE
+    s318_kernel[(1,)](
+        a, result, inc, n_elements, BLOCK_SIZE
     )
     
-    return result.item()
+    max_val = result[0].item()
+    max_idx = int(result[1].item())
+    
+    # Return max + index + 1 as specified in C code
+    return max_val + max_idx + 1

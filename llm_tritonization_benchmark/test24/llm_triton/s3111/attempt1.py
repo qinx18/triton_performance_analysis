@@ -3,38 +3,41 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s3111_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+def s3111_kernel(a_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
+    # Get block offsets
     offsets = tl.arange(0, BLOCK_SIZE)
-    mask = (block_start + offsets) < n_elements
     
-    a_vals = tl.load(a_ptr + block_start + offsets, mask=mask, other=0.0)
+    # Initialize block sum
+    block_sum = 0.0
     
-    # Apply condition: if a[i] > 0
-    condition_mask = a_vals > 0.0
+    # Process all blocks
+    for block_start in range(0, N, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < N
+        
+        # Load values
+        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        
+        # Apply condition: if a[i] > 0.0
+        condition = vals > 0.0
+        conditional_vals = tl.where(condition, vals, 0.0)
+        
+        # Add to block sum
+        block_sum += tl.sum(conditional_vals, axis=0)
     
-    # Set values to 0 where condition is false
-    filtered_vals = tl.where(condition_mask, a_vals, 0.0)
-    
-    # Sum the filtered values in this block
-    block_sum = tl.sum(filtered_vals)
-    
-    # Store the block sum
-    tl.store(result_ptr + pid, block_sum)
+    # Store result (only first thread writes)
+    if tl.program_id(0) == 0:
+        tl.store(result_ptr, block_sum)
 
 def s3111_triton(a):
-    n_elements = a.shape[0]
-    BLOCK_SIZE = 256
-    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
+    N = a.shape[0]
+    BLOCK_SIZE = 1024
     
-    # Create output tensor for block sums
-    block_sums = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
+    # Result tensor
+    result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    grid = (n_blocks,)
-    s3111_kernel[grid](a, block_sums, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    # Launch kernel with single block
+    grid = (1,)
+    s3111_kernel[grid](a, result, N, BLOCK_SIZE)
     
-    # Sum all block results to get final sum
-    total_sum = torch.sum(block_sums)
-    
-    return total_sum.item()
+    return result.item()

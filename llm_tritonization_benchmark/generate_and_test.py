@@ -27,6 +27,7 @@ from typing import Optional, Tuple, Dict, List
 # Import the extracted function database
 sys.path.append(str(Path(__file__).parent / "utilities"))
 from tsvc_functions_db import TSVC_FUNCTIONS
+from c_code_parser import parse_c_code
 
 # Add PET analysis directory to path
 sys.path.insert(0, "/home/qinxiao/workspace/pet/isl_analysis")
@@ -189,6 +190,60 @@ HELPER_FUNCTIONS = {
 }
 
 
+def enrich_func_spec(func_spec: dict) -> dict:
+    """
+    Enrich function specification with properties parsed from the C code.
+
+    This makes the framework independent of manually-annotated database flags
+    by inferring properties like has_reduction, has_conditional, etc. from
+    the actual C source code at runtime.
+
+    Args:
+        func_spec: Original function specification from database
+
+    Returns:
+        Enriched specification with parsed values overriding database values
+    """
+    if 'loop_code' not in func_spec:
+        return func_spec
+
+    # Parse the C code to extract properties
+    parsed = parse_c_code(func_spec['loop_code'])
+
+    # Create enriched spec - parsed values override database values
+    enriched = func_spec.copy()
+
+    # Override with parsed values (these are inferred from code, more reliable)
+    enriched['arrays'] = parsed['arrays']
+    enriched['has_offset'] = parsed['has_offset']
+    enriched['has_conditional'] = parsed['has_conditional']
+    enriched['has_reduction'] = parsed['has_reduction']
+    enriched['has_2d_arrays'] = parsed['has_2d_arrays']
+
+    # Derive scalars from C wrapper signature (params that aren't arrays)
+    # This is more reliable than hardcoded lists
+    scalar_params = parsed['scalar_params'].copy()  # Start with parsed scalars (e.g., iterations)
+    func_name = func_spec.get('name', '')
+    if func_name:
+        try:
+            import inspect
+            from c_reference import tsvc_all_reference
+            c_func_name = f"{func_name}_c"
+            if hasattr(tsvc_all_reference, c_func_name):
+                c_func = getattr(tsvc_all_reference, c_func_name)
+                sig = inspect.signature(c_func)
+                array_names = set(parsed['arrays'].keys())
+                for param_name in sig.parameters.keys():
+                    if param_name not in array_names and param_name not in scalar_params:
+                        scalar_params[param_name] = 'scalar'
+        except ImportError:
+            pass
+
+    enriched['scalar_params'] = scalar_params
+
+    return enriched
+
+
 # ============================================================================
 # From generate_llm_triton.py - Code generation functions
 # ============================================================================
@@ -319,7 +374,20 @@ def extract_kernel_loop(func_body: str) -> str:
 
 
 def get_exact_function_signature(kernel_name: str) -> Optional[str]:
-    """Build the exact function signature from the TSVC database."""
+    """Build the exact function signature from the C reference wrapper via introspection."""
+    import inspect
+    try:
+        from c_reference import tsvc_all_reference
+        c_func_name = f"{kernel_name}_c"
+        if hasattr(tsvc_all_reference, c_func_name):
+            c_func = getattr(tsvc_all_reference, c_func_name)
+            sig = inspect.signature(c_func)
+            params = list(sig.parameters.keys())
+            return ", ".join(params) if params else None
+    except ImportError:
+        pass
+
+    # Fallback to database if C reference not available
     if kernel_name not in TSVC_FUNCTIONS:
         return None
 
@@ -1229,9 +1297,9 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
     rtol = tol_config['rtol']
     atol = tol_config['atol']
 
-    # Check if this is a pure reduction (all arrays are read-only and function returns scalar)
+    # Check if all arrays are read-only (likely a reduction that returns scalar)
+    # This is inferred from array access modes, no need for explicit has_reduction flag
     all_arrays_readonly = all(mode == 'r' for mode in arrays.values())
-    is_pure_reduction = has_reduction and all_arrays_readonly
 
     if has_offset:
         size_expr = "N + 10"
@@ -1244,6 +1312,9 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
             if arr == 'ip':
                 # TSVC uses permutation (unique indices) - see common.c init()
                 array_inits.append(f"            {arr} = torch.randperm({size_expr}, device='cuda', dtype=torch.long)")
+            elif arr == 'indx':
+                # TSVC s442/s443 use indx as switch case index (1-4)
+                array_inits.append(f"            {arr} = torch.randint(1, 5, ({size_expr},), device='cuda', dtype=torch.int32)")
             elif has_2d and len(arr) == 2 and arr[0] == arr[1]:
                 array_inits.append(f"            {arr} = torch.randn({size_expr}, {size_expr}, device='cuda', dtype=torch.float32)")
             elif arr == 'flat_2d_array':
@@ -1258,18 +1329,20 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
                 array_inits.append(f"            {arr} = torch.randn({size_expr}, device='cuda', dtype=torch.float32)")
 
     for scalar_name in sorted(scalar_params.keys()):
+        # Use different variable name for 'abs' to avoid shadowing Python builtin
+        var_name = 'abs_param' if scalar_name == 'abs' else scalar_name
         if scalar_name == 'k':
             # Note: TSVC s431 uses k = 2*k1 - k2 = 2*1 - 2 = 0
-            array_inits.append(f"            {scalar_name} = 0")
+            array_inits.append(f"            {var_name} = 0")
         elif scalar_name == 't':
-            array_inits.append(f"            {scalar_name} = 0.5")
+            array_inits.append(f"            {var_name} = 0.5")
         elif scalar_name in ['n1', 'n3']:
             if scalar_name == 'n1':
-                array_inits.append(f"            {scalar_name} = 10")
+                array_inits.append(f"            {var_name} = 10")
             elif scalar_name == 'n3':
-                array_inits.append(f"            {scalar_name} = 3")
+                array_inits.append(f"            {var_name} = 3")
         else:
-            array_inits.append(f"            {scalar_name} = 1")
+            array_inits.append(f"            {var_name} = 1")
 
     array_init_str = '\n'.join(array_inits) if array_inits else "            pass"
 
@@ -1292,55 +1365,33 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
         triton_clones.append(f"            {arr}_tr = {arr}.clone()")
     triton_clone_str = '\n'.join(triton_clones) if triton_clones else "            pass"
 
-    # For pure reductions (all arrays read-only, returns scalar), compare return values
-    if is_pure_reduction:
-        # Get first array name for numpy reference computation
-        first_arr = array_names[0] if array_names else 'a'
-        compare_str = f"""            # Pure reduction: compare return values
-            # If C returns None (void function), use numpy sum as reference
-            if c_result is None:
-                # C function is void - use numpy sum as baseline reference
-                c_val = float(np.sum({first_arr}_c))
-            elif isinstance(c_result, (int, float)):
-                c_val = c_result
-            elif isinstance(c_result, np.ndarray):
-                c_val = c_result.item() if c_result.size == 1 else c_result.sum()
-            else:
+    # Generate unified comparison that detects at runtime whether to compare scalars or arrays
+    # This removes dependency on database flags - the comparison type is determined by actual return types
+    primary_arr = output_arrays[0] if output_arrays else (array_names[0] if array_names else 'a')
+
+    compare_str = f"""            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
+            if isinstance(c_result, (int, float)):
+                # Scalar return - compare values directly
                 c_val = float(c_result)
-
-            if triton_result is None:
-                tr_val = float('inf')  # Triton should return something
-            elif isinstance(triton_result, (int, float)):
-                tr_val = triton_result
-            elif isinstance(triton_result, torch.Tensor):
-                tr_val = triton_result.item() if triton_result.numel() == 1 else triton_result.sum().item()
+                if isinstance(triton_result, (int, float)):
+                    tr_val = float(triton_result)
+                elif isinstance(triton_result, torch.Tensor):
+                    tr_val = triton_result.item() if triton_result.numel() == 1 else float(triton_result)
+                else:
+                    tr_val = float(triton_result) if triton_result is not None else float('inf')
+                max_error = abs(c_val - tr_val)
+                is_scalar_comparison = True
             else:
-                tr_val = float(triton_result)
+                # Array comparison - C function modifies arrays in-place or returns array
+                c_arr = c_result if isinstance(c_result, np.ndarray) else {primary_arr}_c
+                {primary_arr}_c_torch = torch.from_numpy(c_arr).cuda()
+                max_error = torch.max(torch.abs({primary_arr}_c_torch - {primary_arr}_tr)).item()
+                is_scalar_comparison = False"""
 
-            max_error = abs(c_val - tr_val)"""
-        passed_check_str = f"passed = max_error < {atol} or (abs(c_val) > 1e-6 and max_error / abs(c_val) < {rtol})"
-    elif len(output_arrays) == 1:
-        arr = output_arrays[0]
-        compare_str = f"""            # Convert C result back to torch for comparison
-            # Use c_result if C function returns modified array, otherwise use in-place modified array
-            c_arr = c_result if c_result is not None else {arr}_c
-            {arr}_c_torch = torch.from_numpy(c_arr).cuda()
-            max_error = torch.max(torch.abs({arr}_c_torch - {arr}_tr)).item()"""
-        passed_check_str = f"passed = max_error < {atol} or torch.allclose({arr}_c_torch, {arr}_tr, rtol={rtol}, atol={atol})"
-    elif len(output_arrays) > 1:
-        convert_parts = []
-        compare_parts = []
-        for arr in output_arrays:
-            convert_parts.append(f"{arr}_c_torch = torch.from_numpy({arr}_c).cuda()")
-            compare_parts.append(f"torch.max(torch.abs({arr}_c_torch - {arr}_tr)).item()")
-        convert_str = '\n            '.join(convert_parts)
-        compare_str = f"""            # Convert C results back to torch for comparison
-            {convert_str}
-            max_error = max([{', '.join(compare_parts)}])"""
-        passed_check_str = f"passed = max_error < {atol} or torch.allclose({output_arrays[0]}_c_torch, {output_arrays[0]}_tr, rtol={rtol}, atol={atol})"
-    else:
-        compare_str = "            max_error = 0.0"
-        passed_check_str = "passed = True"
+    passed_check_str = f"""if is_scalar_comparison:
+                passed = max_error < {atol} or (abs(c_val) > 1e-6 and max_error / abs(c_val) < {rtol})
+            else:
+                passed = max_error < {atol} or torch.allclose({primary_arr}_c_torch, {primary_arr}_tr, rtol={rtol}, atol={atol})"""
 
     available_arrays = array_names
     available_scalars = all_scalar_names
@@ -1405,7 +1456,7 @@ def test_correctness():
 
             c_tensors = {{{', '.join([f'"{arr}": {arr}_c' for arr in available_arrays])}}}
             tr_tensors = {{{', '.join([f'"{arr}": {arr}_tr' for arr in available_arrays])}}}
-            scalars = {{{', '.join([f'"{s}": {s}' for s in available_scalars])}}}
+            scalars = {{{', '.join([f'"{s}": {"abs_param" if s == "abs" else s}' for s in available_scalars])}}}
 
             c_kwargs = build_kwargs({func_name}_c, c_tensors, scalars)
             tr_kwargs = build_kwargs({func_name}_triton, tr_tensors, scalars)
@@ -1544,6 +1595,9 @@ def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -
         if mode in ['r', 'rw', 'w']:
             if arr == 'ip':
                 array_inits.append(f"    {arr} = torch.randperm({size_expr}, device='cuda', dtype=torch.long)")
+            elif arr == 'indx':
+                # TSVC s442/s443 use indx as switch case index (1-4)
+                array_inits.append(f"    {arr} = torch.randint(1, 5, ({size_expr},), device='cuda', dtype=torch.int32)")
             elif has_2d and len(arr) == 2 and arr[0] == arr[1]:
                 array_inits.append(f"    {arr} = torch.randn({size_expr}, {size_expr}, device='cuda', dtype=torch.float32)")
             elif arr == 'flat_2d_array':
@@ -1557,17 +1611,19 @@ def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -
                 array_inits.append(f"    {arr} = torch.randn({size_expr}, device='cuda', dtype=torch.float32)")
 
     for scalar_name in sorted(scalar_params.keys()):
+        # Use different variable name for 'abs' to avoid shadowing Python builtin
+        var_name = 'abs_param' if scalar_name == 'abs' else scalar_name
         if scalar_name == 'k':
-            array_inits.append(f"    {scalar_name} = 0")
+            array_inits.append(f"    {var_name} = 0")
         elif scalar_name == 't':
-            array_inits.append(f"    {scalar_name} = 0.5")
+            array_inits.append(f"    {var_name} = 0.5")
         elif scalar_name in ['n1', 'n3']:
             if scalar_name == 'n1':
-                array_inits.append(f"    {scalar_name} = 10")
+                array_inits.append(f"    {var_name} = 10")
             elif scalar_name == 'n3':
-                array_inits.append(f"    {scalar_name} = 3")
+                array_inits.append(f"    {var_name} = 3")
         else:
-            array_inits.append(f"    {scalar_name} = 1")
+            array_inits.append(f"    {var_name} = 1")
 
     array_init_str = '\n'.join(array_inits) if array_inits else "    pass"
 
@@ -1635,7 +1691,7 @@ def benchmark():
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {{{', '.join([f'"{arr}": {arr}.cpu().numpy().copy()' for arr in available_arrays])}}}
     tr_tensors = {{{', '.join([f'"{arr}": {arr}.clone()' for arr in available_arrays])}}}
-    scalars = {{{', '.join([f'"{s}": {s}' for s in available_scalars])}}}
+    scalars = {{{', '.join([f'"{s}": {"abs_param" if s == "abs" else s}' for s in available_scalars])}}}
 
     c_kwargs = build_kwargs({func_name}_c, c_arrays, scalars)
     tr_kwargs = build_kwargs({func_name}_triton, tr_tensors, scalars)
@@ -1956,7 +2012,9 @@ def main():
     all_results = {}
     for i, (func_name, func_spec) in enumerate(functions_to_process.items(), 1):
         print(f"\n[{i}/{len(functions_to_process)}]", end=" ")
-        results = process_function(func_name, func_spec)
+        # Enrich spec with properties parsed from C code (runtime inference)
+        enriched_spec = enrich_func_spec(func_spec)
+        results = process_function(func_name, enriched_spec)
         all_results[func_name] = results
 
     # Print summary

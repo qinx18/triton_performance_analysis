@@ -962,7 +962,7 @@ void s3110_kernel(real_t* aa, int n, int len_2d) {
 }
 
 /* s3111 */
-void s3111_kernel(real_t* a, int n) {
+real_t s3111_kernel(real_t* a, int n) {
     real_t sum;
         sum = 0.;
         for (int i = 0; i < n; i++) {
@@ -970,10 +970,11 @@ void s3111_kernel(real_t* a, int n) {
                 sum += a[i];
             }
         }
+    return sum;
 }
 
 /* s31111 */
-void s31111_kernel(real_t* a, int n, int test) {
+real_t s31111_kernel(real_t* a, int n) {
     real_t sum;
         sum = (real_t)0.;
         sum += test_helper(a);
@@ -984,6 +985,7 @@ void s31111_kernel(real_t* a, int n, int test) {
         sum += test_helper(&a[20]);
         sum += test_helper(&a[24]);
         sum += test_helper(&a[28]);
+    return sum;
 }
 
 /* s3112 */
@@ -997,7 +999,7 @@ void s3112_kernel(real_t* a, real_t* b, int n) {
 }
 
 /* s3113 */
-void s3113_kernel(real_t* a, int n, int abs) {
+real_t s3113_kernel(real_t* a, int n, int abs) {
     real_t max;
         max = ABS(a[0]);
         for (int i = 0; i < n; i++) {
@@ -1005,15 +1007,17 @@ void s3113_kernel(real_t* a, int n, int abs) {
                 max = ABS(a[i]);
             }
         }
+    return max;
 }
 
 /* s312 */
-void s312_kernel(real_t* a, int n) {
+real_t s312_kernel(real_t* a, int n) {
     real_t prod;
         prod = (real_t)1.;
         for (int i = 0; i < n; i++) {
             prod *= a[i];
         }
+    return prod;
 }
 
 /* s313 */
@@ -1037,9 +1041,9 @@ void s314_kernel(real_t* a, int n) {
 }
 
 /* s315 */
-void s315_kernel(real_t* a, int n) {
+real_t s315_kernel(real_t* a, int n) {
     int index;
-    real_t chksum, x;
+    real_t x;
         x = a[0];
         index = 0;
         for (int i = 0; i < n; ++i) {
@@ -1048,7 +1052,7 @@ void s315_kernel(real_t* a, int n) {
                 index = i;
             }
         }
-        chksum = x + (real_t) index;
+    return x + (real_t) index + 1;
 }
 
 /* s316 */
@@ -1259,12 +1263,13 @@ void s4114_kernel(real_t* a, real_t* b, real_t* c, real_t* d, int* ip, int n, in
 }
 
 /* s4115 */
-void s4115_kernel(real_t* a, real_t* b, int* ip, int n) {
+real_t s4115_kernel(real_t* a, real_t* b, int* ip, int n) {
     real_t sum;
         sum = 0.;
         for (int i = 0; i < n; i++) {
             sum += a[i] * b[ip[i]];
         }
+    return sum;
 }
 
 /* s4116 */

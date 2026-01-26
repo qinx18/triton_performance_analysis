@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s000
-# Generated: 2026-01-22 14:29:05
+# Generated: 2026-01-25 15:34:25
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -74,24 +74,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -144,18 +126,21 @@ import torch
 
 @triton.jit
 def s000_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
     
+    mask = offsets < n_elements
     b_vals = tl.load(b_ptr + offsets, mask=mask)
     result = b_vals + 1.0
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s000_triton(a, b):
-    N = a.shape[0]
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
-    s000_kernel[grid](a, b, N, BLOCK_SIZE=BLOCK_SIZE)
+    
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    s000_kernel[grid](
+        a, b, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```

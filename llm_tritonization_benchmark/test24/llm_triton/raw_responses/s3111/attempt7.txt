@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 4.29e+01
+**Max error observed**: 3.14e+01
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -19,33 +19,32 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3111_kernel(a_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
+def s3111_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
+    block_sum = 0.0
     
-    total_sum = 0.0
-    
-    for block_start in range(0, N, BLOCK_SIZE):
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < N
+        mask = current_offsets < n_elements
         
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        positive_mask = vals > 0.0
+        condition_mask = vals > 0.0
         
-        filtered_vals = tl.where(positive_mask, vals, 0.0)
-        block_sum = tl.sum(filtered_vals)
-        
-        total_sum += block_sum
+        masked_vals = tl.where(condition_mask, vals, 0.0)
+        block_sum += tl.sum(masked_vals, axis=0)
     
-    tl.store(result_ptr, total_sum)
+    tl.store(result_ptr, block_sum)
 
 def s3111_triton(a):
-    N = a.shape[0]
-    BLOCK_SIZE = 1024
+    n_elements = a.shape[0]
     
     result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    grid = (1,)
-    s3111_kernel[grid](a, result, N, BLOCK_SIZE)
+    BLOCK_SIZE = 1024
+    
+    s3111_kernel[(1,)](
+        a, result, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
     
     return result.item()
 ```
@@ -150,24 +149,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -221,32 +202,32 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s3111_kernel(a_ptr, result_ptr, N, BLOCK_SIZE: tl.constexpr):
+def s3111_kernel(a_ptr, result_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
-    
     total_sum = 0.0
     
-    for block_start in range(0, N, BLOCK_SIZE):
+    for block_start in range(0, n_elements, BLOCK_SIZE):
         current_offsets = block_start + offsets
-        mask = current_offsets < N
+        mask = current_offsets < n_elements
         
         vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        positive_mask = mask & (vals > 0.0)
+        condition_mask = vals > 0.0
+        condition_mask = condition_mask & mask
         
-        filtered_vals = tl.where(positive_mask, vals, 0.0)
-        block_sum = tl.sum(filtered_vals)
-        
-        total_sum += block_sum
+        masked_vals = tl.where(condition_mask, vals, 0.0)
+        total_sum += tl.sum(masked_vals)
     
     tl.store(result_ptr, total_sum)
 
 def s3111_triton(a):
-    N = a.shape[0]
-    BLOCK_SIZE = 1024
+    n_elements = a.shape[0]
     
     result = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    grid = (1,)
-    s3111_kernel[grid](a, result, N, BLOCK_SIZE)
+    BLOCK_SIZE = 1024
+    
+    s3111_kernel[(1,)](
+        a, result, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
     
     return result.item()

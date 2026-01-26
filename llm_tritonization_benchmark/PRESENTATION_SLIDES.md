@@ -105,18 +105,23 @@
   - Test harness auto-generation
   - Benchmark infrastructure
 
-### 2. **TSVC Function Database**
+### 2. **TSVC Function Database + C Code Parser**
 ```python
+# Database stores minimal info (name + source code)
 TSVC_FUNCTIONS = {
     "s421": {
-        "arrays": {"a": "r", "xx": "rw", "yy": "r"},
-        "has_offset": True,
-        "has_conditional": False,
-        "has_reduction": False,
-        "category": "storage_classes"
+        "name": "s421",
+        "loop_code": "for (int i = 0; i < n; i++) { ... }"
     },
     # ... 150 more functions
 }
+
+# Properties inferred at runtime via c_code_parser.py:
+# - arrays: extracted from array accesses (a[i] patterns)
+# - has_offset: detected from index patterns ([i+10], [i-1])
+# - has_reduction: detected from accumulation (sum +=, x = x + ...)
+# - has_conditional: detected from if statements
+# - has_2d_arrays: detected from [i][j] patterns
 ```
 
 ### 3. **Static Analysis Modules** (PET + Custom)

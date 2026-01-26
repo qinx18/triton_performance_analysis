@@ -1,55 +1,91 @@
 
-## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
+Your last attempt failed with a compilation or runtime error:
 
-**Error type**: Numerical error (values don't match)
-**Max error observed**: 4.11e+01
+**Error type**: compilation
+**Error message**:
+```
+recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s3111/test_s3111_correctness.py", line 63, in test_correctness
+    triton_result = s3111_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test24/llm_triton/s3111/attempt2.py", line 33, in s3111_triton
+    s3111_kernel[(1,)](
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
+    kernel = self.compile(
+             ^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
+    module = src.make_ir(options, codegen_fns, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 17:24:
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
 
-Please fix the numerical computation. Common causes:
-- Incorrect loop bounds or indices
-- Wrong array access patterns
-- Missing or incorrect operations
-- Off-by-one errors in indexing
+        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        positive_mask = vals > 0.0
+        block_sum = tl.where(positive_mask & mask, vals, 0.0)
+
+        if block_start == 0:
+            total_sum = tl.sum(block_sum)
+        else:
+            total_sum = total_sum + tl.sum(block_sum)
+                        ^
+NameError('total_sum is not defined')
+
+```
+
+Please fix the error. Make sure to:
+- Follow all Triton compilation rules
+- Use correct Triton API functions
+- Avoid Python constructs not supported in Triton kernels
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s3111_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Load values
-    a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    block_sum = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)
     
-    # Apply condition and sum
-    condition_mask = a_vals > 0.0
-    filtered_vals = tl.where(condition_mask, a_vals, 0.0)
-    block_sum = tl.sum(filtered_vals)
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        positive_mask = vals > 0.0
+        block_sum = tl.where(positive_mask & mask, vals, 0.0)
+        
+        if block_start == 0:
+            total_sum = tl.sum(block_sum)
+        else:
+            total_sum = total_sum + tl.sum(block_sum)
     
-    # Store block sum
-    tl.store(output_ptr + pid, block_sum)
+    tl.store(output_ptr, total_sum)
 
 def s3111_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
-    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Create output for block sums
-    block_sums = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel
-    grid = (n_blocks,)
-    s3111_kernel[grid](a, block_sums, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    BLOCK_SIZE = 1024
     
-    # Return total sum
-    return torch.sum(block_sums).item()
+    s3111_kernel[(1,)](
+        a, output, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    return output.item()
 ```
 
 
@@ -152,24 +188,6 @@ IMPORTANT:
 
 ## CRITICAL: Triton Compilation Rules
 
-**ALWAYS declare BLOCK_SIZE as tl.constexpr when using tl.arange():**
-```python
-# WRONG - Will cause compilation error
-@triton.jit
-def kernel(ptr, n):
-    BLOCK_SIZE = 256                    # Regular variable
-    offsets = tl.arange(0, BLOCK_SIZE)  # ERROR: arange needs constexpr
-
-# CORRECT - BLOCK_SIZE must be constexpr parameter
-@triton.jit
-def kernel(ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)  # Works!
-
-# Then pass BLOCK_SIZE from wrapper:
-grid = (triton.cdiv(n, BLOCK_SIZE),)
-kernel[grid](ptr, n, BLOCK_SIZE=256)
-```
-
 **NEVER use `tl.arange()` inside a for loop:**
 ```python
 # WRONG
@@ -218,39 +236,37 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s3111_kernel(a_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Load values
-    a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    total_sum = tl.zeros((1,), dtype=tl.float32)
     
-    # Apply condition: if a[i] > 0, include in sum, else 0
-    condition_mask = a_vals > 0.0
-    filtered_vals = tl.where(condition_mask, a_vals, 0.0)
-    block_sum = tl.sum(filtered_vals)
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
+        positive_mask = vals > 0.0
+        block_vals = tl.where(positive_mask & mask, vals, 0.0)
+        block_sum = tl.sum(block_vals)
+        total_sum = total_sum + block_sum
     
-    # Store block sum
-    tl.store(output_ptr + pid, block_sum)
+    tl.store(output_ptr, total_sum)
 
 def s3111_triton(a):
     n_elements = a.shape[0]
-    BLOCK_SIZE = 256
-    n_blocks = triton.cdiv(n_elements, BLOCK_SIZE)
     
-    # Create output for block sums
-    block_sums = torch.zeros(n_blocks, dtype=a.dtype, device=a.device)
+    output = torch.zeros(1, dtype=a.dtype, device=a.device)
     
-    # Launch kernel
-    grid = (n_blocks,)
-    s3111_kernel[grid](a, block_sums, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    BLOCK_SIZE = 1024
     
-    # Return total sum as scalar
-    return torch.sum(block_sums)
+    s3111_kernel[(1,)](
+        a, output, n_elements, BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    return output.item()
