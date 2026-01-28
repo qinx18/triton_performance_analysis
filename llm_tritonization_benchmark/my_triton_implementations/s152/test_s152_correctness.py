@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s152_c
-    from test25.llm_triton.s152.attempt10 import s152_triton
+    from test25.llm_triton.s152.attempt1 import s152_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -45,24 +45,28 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
+            a = torch.randn(N, device='cuda', dtype=torch.float32)
             b = torch.randn(N, device='cuda', dtype=torch.float32)
+            c = torch.randn(N, device='cuda', dtype=torch.float32)
             d = torch.randn(N, device='cuda', dtype=torch.float32)
             e = torch.randn(N, device='cuda', dtype=torch.float32)
-            a = 1
-            c = 1
             iterations = 1
 
+            a_c = a.cpu().numpy().copy()
             b_c = b.cpu().numpy().copy()
+            c_c = c.cpu().numpy().copy()
             d_c = d.cpu().numpy().copy()
             e_c = e.cpu().numpy().copy()
 
+            a_tr = a.clone()
             b_tr = b.clone()
+            c_tr = c.clone()
             d_tr = d.clone()
             e_tr = e.clone()
 
-            c_tensors = {"b": b_c, "d": d_c, "e": e_c}
-            tr_tensors = {"b": b_tr, "d": d_tr, "e": e_tr}
-            scalars = {"a": a, "c": c, "iterations": iterations}
+            c_tensors = {"a": a_c, "b": b_c, "c": c_c, "d": d_c, "e": e_c}
+            tr_tensors = {"a": a_tr, "b": b_tr, "c": c_tr, "d": d_tr, "e": e_tr}
+            scalars = {"iterations": iterations}
 
             c_kwargs = build_kwargs(s152_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s152_triton, tr_tensors, scalars)
@@ -83,16 +87,19 @@ def test_correctness():
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # Array comparison - C function modifies arrays in-place or returns array
-                c_arr = c_result if isinstance(c_result, np.ndarray) else b_c
-                b_c_torch = torch.from_numpy(c_arr).cuda()
-                max_error = torch.max(torch.abs(b_c_torch - b_tr)).item()
+                # Array comparison - compare primary output array directly
+                # Using a which is the first output array (rw or w mode)
+                c_arr = a_c
+                c_arr_flat = c_arr.flatten()
+                c_arr_torch = torch.from_numpy(c_arr_flat.copy()).cuda()
+                tr_arr = a_tr.flatten()
+                max_error = torch.max(torch.abs(c_arr_torch - tr_arr)).item()
                 is_scalar_comparison = False
 
             if is_scalar_comparison:
                 passed = max_error < 0.001 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 0.001)
             else:
-                passed = max_error < 0.001 or torch.allclose(b_c_torch, b_tr, rtol=0.001, atol=0.001)
+                passed = max_error < 0.001 or torch.allclose(c_arr_torch, tr_arr, rtol=0.001, atol=0.001)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

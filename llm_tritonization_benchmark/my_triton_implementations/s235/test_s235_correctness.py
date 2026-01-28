@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s235_c
-    from test25.llm_triton.s235.attempt10 import s235_triton
+    from test25.llm_triton.s235.attempt1 import s235_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -50,7 +50,6 @@ def test_correctness():
             b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
             bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
             c = torch.randn(N + 10, device='cuda', dtype=torch.float32)
-            len_2d = 1
 
             a_c = a.cpu().numpy().copy()
             aa_c = aa.cpu().numpy().copy()
@@ -66,7 +65,7 @@ def test_correctness():
 
             c_tensors = {"a": a_c, "aa": aa_c, "b": b_c, "bb": bb_c, "c": c_c}
             tr_tensors = {"a": a_tr, "aa": aa_tr, "b": b_tr, "bb": bb_tr, "c": c_tr}
-            scalars = {"len_2d": len_2d}
+            scalars = {}
 
             c_kwargs = build_kwargs(s235_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s235_triton, tr_tensors, scalars)
@@ -87,16 +86,19 @@ def test_correctness():
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # Array comparison - C function modifies arrays in-place or returns array
-                c_arr = c_result if isinstance(c_result, np.ndarray) else aa_c
-                aa_c_torch = torch.from_numpy(c_arr).cuda()
-                max_error = torch.max(torch.abs(aa_c_torch - aa_tr)).item()
+                # Array comparison - compare primary output array directly
+                # Using a which is the first output array (rw or w mode)
+                c_arr = a_c
+                c_arr_flat = c_arr.flatten()
+                c_arr_torch = torch.from_numpy(c_arr_flat.copy()).cuda()
+                tr_arr = a_tr.flatten()
+                max_error = torch.max(torch.abs(c_arr_torch - tr_arr)).item()
                 is_scalar_comparison = False
 
             if is_scalar_comparison:
                 passed = max_error < 0.001 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 0.001)
             else:
-                passed = max_error < 0.001 or torch.allclose(aa_c_torch, aa_tr, rtol=0.001, atol=0.001)
+                passed = max_error < 0.001 or torch.allclose(c_arr_torch, tr_arr, rtol=0.001, atol=0.001)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

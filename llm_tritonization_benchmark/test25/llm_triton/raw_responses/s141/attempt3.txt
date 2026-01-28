@@ -1,129 +1,51 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: compilation
-**Error message**:
-```
-t to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)')
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s141/test_s141_correctness.py", line 67, in test_correctness
-    triton_result = s141_triton(**tr_kwargs)
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test25/llm_triton/s141/attempt2.py", line 70, in s141_triton
-    s141_kernel[grid](
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 22:17:
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 6.00e+00
 
-    # Process the inner j loop in blocks
-    j_start = i
-    j_end = len_2d
-
-    # Calculate offsets for vectorized loads
-    offsets = tl.arange(0, BLOCK_SIZE)
-
-    current_k = k_start
-
-    # Process j values from i to len_2d-1
-    num_blocks = triton.cdiv(j_end - j_start, BLOCK_SIZE)
-                 ^
-ValueError('Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)')
-
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s141_kernel(bb_ptr, flat_2d_array_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for the outer i loop
-    i = tl.program_id(0)
+def s141_kernel(bb_ptr, flat_2d_array_ptr, LEN_2D, i):
+    # Calculate initial k for this i
+    k = i * (i + 1) // 2 + i
     
-    if i >= len_2d:
-        return
-    
-    # Calculate initial k value: k = (i+1) * ((i+1) - 1) / 2 + (i+1)-1
-    # Simplifying: k = i * (i + 1) / 2 + i = i * (i + 3) / 2
-    k_start = i * (i + 1) // 2 + i
-    
-    # Process the inner j loop in blocks
-    j_start = i
-    j_end = len_2d
-    
-    # Calculate offsets for vectorized loads
-    offsets = tl.arange(0, BLOCK_SIZE)
-    
-    current_k = k_start
-    
-    # Process j values from i to len_2d-1
-    num_blocks = triton.cdiv(j_end - j_start, BLOCK_SIZE)
-    for block_idx in range(num_blocks):
-        j_block_start = j_start + block_idx * BLOCK_SIZE
+    # Inner loop over j from i to LEN_2D-1
+    for j in range(i, LEN_2D):
+        # Load bb[j][i]
+        bb_idx = j * LEN_2D + i
+        bb_val = tl.load(bb_ptr + bb_idx)
         
-        # Calculate which j values we're processing in this block
-        j_offsets = j_block_start + offsets
-        j_mask = j_offsets < j_end
+        # Load flat_2d_array[k], add bb_val, store back
+        current_val = tl.load(flat_2d_array_ptr + k)
+        new_val = current_val + bb_val
+        tl.store(flat_2d_array_ptr + k, new_val)
         
-        # Load bb[j][i] values for this block
-        bb_indices = j_offsets * len_2d + i
-        bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask, other=0.0)
-        
-        # Process each element in the block
-        num_elements = tl.minimum(BLOCK_SIZE, j_end - j_block_start)
-        for local_j in range(num_elements):
-            global_j = j_block_start + local_j
-            
-            # Only process if within bounds
-            if global_j < j_end:
-                # Load current value from flat_2d_array
-                current_val = tl.load(flat_2d_array_ptr + current_k)
-                
-                # Extract the bb value for this specific j
-                bb_val = tl.load(bb_ptr + global_j * len_2d + i)
-                
-                # Update flat_2d_array[k]
-                new_val = current_val + bb_val
-                tl.store(flat_2d_array_ptr + current_k, new_val)
-                
-                # Update k for next iteration: k += j+1
-                current_k += global_j + 1
+        # Update k for next iteration
+        k += j + 1
 
-def s141_triton(bb, flat_2d_array, len_2d):
-    # Get dimensions
-    N = len_2d
+def s141_triton(bb, flat_2d_array):
+    LEN_2D = bb.shape[0]
     
-    # Define block size
-    BLOCK_SIZE = 32
-    
-    # Calculate grid size for outer i loop
-    grid = (N,)
-    
-    # Launch kernel with one thread per i value
-    s141_kernel[grid](
-        bb, flat_2d_array, N, BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    return flat_2d_array
+    # Launch one kernel per i value
+    for i in range(LEN_2D):
+        grid = (1,)
+        s141_kernel[grid](
+            bb, flat_2d_array, LEN_2D, i
+        )
 ```
 
 
@@ -196,7 +118,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s141_triton(bb, flat_2d_array, len_2d):
+def s141_triton(bb, flat_2d_array):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -256,96 +178,35 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s141_kernel(bb_ptr, flat_2d_array_ptr, len_2d, i, BLOCK_SIZE: tl.constexpr):
-    # Calculate initial k value: k = (i+1) * ((i+1) - 1) / 2 + (i+1)-1
-    # Simplifying: k = i * (i + 1) / 2 + i = i * (i + 3) / 2
-    k_start = i * (i + 1) // 2 + i
+def s141_kernel(bb_ptr, flat_2d_array_ptr, LEN_2D, i):
+    # Calculate initial k for this i
+    k = (i + 1) * i // 2 + i
     
-    # Process the inner j loop in blocks
-    j_start = i
-    j_end = len_2d
-    
-    # Calculate offsets for vectorized operations
-    offsets = tl.arange(0, BLOCK_SIZE)
-    
-    # Get program ID for block processing
-    block_idx = tl.program_id(0)
-    j_block_start = j_start + block_idx * BLOCK_SIZE
-    
-    # Calculate which j values we're processing in this block
-    j_indices = j_block_start + offsets
-    j_mask = (j_indices < j_end) & (j_indices >= j_start)
-    
-    # Calculate k values for each j in this block
-    # k starts at k_start and increments by j+1 for each step
-    k_values = k_start
-    for idx in range(block_idx * BLOCK_SIZE):
-        if j_start + idx < j_end:
-            k_values += (j_start + idx) + 1
-    
-    # Process valid elements in this block
-    for local_idx in range(BLOCK_SIZE):
-        j_idx = j_block_start + local_idx
-        if j_idx < j_end and j_idx >= j_start:
-            # Load bb[j][i]
-            bb_idx = j_idx * len_2d + i
-            bb_val = tl.load(bb_ptr + bb_idx)
-            
-            # Calculate current k
-            current_k = k_start
-            for temp_j in range(j_start, j_idx):
-                current_k += temp_j + 1
-            
-            # Load current value from flat_2d_array
-            current_val = tl.load(flat_2d_array_ptr + current_k)
-            
-            # Update flat_2d_array[k]
-            new_val = current_val + bb_val
-            tl.store(flat_2d_array_ptr + current_k, new_val)
-
-@triton.jit
-def s141_simple_kernel(bb_ptr, flat_2d_array_ptr, len_2d):
-    # Get program ID for the outer i loop
-    i = tl.program_id(0)
-    
-    if i >= len_2d:
-        return
-    
-    # Calculate initial k value: k = (i+1) * ((i+1) - 1) / 2 + (i+1)-1
-    k_start = i * (i + 1) // 2 + i
-    current_k = k_start
-    
-    # Process j values from i to len_2d-1 sequentially
-    for j in range(i, len_2d):
+    # Inner loop over j from i to LEN_2D-1
+    for j in range(i, LEN_2D):
         # Load bb[j][i]
-        bb_idx = j * len_2d + i
+        bb_idx = j * LEN_2D + i
         bb_val = tl.load(bb_ptr + bb_idx)
         
-        # Load current value from flat_2d_array
-        current_val = tl.load(flat_2d_array_ptr + current_k)
-        
-        # Update flat_2d_array[k]
+        # Load flat_2d_array[k], add bb_val, store back
+        current_val = tl.load(flat_2d_array_ptr + k)
         new_val = current_val + bb_val
-        tl.store(flat_2d_array_ptr + current_k, new_val)
+        tl.store(flat_2d_array_ptr + k, new_val)
         
-        # Update k for next iteration: k += j+1
-        current_k += j + 1
+        # Update k for next iteration
+        k += j + 1
 
-def s141_triton(bb, flat_2d_array, len_2d):
-    # Get dimensions
-    N = len_2d
+def s141_triton(bb, flat_2d_array):
+    LEN_2D = bb.shape[0]
     
-    # Calculate grid size for outer i loop
-    grid = (N,)
-    
-    # Launch kernel with one thread per i value
-    s141_simple_kernel[grid](
-        bb, flat_2d_array, N
-    )
-    
-    return flat_2d_array
+    # Launch one kernel per i value
+    for i in range(LEN_2D):
+        grid = (1,)
+        s141_kernel[grid](
+            bb, flat_2d_array, LEN_2D, i
+        )

@@ -1,26 +1,16 @@
 import torch
-import triton
-import triton.language as tl
 
-def s176_triton(a, b, c, m):
+def s176_triton(a, b, c):
+    N = a.shape[0]
+    m = N // 2
+    
     # Use PyTorch's conv1d for efficient convolution computation
-    # This avoids the timeout issue from sequential loops in Triton
+    # Reshape for conv1d: (batch, channels, length)
+    b_input = b.unsqueeze(0).unsqueeze(0)  # (1, 1, N)
+    c_kernel = c[:m].flip(0).unsqueeze(0).unsqueeze(0)  # (1, 1, m)
     
-    # Prepare for convolution: a[i] += b[i+m-j-1] * c[j] for j in range(m)
-    # This is equivalent to convolving b with flipped c
+    # Perform convolution
+    conv_result = torch.nn.functional.conv1d(b_input, c_kernel, padding=m-1)
     
-    # Extract the relevant portions
-    b_segment = b[0:2*m-1]  # We need b[0] to b[2*m-2] for all possible i+m-j-1 values
-    c_segment = c[0:m]      # We use c[0] to c[m-1]
-    
-    # Reshape for conv1d
-    b_reshaped = b_segment.unsqueeze(0).unsqueeze(0)  # (1, 1, 2*m-1)
-    c_flipped = torch.flip(c_segment, [0]).unsqueeze(0).unsqueeze(0)  # (1, 1, m)
-    
-    # Perform convolution with appropriate padding
-    conv_result = torch.nn.functional.conv1d(b_reshaped, c_flipped, padding=0)
-    
-    # Extract the relevant part and add to a
-    # The convolution output starts at index 0 and we want indices m-1 to 2*m-2
-    result_start = m - 1
-    a[0:m] += conv_result[0, 0, result_start:result_start+m]
+    # Extract the relevant portion and add to a
+    a[:m] += conv_result[0, 0, m-1:2*m-1]

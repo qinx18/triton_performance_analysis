@@ -1,56 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: compilation
-**Error message**:
-```
-load_legacy
-    raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
-ValueError: Unsupported ptr type triton.language.int64 in `tl.load`
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 6.45e+00
 
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s141/test_s141_correctness.py", line 67, in test_correctness
-    triton_result = s141_triton(**tr_kwargs)
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test25/llm_triton/s141/attempt8.py", line 35, in s141_triton
-    s141_kernel[grid](
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
-    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
-    kernel = self.compile(
-             ^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
-    module = src.make_ir(options, codegen_fns, context)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
-    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.CompilationError: at 14:17:
-    i = pid
-
-    if i >= len_2d:
-        return
-
-    # Calculate starting k for this i
-    k = (i + 1) * i // 2 + i
-
-    # Process all j from i to len_2d-1
-    for j in range(i, len_2d):
-        # Load bb[j][i]
-        bb_val = tl.load(bb_ptr + j * len_2d + i)
-                 ^
-
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -59,39 +19,36 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s141_kernel(bb_ptr, flat_2d_array_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i = pid
+def s141_kernel(bb_ptr, flat_2d_array_ptr, n):
+    i = tl.program_id(0)
     
-    if i >= len_2d:
+    if i >= n:
         return
     
-    # Calculate starting k for this i
-    k = (i + 1) * i // 2 + i
+    # Calculate initial k value: k = (i+1) * ((i+1) - 1) / 2 + (i+1) - 1
+    # This simplifies to: k = i * (i + 1) / 2 + i
+    k = i * (i + 1) // 2 + i
     
-    # Process all j from i to len_2d-1
-    for j in range(i, len_2d):
+    # Process all j values for this i
+    for j in range(i, n):
         # Load bb[j][i]
-        bb_val = tl.load(bb_ptr + j * len_2d + i)
+        bb_val = tl.load(bb_ptr + j * n + i)
         
-        # Load current flat_2d_array[k]
-        old_val = tl.load(flat_2d_array_ptr + k)
-        
-        # Update flat_2d_array[k]
-        new_val = old_val + bb_val
+        # Load current flat_2d_array[k], add bb[j][i], store back
+        current_val = tl.load(flat_2d_array_ptr + k)
+        new_val = current_val + bb_val
         tl.store(flat_2d_array_ptr + k, new_val)
         
-        # Update k for next iteration
-        k += j + 1
+        # Update k for next iteration: k += j+1
+        k += (j + 1)
 
-def s141_triton(bb, flat_2d_array, len_2d):
-    BLOCK_SIZE = 32
-    grid = (len_2d,)
+def s141_triton(bb, flat_2d_array):
+    n = bb.shape[0]
     
-    s141_kernel[grid](
-        bb.data_ptr(), flat_2d_array.data_ptr(), len_2d,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    grid = (n,)
+    s141_kernel[grid](bb, flat_2d_array, n)
+    
+    return flat_2d_array
 ```
 
 
@@ -164,7 +121,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s141_triton(bb, flat_2d_array, len_2d):
+def s141_triton(bb, flat_2d_array):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -229,37 +186,33 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s141_kernel(bb_ptr, flat_2d_array_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i = pid
+def s141_kernel(bb_ptr, flat_2d_array_ptr, n):
+    i = tl.program_id(0)
     
-    if i >= len_2d:
+    if i >= n:
         return
     
-    # Calculate starting k for this i
-    k = (i + 1) * i // 2 + i
+    # Calculate initial k value: k = (i+1) * ((i+1) - 1) / 2 + (i+1) - 1
+    # This simplifies to: k = i * (i + 1) / 2 + i
+    k = i * (i + 1) // 2 + i
     
-    # Process all j from i to len_2d-1
-    for j in range(i, len_2d):
-        # Create offset for bb[j][i]
-        bb_offset = j * len_2d + i
-        bb_val = tl.load(bb_ptr + bb_offset)
+    # Process all j values for this i
+    for j in range(i, n):
+        # Load bb[j][i]
+        bb_val = tl.load(bb_ptr + j * n + i)
         
-        # Create offset for flat_2d_array[k]
-        old_val = tl.load(flat_2d_array_ptr + k)
-        
-        # Update flat_2d_array[k]
-        new_val = old_val + bb_val
+        # Load current flat_2d_array[k], add bb[j][i], store back
+        current_val = tl.load(flat_2d_array_ptr + k)
+        new_val = current_val + bb_val
         tl.store(flat_2d_array_ptr + k, new_val)
         
-        # Update k for next iteration
-        k += j + 1
+        # Update k for next iteration: k += (j+1)
+        k += (j + 1)
 
-def s141_triton(bb, flat_2d_array, len_2d):
-    BLOCK_SIZE = 32
-    grid = (len_2d,)
+def s141_triton(bb, flat_2d_array):
+    n = bb.shape[0]
     
-    s141_kernel[grid](
-        bb, flat_2d_array, len_2d,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    grid = (n,)
+    s141_kernel[grid](bb, flat_2d_array, n)
+    
+    return flat_2d_array

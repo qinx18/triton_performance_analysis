@@ -210,11 +210,44 @@ def enrich_func_spec(func_spec: dict) -> dict:
     # Parse the C code to extract properties
     parsed = parse_c_code(func_spec['loop_code'])
 
+    # Also parse any helper functions called in the loop code
+    # This handles cases like s151s(a, b, 1) where arrays are accessed inside the helper
+    import re
+    helper_arrays = {}
+    for helper_name, helper_info in HELPER_FUNCTIONS.items():
+        if re.search(rf'\b{helper_name}\s*\(', func_spec['loop_code']):
+            helper_parsed = parse_c_code(helper_info['code'])
+            # Merge helper arrays into main arrays
+            for arr, mode in helper_parsed['arrays'].items():
+                if arr not in helper_arrays or mode in ['w', 'rw']:
+                    helper_arrays[arr] = mode
+
+    # Merge parsed arrays with helper arrays, prioritizing write modes
+    # 'rw' > 'w' > 'r', and combining 'w' + 'r' = 'rw'
+    def merge_mode(mode1, mode2):
+        if 'rw' in (mode1, mode2):
+            return 'rw'
+        if 'w' in (mode1, mode2) and 'r' in (mode1, mode2):
+            return 'rw'
+        if 'w' in (mode1, mode2):
+            return 'w'
+        return 'r'
+
+    merged_arrays = {}
+    for arr in set(parsed['arrays'].keys()) | set(helper_arrays.keys()):
+        mode1 = parsed['arrays'].get(arr)
+        mode2 = helper_arrays.get(arr)
+        if mode1 and mode2:
+            merged_arrays[arr] = merge_mode(mode1, mode2)
+        else:
+            merged_arrays[arr] = mode1 or mode2
+
     # Create enriched spec - parsed values override database values
     enriched = func_spec.copy()
 
     # Override with parsed values (these are inferred from code, more reliable)
-    enriched['arrays'] = parsed['arrays']
+    # Fall back to database arrays if parser couldn't detect any
+    enriched['arrays'] = merged_arrays if merged_arrays else func_spec.get('arrays', {})
     enriched['has_offset'] = parsed['has_offset']
     enriched['has_conditional'] = parsed['has_conditional']
     enriched['has_reduction'] = parsed['has_reduction']
@@ -232,8 +265,12 @@ def enrich_func_spec(func_spec: dict) -> dict:
             if hasattr(tsvc_all_reference, c_func_name):
                 c_func = getattr(tsvc_all_reference, c_func_name)
                 sig = inspect.signature(c_func)
-                array_names = set(parsed['arrays'].keys())
-                for param_name in sig.parameters.keys():
+                array_names = set(enriched['arrays'].keys())
+                for param_name, param in sig.parameters.items():
+                    # Skip parameters with default values (like len_2d=None)
+                    # These are optional and can be derived from array shapes
+                    if param.default is not inspect.Parameter.empty:
+                        continue
                     if param_name not in array_names and param_name not in scalar_params:
                         scalar_params[param_name] = 'scalar'
         except ImportError:
@@ -382,7 +419,10 @@ def get_exact_function_signature(kernel_name: str) -> Optional[str]:
         if hasattr(tsvc_all_reference, c_func_name):
             c_func = getattr(tsvc_all_reference, c_func_name)
             sig = inspect.signature(c_func)
-            params = list(sig.parameters.keys())
+            # Only include required parameters (no default value)
+            # Optional params like len_2d=None can be derived from array shapes
+            params = [name for name, param in sig.parameters.items()
+                      if param.default is inspect.Parameter.empty]
             return ", ".join(params) if params else None
     except ImportError:
         pass
@@ -1341,6 +1381,9 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
                 array_inits.append(f"            {var_name} = 10")
             elif scalar_name == 'n3':
                 array_inits.append(f"            {var_name} = 3")
+        elif scalar_name == 'len_2d':
+            # len_2d represents the 2D matrix dimension, should be N not 1
+            array_inits.append(f"            {var_name} = N")
         else:
             array_inits.append(f"            {var_name} = 1")
 
@@ -1367,9 +1410,28 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
 
     # Generate unified comparison that detects at runtime whether to compare scalars or arrays
     # This removes dependency on database flags - the comparison type is determined by actual return types
-    primary_arr = output_arrays[0] if output_arrays else (array_names[0] if array_names else 'a')
+    primary_arr = output_arrays[0] if output_arrays else (array_names[0] if array_names else None)
 
-    compare_str = f"""            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
+    # Build dict string for dynamic array matching
+    array_dict_entries = [f"'{arr}': {arr}_tr" for arr in array_names]
+    array_dict_str = ', '.join(array_dict_entries)
+
+    if primary_arr is None:
+        # No arrays at all - pure scalar function, only compare return values
+        compare_str = f"""            # Pure scalar function - compare return values directly
+            c_val = float(c_result) if c_result is not None else 0.0
+            if isinstance(triton_result, (int, float)):
+                tr_val = float(triton_result)
+            elif isinstance(triton_result, torch.Tensor):
+                tr_val = triton_result.item() if triton_result.numel() == 1 else float(triton_result)
+            else:
+                tr_val = float(triton_result) if triton_result is not None else 0.0
+            max_error = abs(c_val - tr_val)
+            is_scalar_comparison = True"""
+
+        passed_check_str = f"""passed = max_error < {atol} or (abs(c_val) > 1e-6 and max_error / abs(c_val) < {rtol})"""
+    else:
+        compare_str = f"""            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
             if isinstance(c_result, (int, float)):
                 # Scalar return - compare values directly
                 c_val = float(c_result)
@@ -1382,16 +1444,19 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # Array comparison - C function modifies arrays in-place or returns array
-                c_arr = c_result if isinstance(c_result, np.ndarray) else {primary_arr}_c
-                {primary_arr}_c_torch = torch.from_numpy(c_arr).cuda()
-                max_error = torch.max(torch.abs({primary_arr}_c_torch - {primary_arr}_tr)).item()
+                # Array comparison - compare primary output array directly
+                # Using {primary_arr} which is the first output array (rw or w mode)
+                c_arr = {primary_arr}_c
+                c_arr_flat = c_arr.flatten()
+                c_arr_torch = torch.from_numpy(c_arr_flat.copy()).cuda()
+                tr_arr = {primary_arr}_tr.flatten()
+                max_error = torch.max(torch.abs(c_arr_torch - tr_arr)).item()
                 is_scalar_comparison = False"""
 
-    passed_check_str = f"""if is_scalar_comparison:
+        passed_check_str = f"""if is_scalar_comparison:
                 passed = max_error < {atol} or (abs(c_val) > 1e-6 and max_error / abs(c_val) < {rtol})
             else:
-                passed = max_error < {atol} or torch.allclose({primary_arr}_c_torch, {primary_arr}_tr, rtol={rtol}, atol={atol})"""
+                passed = max_error < {atol} or torch.allclose(c_arr_torch, tr_arr, rtol={rtol}, atol={atol})"""
 
     available_arrays = array_names
     available_scalars = all_scalar_names
@@ -1622,6 +1687,9 @@ def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -
                 array_inits.append(f"    {var_name} = 10")
             elif scalar_name == 'n3':
                 array_inits.append(f"    {var_name} = 3")
+        elif scalar_name == 'len_2d':
+            # len_2d represents the 2D matrix dimension, should be N not 1
+            array_inits.append(f"    {var_name} = N")
         else:
             array_inits.append(f"    {var_name} = 1")
 

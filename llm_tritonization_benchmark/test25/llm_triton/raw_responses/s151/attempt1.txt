@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s151
-# Generated: 2026-01-26 14:34:08
+# Generated: 2026-01-27 14:17:53
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -130,35 +130,37 @@ RESPONSE:
 ```python
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s151_kernel(a_ptr, b_ptr, n, m, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
     
-    mask = indices < (n - 1)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    idx = block_start + offsets
+    
+    mask = idx < n
     
     # Load a[i+m] and b[i]
-    a_shifted_indices = indices + m
-    a_shifted_mask = mask & (a_shifted_indices < n)
-    a_vals = tl.load(a_ptr + a_shifted_indices, mask=a_shifted_mask, other=0.0)
-    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
+    a_shifted_offsets = idx + m
+    a_shifted_mask = mask & (a_shifted_offsets < n + m)
+    b_vals = tl.load(b_ptr + idx, mask=mask)
+    a_shifted_vals = tl.load(a_ptr + a_shifted_offsets, mask=a_shifted_mask)
     
     # Compute a[i] = a[i+m] + b[i]
-    result = a_vals + b_vals
+    result = a_shifted_vals + b_vals
     
-    # Store result back to a[i]
-    tl.store(a_ptr + indices, result, mask=mask)
+    # Store back to a[i]
+    tl.store(a_ptr + idx, result, mask=mask)
 
 def s151_triton(a, b):
-    n = a.shape[0]
+    n = a.shape[0] - 1  # Loop goes to LEN_1D-1
     m = 1
     
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n - 1, BLOCK_SIZE),)
+    grid = (triton.cdiv(n, BLOCK_SIZE),)
     
-    s151_kernel[grid](a, b, n, m, BLOCK_SIZE=BLOCK_SIZE)
+    s151_kernel[grid](a, b, n, m, BLOCK_SIZE)
+    
+    return a
 ```

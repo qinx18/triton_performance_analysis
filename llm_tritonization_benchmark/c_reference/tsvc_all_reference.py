@@ -1703,14 +1703,13 @@ def s175_c(a, b, inc=1):
     _lib.s175_kernel(_to_ptr(a), _to_ptr(b), n, inc)
     return a
 
-def s176_c(a, b, c, m=None):
+def s176_c(a, b, c):
     """C reference for s176"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     b = np.ascontiguousarray(b, dtype=np.float32)
     c = np.ascontiguousarray(c, dtype=np.float32)
     n = len(a)
-    if m is None:
-        m = n // 2  # Original C code: int m = LEN_1D/2
+    m = n // 2  # Original C code: int m = LEN_1D/2
     _lib.s176_kernel(_to_ptr(a), _to_ptr(b), _to_ptr(c), n, m)
     return a
 

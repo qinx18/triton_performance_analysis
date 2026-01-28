@@ -6,13 +6,11 @@ Your last attempt failed with a compilation or runtime error:
 **Error type**: compilation
 **Error message**:
 ```
-      ^
-unsupported AST node type: Continue
-Traceback (most recent call last):
+ck (most recent call last):
   File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s277/test_s277_correctness.py", line 75, in test_correctness
     triton_result = s277_triton(**tr_kwargs)
                     ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test25/llm_triton/s277/attempt1.py", line 52, in s277_triton
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test25/llm_triton/s277/attempt1.py", line 48, in s277_triton
     s277_kernel[grid](
   File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
     return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
@@ -26,19 +24,19 @@ Traceback (most recent call last):
   File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-triton.compiler.errors.UnsupportedLanguageConstruct: at 24:12:
-    # Process all elements sequentially in a single thread
+triton.compiler.errors.UnsupportedLanguageConstruct: at 12:12:
+def s277_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements):
+    # This kernel must run sequentially due to RAW dependency in b[i+1] = ... pattern
+    # Use single thread processing
+
     for i in range(n_elements - 1):
         # Load current values
         a_val = tl.load(a_ptr + i)
         b_val = tl.load(b_ptr + i)
-        c_val = tl.load(c_ptr + i)
-        d_val = tl.load(d_ptr + i)
-        e_val = tl.load(e_ptr + i)
 
-        # Check if a[i] >= 0
+        # Check first condition: if a[i] >= 0, skip to L20 (end)
         if a_val >= 0.0:
-            continue  # goto L20 (skip everything)
+            continue  # goto L20 equivalent
             ^
 unsupported AST node type: Continue
 
@@ -56,59 +54,52 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s277_kernel(
-    a_ptr, b_ptr, c_ptr, d_ptr, e_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # This kernel must be strictly sequential due to b[i+1] = ... b[i] dependency
+def s277_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements):
+    # This kernel must run sequentially due to RAW dependency in b[i+1] = ... pattern
     # Use single thread processing
-    thread_id = tl.program_id(0)
     
-    if thread_id != 0:
-        return
-    
-    # Process all elements sequentially in a single thread
     for i in range(n_elements - 1):
         # Load current values
         a_val = tl.load(a_ptr + i)
         b_val = tl.load(b_ptr + i)
+        
+        # Check first condition: if a[i] >= 0, skip to L20 (end)
+        if a_val >= 0.0:
+            continue  # goto L20 equivalent
+        
+        # Check second condition: if b[i] >= 0, skip to L30
+        if b_val >= 0.0:
+            # L30: b[i+1] = c[i] + d[i] * e[i]
+            c_val = tl.load(c_ptr + i)
+            d_val = tl.load(d_ptr + i)
+            e_val = tl.load(e_ptr + i)
+            result = c_val + d_val * e_val
+            tl.store(b_ptr + i + 1, result)
+            continue  # goto L20 equivalent
+        
+        # If both conditions false, execute: a[i] += c[i] * d[i]
         c_val = tl.load(c_ptr + i)
         d_val = tl.load(d_ptr + i)
-        e_val = tl.load(e_ptr + i)
-        
-        # Check if a[i] >= 0
-        if a_val >= 0.0:
-            continue  # goto L20 (skip everything)
-        
-        # Check if b[i] >= 0
-        if b_val >= 0.0:
-            # goto L30: only execute b[i+1] = c[i] + d[i] * e[i]
-            b_next_val = c_val + d_val * e_val
-            tl.store(b_ptr + i + 1, b_next_val)
-            continue
-        
-        # Both conditions false: execute a[i] += c[i] * d[i], then L30
-        a_new = a_val + c_val * d_val
-        tl.store(a_ptr + i, a_new)
+        a_val = a_val + c_val * d_val
+        tl.store(a_ptr + i, a_val)
         
         # L30: b[i+1] = c[i] + d[i] * e[i]
-        b_next_val = c_val + d_val * e_val
-        tl.store(b_ptr + i + 1, b_next_val)
+        e_val = tl.load(e_ptr + i)
+        result = c_val + d_val * e_val
+        tl.store(b_ptr + i + 1, result)
+        
+        # L20: (empty label)
 
 def s277_triton(a, b, c, d, e):
     n_elements = a.shape[0]
     
-    BLOCK_SIZE = 1024
-    grid = (1,)  # Single thread execution due to sequential dependency
+    # Launch single thread kernel due to sequential dependency
+    grid = (1,)
     
     s277_kernel[grid](
         a, b, c, d, e,
-        n_elements,
-        BLOCK_SIZE,
+        n_elements
     )
-    
-    return a, b
 ```
 
 
@@ -292,54 +283,46 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s277_kernel(
-    a_ptr, b_ptr, c_ptr, d_ptr, e_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # This kernel must be strictly sequential due to b[i+1] = ... b[i] dependency
+def s277_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements):
+    # This kernel must run sequentially due to RAW dependency in b[i+1] = ... pattern
     # Use single thread processing
-    thread_id = tl.program_id(0)
     
-    if thread_id != 0:
-        return
-    
-    # Process all elements sequentially in a single thread
     for i in range(n_elements - 1):
         # Load current values
         a_val = tl.load(a_ptr + i)
         b_val = tl.load(b_ptr + i)
+        
+        # Check first condition: if a[i] >= 0, skip to L20 (end)
+        skip_to_l20 = a_val >= 0.0
+        
+        # Check second condition: if b[i] >= 0, skip to L30
+        skip_to_l30 = b_val >= 0.0
+        
+        # Load values needed for calculations
         c_val = tl.load(c_ptr + i)
         d_val = tl.load(d_ptr + i)
-        e_val = tl.load(e_ptr + i)
         
-        # Check if a[i] >= 0
-        skip_all = a_val >= 0.0
+        # If both conditions false, execute: a[i] += c[i] * d[i]
+        should_update_a = (skip_to_l20 == 0) & (skip_to_l30 == 0)
+        if should_update_a:
+            a_val = a_val + c_val * d_val
+            tl.store(a_ptr + i, a_val)
         
-        # Check if b[i] >= 0 (only matters if not skipping all)
-        skip_a_update = (b_val >= 0.0) & (~skip_all)
+        # L30: b[i+1] = c[i] + d[i] * e[i] (execute unless skip_to_l20)
+        if skip_to_l20 == 0:
+            e_val = tl.load(e_ptr + i)
+            result = c_val + d_val * e_val
+            tl.store(b_ptr + i + 1, result)
         
-        # Update a[i] if both conditions are false
-        update_a = (~skip_all) & (~skip_a_update)
-        if update_a:
-            a_new = a_val + c_val * d_val
-            tl.store(a_ptr + i, a_new)
-        
-        # Update b[i+1] if not skipping all
-        if ~skip_all:
-            b_next_val = c_val + d_val * e_val
-            tl.store(b_ptr + i + 1, b_next_val)
+        # L20: (empty label)
 
 def s277_triton(a, b, c, d, e):
     n_elements = a.shape[0]
     
-    BLOCK_SIZE = 1024
-    grid = (1,)  # Single thread execution due to sequential dependency
+    # Launch single thread kernel due to sequential dependency
+    grid = (1,)
     
     s277_kernel[grid](
         a, b, c, d, e,
-        n_elements,
-        BLOCK_SIZE,
+        n_elements
     )
-    
-    return a, b

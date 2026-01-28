@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s317
-# Generated: 2026-01-26 15:04:33
+# Generated: 2026-01-28 22:43:31
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -71,7 +71,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s317_triton(n):
+def s317_triton():
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -134,31 +134,40 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s317_kernel(q_ptr, n, BLOCK_SIZE: tl.constexpr):
-    # This kernel computes q = 1.0 * (0.99)^(n/2)
-    # Since this is a simple scalar computation, we use one block
+def s317_kernel(output_ptr, BLOCK_SIZE: tl.constexpr, N_HALF: tl.constexpr):
     block_id = tl.program_id(0)
     
     if block_id == 0:
+        # Only one block computes the result
         q = 1.0
+        
+        # Compute q *= 0.99 for N_HALF iterations
         factor = 0.99
-        iterations = n // 2
         
-        # Compute q *= 0.99 for iterations times
-        # This is equivalent to q = (0.99)^iterations
-        for i in range(iterations):
+        # Use the mathematical formula: q = factor^N_HALF
+        # This is equivalent to the loop but more efficient
+        for i in range(N_HALF):
             q *= factor
-        
-        tl.store(q_ptr, q)
+            
+        tl.store(output_ptr, q)
 
-def s317_triton(n):
-    # Create output tensor for the result
-    q = torch.zeros(1, dtype=torch.float32, device='cuda')
+def s317_triton():
+    # Use a dummy array size since no arrays are actually used in computation
+    # The original C code uses LEN_1D/2 iterations, so we'll use a typical value
+    LEN_1D = 32000
+    N_HALF = LEN_1D // 2
+    
+    # Create output tensor
+    output = torch.zeros(1, dtype=torch.float32, device='cuda')
     
     BLOCK_SIZE = 128
-    grid = (1,)  # Only need one block for scalar computation
+    grid = (1,)
     
-    s317_kernel[grid](q, n, BLOCK_SIZE)
+    s317_kernel[grid](
+        output,
+        BLOCK_SIZE=BLOCK_SIZE,
+        N_HALF=N_HALF
+    )
     
-    return q.item()
+    return output.item()
 ```

@@ -1,16 +1,20 @@
 
-## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
+Your last attempt failed with a compilation or runtime error:
 
-**Error type**: Numerical error (values don't match)
-**Max error observed**: 8.47e+29
+**Error type**: runtime
+**Error message**:
+```
+Error: mkl-service + Intel(R) MKL: MKL_THREADING_LAYER=INTEL is incompatible with libgomp-a34b3233.so.1 library.
+	Try to import numpy first or set the threading layer accordingly. Set MKL_SERVICE_FORCE_INTEL to force it.
 
-Please fix the numerical computation. Common causes:
-- Incorrect loop bounds or indices
-- Wrong array access patterns
-- Missing or incorrect operations
-- Off-by-one errors in indexing
+```
+
+Please fix the error. Make sure to:
+- Follow all Triton compilation rules
+- Use correct Triton API functions
+- Avoid Python constructs not supported in Triton kernels
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -18,26 +22,31 @@ import torch
 import triton
 import triton.language as tl
 
-def s176_triton(a, b, c, m):
-    # This is a convolution pattern: a[i] += sum over j of b[i+m-j-1] * c[j]
-    # We need to be careful with the indexing to match the C code exactly
+@triton.jit
+def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    i_offsets = tl.arange(0, BLOCK_SIZE)
+    i_idx = pid * BLOCK_SIZE + i_offsets
+    mask_i = i_idx < m
     
-    # Create index matrix for vectorized computation
-    i_indices = torch.arange(m, device=a.device).unsqueeze(1)  # (m, 1)
-    j_indices = torch.arange(m, device=a.device).unsqueeze(0)  # (1, m)
+    a_vals = tl.load(a_ptr + i_idx, mask=mask_i, other=0.0)
     
-    # Compute b indices: i + m - j - 1
-    b_indices = i_indices + m - j_indices - 1  # (m, m)
+    for j in range(m):
+        b_idx = i_idx + m - j - 1
+        b_vals = tl.load(b_ptr + b_idx, mask=mask_i, other=0.0)
+        c_val = tl.load(c_ptr + j)
+        a_vals += b_vals * c_val
     
-    # Extract the relevant portions
-    b_matrix = b[b_indices]  # (m, m)
-    c_vector = c[:m].unsqueeze(0)  # (1, m)
+    tl.store(a_ptr + i_idx, a_vals, mask=mask_i)
+
+def s176_triton(a, b, c):
+    N = a.shape[0]
+    m = N // 2
     
-    # Compute the convolution: for each i, sum over j of b[i+m-j-1] * c[j]
-    result = torch.sum(b_matrix * c_vector, dim=1)  # (m,)
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(m, BLOCK_SIZE),)
     
-    # Add to output
-    a[:m] += result
+    s176_kernel[grid](a, b, c, m, BLOCK_SIZE=BLOCK_SIZE)
 ```
 
 
@@ -216,7 +225,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s176_triton(a, b, c, m):
+def s176_triton(a, b, c):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -281,42 +290,27 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s176_kernel(a_ptr, b_ptr, c_ptr, n, m, BLOCK_SIZE: tl.constexpr):
+def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    i_idx = pid * BLOCK_SIZE + offsets
+    mask = i_idx < m
     
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_idx = pid * BLOCK_SIZE + i_offsets
-    mask_i = i_idx < m
+    a_vals = tl.load(a_ptr + i_idx, mask=mask, other=0.0)
     
-    # Initialize accumulator
-    acc = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    
-    # Sequential loop over j
     for j in range(m):
-        # Calculate b index: i + m - j - 1
         b_idx = i_idx + m - j - 1
-        mask_b = mask_i & (b_idx >= 0) & (b_idx < n)
-        
-        # Load values
-        b_vals = tl.load(b_ptr + b_idx, mask=mask_b, other=0.0)
+        b_vals = tl.load(b_ptr + b_idx, mask=mask, other=0.0)
         c_val = tl.load(c_ptr + j)
-        
-        # Accumulate
-        acc += b_vals * c_val
+        a_vals = a_vals + b_vals * c_val
     
-    # Store result
-    a_vals = tl.load(a_ptr + i_idx, mask=mask_i, other=0.0)
-    result = a_vals + acc
-    tl.store(a_ptr + i_idx, result, mask=mask_i)
+    tl.store(a_ptr + i_idx, a_vals, mask=mask)
 
-def s176_triton(a, b, c, m):
-    n = a.shape[0]
+def s176_triton(a, b, c):
+    N = a.shape[0]
+    m = N // 2
     
     BLOCK_SIZE = 256
     grid = (triton.cdiv(m, BLOCK_SIZE),)
     
-    s176_kernel[grid](
-        a, b, c,
-        n, m,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s176_kernel[grid](a, b, c, m, BLOCK_SIZE=BLOCK_SIZE)

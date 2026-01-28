@@ -3,36 +3,47 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s176_kernel(a_ptr, b_ptr, c_ptr, m, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_idx = pid * BLOCK_SIZE + i_offsets
-    i_mask = i_idx < m
+def s176_kernel(a_ptr, b_ptr, c_ptr, n, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
     
-    # Load initial a values
-    a_vals = tl.load(a_ptr + i_idx, mask=i_mask, other=0.0)
+    # Calculate indices for this block
+    block_start = pid * BLOCK_SIZE
+    offsets = tl.arange(0, BLOCK_SIZE)
+    i_indices = block_start + offsets
     
-    # Sequential loop over j
+    # Mask for valid indices
+    mask = i_indices < (n // 2)
+    
+    # Load current values of a[i]
+    a_vals = tl.load(a_ptr + i_indices, mask=mask, other=0.0)
+    
+    m = n // 2
+    
+    # Sequential loop over j dimension (convolution pattern)
     for j in range(m):
-        # Load c[j]
-        c_j = tl.load(c_ptr + j)
+        # Load c[j] (scalar broadcast)
+        c_val = tl.load(c_ptr + j)
         
-        # Load b[i+m-j-1]
-        b_idx = i_idx + m - j - 1
-        b_mask = i_mask & (b_idx >= 0) & (b_idx < 2 * m)
-        b_vals = tl.load(b_ptr + b_idx, mask=b_mask, other=0.0)
+        # Calculate b indices: b[i+m-j-1]
+        b_indices = i_indices + m - j - 1
+        b_mask = mask & (b_indices >= 0) & (b_indices < n)
         
-        # Accumulate
-        a_vals += b_vals * c_j
+        # Load b values
+        b_vals = tl.load(b_ptr + b_indices, mask=b_mask, other=0.0)
+        
+        # Accumulate: a[i] += b[i+m-j-1] * c[j]
+        a_vals = a_vals + b_vals * c_val
     
-    # Store result
-    tl.store(a_ptr + i_idx, a_vals, mask=i_mask)
+    # Store results back to a
+    tl.store(a_ptr + i_indices, a_vals, mask=mask)
 
-def s176_triton(a, b, c, m):
+def s176_triton(a, b, c):
+    n = a.shape[0]
+    
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(m, BLOCK_SIZE),)
+    grid = (triton.cdiv(n // 2, BLOCK_SIZE),)
     
     s176_kernel[grid](
-        a, b, c, m,
+        a, b, c, n,
         BLOCK_SIZE=BLOCK_SIZE
     )

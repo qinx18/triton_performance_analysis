@@ -1,43 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt failed with a compilation or runtime error:
+Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
-**Error type**: runtime
-**Error message**:
-```
-======================
-Correctness Testing: s141
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=    64... ERROR: The size of tensor a (4096) must match the size of tensor b (64) at non-singleton dimension 1
-Testing N=   128... ERROR: The size of tensor a (16384) must match the size of tensor b (128) at non-singleton dimension 1
-Testing N=   256... ERROR: The size of tensor a (65536) must match the size of tensor b (256) at non-singleton dimension 1
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s141/test_s141_correctness.py", line 85, in test_correctness
-    max_error = torch.max(torch.abs(bb_c_torch - bb_tr)).item()
-                                    ~~~~~~~~~~~^~~~~~~
-RuntimeError: The size of tensor a (4096) must match the size of tensor b (64) at non-singleton dimension 1
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s141/test_s141_correctness.py", line 85, in test_correctness
-    max_error = torch.max(torch.abs(bb_c_torch - bb_tr)).item()
-                                    ~~~~~~~~~~~^~~~~~~
-RuntimeError: The size of tensor a (16384) must match the size of tensor b (128) at non-singleton dimension 1
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s141/test_s141_correctness.py", line 85, in test_correctness
-    max_error = torch.max(torch.abs(bb_c_torch - bb_tr)).item()
-                                    ~~~~~~~~~~~^~~~~~~
-RuntimeError: The size of tensor a (65536) must match the size of tensor b (256) at non-singleton dimension 1
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 6.63e+00
 
-```
-
-Please fix the error. Make sure to:
-- Follow all Triton compilation rules
-- Use correct Triton API functions
-- Avoid Python constructs not supported in Triton kernels
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns
+- Missing or incorrect operations
+- Off-by-one errors in indexing
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -114,7 +87,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s141_triton(bb, flat_2d_array, len_2d):
+def s141_triton(bb, flat_2d_array):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -179,50 +152,32 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s141_kernel(bb_ptr, flat_2d_array_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i = pid
+def s141_kernel(bb_ptr, flat_2d_array_ptr, n):
+    i = tl.program_id(0)
     
-    if i >= len_2d:
+    if i >= n:
         return
     
-    # Calculate starting k for this i
+    # Calculate initial k value
     k = (i + 1) * i // 2 + i
     
-    # Process j from i to len_2d-1
-    for j_start in range(i, len_2d, BLOCK_SIZE):
-        j_end = min(j_start + BLOCK_SIZE, len_2d)
-        actual_size = j_end - j_start
+    # Process all j values for this i
+    for j in range(i, n):
+        # Load bb[j][i]
+        bb_val = tl.load(bb_ptr + j * n + i)
         
-        if actual_size <= 0:
-            break
-            
-        # Load bb values for current j range
-        j_offsets = tl.arange(0, BLOCK_SIZE)
-        j_indices = j_start + j_offsets
-        j_mask = j_offsets < actual_size
+        # Load current flat_2d_array[k], add bb[j][i], store back
+        current_val = tl.load(flat_2d_array_ptr + k)
+        new_val = current_val + bb_val
+        tl.store(flat_2d_array_ptr + k, new_val)
         
-        bb_indices = j_indices * len_2d + i
-        bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask, other=0.0)
-        
-        # Calculate k values for current j range
-        k_current = k
-        for idx in range(actual_size):
-            j = j_start + idx
-            # Load current flat_2d_array value
-            old_val = tl.load(flat_2d_array_ptr + k_current)
-            # Add bb value
-            new_val = old_val + tl.load(bb_ptr + j * len_2d + i)
-            # Store back
-            tl.store(flat_2d_array_ptr + k_current, new_val)
-            # Update k for next j
-            k_current += j + 1
+        # Update k for next iteration
+        k += j + 1
 
-def s141_triton(bb, flat_2d_array, len_2d):
-    BLOCK_SIZE = 32
-    grid = (len_2d,)
+def s141_triton(bb, flat_2d_array):
+    n = bb.shape[0]
     
-    s141_kernel[grid](
-        bb, flat_2d_array, len_2d,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    grid = (n,)
+    s141_kernel[grid](bb, flat_2d_array, n)
+    
+    return flat_2d_array

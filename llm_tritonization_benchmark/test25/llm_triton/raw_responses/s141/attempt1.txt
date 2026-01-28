@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s141
-# Generated: 2026-01-26 14:32:08
+# Generated: 2026-01-27 14:03:28
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -72,7 +72,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s141_triton(bb, flat_2d_array, len_2d):
+def s141_triton(bb, flat_2d_array):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -135,72 +135,61 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s141_kernel(bb_ptr, flat_2d_array_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for the outer i loop
-    i = tl.program_id(0)
+def s141_kernel(bb_ptr, flat_2d_array_ptr, LEN_2D, BLOCK_SIZE: tl.constexpr):
+    # Get program ID
+    pid = tl.program_id(0)
     
-    if i >= len_2d:
+    # Calculate which i this block handles
+    i = pid
+    
+    if i >= LEN_2D:
         return
     
-    # Calculate initial k value: k = (i+1) * ((i+1) - 1) / 2 + (i+1)-1
-    # Simplifying: k = i * (i + 1) / 2 + i = i * (i + 3) / 2
+    # Calculate starting k for this i
+    # k = (i+1) * ((i+1) - 1) / 2 + (i+1)-1
+    # Simplifies to: k = i * (i + 1) / 2 + i = i * (i + 3) / 2
     k_start = i * (i + 1) // 2 + i
     
-    # Process the inner j loop in blocks
-    j_start = i
-    j_end = len_2d
+    # Process j loop from i to LEN_2D-1 in blocks
+    j_range = LEN_2D - i
     
-    # Calculate offsets for vectorized loads
+    # Pre-compute offset vector once
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    current_k = k_start
-    
-    # Process j values from i to len_2d-1
-    for j_block_start in range(j_start, j_end, BLOCK_SIZE):
-        # Calculate which j values we're processing in this block
-        j_offsets = j_block_start + offsets
-        j_mask = j_offsets < j_end
+    for block_start in range(0, j_range, BLOCK_SIZE):
+        # Current j values for this block
+        j_offsets = i + block_start + offsets
+        j_mask = j_offsets < LEN_2D
         
-        # Load bb[j][i] values for this block
-        bb_indices = j_offsets * len_2d + i
-        bb_vals = tl.load(bb_ptr + bb_indices, mask=j_mask, other=0.0)
+        # Calculate k values for this block
+        # k increases by j+1 for each step, so k[n] = k_start + sum(j+1) for j in [i, i+n)
+        # For j from i to i+block_start+offset: k = k_start + sum from i to current_j of (j+1)
+        # sum(j+1) from i to current_j = sum(j) from i to current_j + count
+        # sum(j) from i to current_j = (current_j*(current_j+1) - (i-1)*i)/2
+        current_k_offsets = k_start + ((j_offsets * (j_offsets + 1) - i * (i - 1)) // 2) + block_start + offsets
         
-        # For each j in this block, we need to update flat_2d_array[k] and increment k
-        for local_j in range(BLOCK_SIZE):
-            global_j = j_block_start + local_j
-            if global_j >= j_end:
-                break
-                
-            # Load current value from flat_2d_array
-            current_val = tl.load(flat_2d_array_ptr + current_k)
-            
-            # Extract the bb value for this specific j
-            if local_j == 0:
-                bb_val = tl.load(bb_ptr + global_j * len_2d + i)
-            else:
-                bb_val = tl.load(bb_ptr + global_j * len_2d + i)
-            
-            # Update flat_2d_array[k]
-            new_val = current_val + bb_val
-            tl.store(flat_2d_array_ptr + current_k, new_val)
-            
-            # Update k for next iteration: k += j+1
-            current_k += global_j + 1
+        # Load bb values: bb[j][i]
+        bb_offsets = j_offsets * LEN_2D + i
+        bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask, other=0.0)
+        
+        # Load current flat_2d_array values
+        flat_vals = tl.load(flat_2d_array_ptr + current_k_offsets, mask=j_mask, other=0.0)
+        
+        # Add bb values
+        new_vals = flat_vals + bb_vals
+        
+        # Store back
+        tl.store(flat_2d_array_ptr + current_k_offsets, new_vals, mask=j_mask)
 
-def s141_triton(bb, flat_2d_array, len_2d):
-    # Get dimensions
-    N = len_2d
+def s141_triton(bb, flat_2d_array):
+    LEN_2D = bb.shape[0]
     
-    # Define block size
-    BLOCK_SIZE = 32
+    # Launch kernel with one thread block per i
+    BLOCK_SIZE = 64
+    grid = (LEN_2D,)
     
-    # Calculate grid size for outer i loop
-    grid = (triton.cdiv(N, 1),)
-    
-    # Launch kernel with one thread per i value
     s141_kernel[grid](
-        bb, flat_2d_array, N, BLOCK_SIZE=BLOCK_SIZE
+        bb, flat_2d_array, 
+        LEN_2D, BLOCK_SIZE
     )
-    
-    return flat_2d_array
 ```

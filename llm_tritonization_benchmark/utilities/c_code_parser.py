@@ -73,9 +73,12 @@ def _extract_arrays(code: str) -> Dict[str, str]:
     # Find arrays on left side of assignment (written)
     # Pattern: array[...] = or array[...][...] =
     write_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\[[^\]]*\](?:\s*\[[^\]]*\])?\s*='
+    # Pattern for compound assignments (+=, -=, etc.) - these are always read-write
+    compound_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\[[^\]]*\](?:\s*\[[^\]]*\])?\s*[+\-*/%&|^]='
 
     all_arrays = set(re.findall(array_pattern, code))
     written_arrays = set(re.findall(write_pattern, code))
+    compound_arrays = set(re.findall(compound_pattern, code))  # Always rw
 
     # Filter out common non-array identifiers
     exclude = {'int', 'float', 'double', 'real_t', 'for', 'if', 'while', 'sizeof'}
@@ -85,7 +88,10 @@ def _extract_arrays(code: str) -> Dict[str, str]:
     # Determine access mode for each array
     arrays = {}
     for arr in all_arrays:
-        if arr in written_arrays:
+        if arr in compound_arrays:
+            # Compound assignment (+=, -=, etc.) is always read-write
+            arrays[arr] = 'rw'
+        elif arr in written_arrays:
             # Check if also read (appears on RHS or in conditions)
             # Remove the write occurrences and check if array still appears
             code_without_writes = re.sub(

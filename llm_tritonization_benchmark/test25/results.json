@@ -335,13 +335,14 @@
   "s1279": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 3.38e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.218281,
+      "triton_time_ms": 0.094435,
+      "speedup": 2.311435
+    }
   },
   "s128": {
     "c_ref_available": true,
@@ -406,24 +407,26 @@
   "s1351": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "o attribute 'shape'\nTesting N=  1000... ERROR: 'int' object has no attribute 'shape'\nTesting N= 10000... ERROR: 'int' object has no attribute 'shape'\n======================================================================\nSome tests FAILED!\n======================================================================\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s1351/test_s1351_correctness.py\", line 6"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.046963,
+      "triton_time_ms": 0.078032,
+      "speedup": 0.601843
+    }
   },
   "s141": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "compilation",
-      "message": "(f\"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`\")\nValueError: Unsupported ptr type triton.language.int64 in `tl.load`\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s141/test_s141_correctness.py\", line 67, in test_correctness\n    triton_result = s141_triton(**tr_kwargs)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^\n"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.096266,
+      "triton_time_ms": 0.070066,
+      "speedup": 1.373941
+    }
   },
   "s1421": {
     "c_ref_available": true,
@@ -440,24 +443,26 @@
   "s151": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "==========================\nTesting N=   100... ERROR: 'int' object has no attribute 'shape'\nTesting N=  1000... ERROR: 'int' object has no attribute 'shape'\nTesting N= 10000... ERROR: 'int' object has no attribute 'shape'\n======================================================================\nSome tests FAILED!\n======================================================================\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benc"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.03639,
+      "triton_time_ms": 0.06779,
+      "speedup": 0.536811
+    }
   },
   "s152": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "'int' object has no attribute 'shape'\nTesting N=  1000... ERROR: 'int' object has no attribute 'shape'\nTesting N= 10000... ERROR: 'int' object has no attribute 'shape'\n======================================================================\nSome tests FAILED!\n======================================================================\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s152/test_s152_correct"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.119125,
+      "triton_time_ms": 0.11946,
+      "speedup": 0.997195
+    }
   },
   "s161": {
     "c_ref_available": true,
@@ -546,13 +551,14 @@
   "s176": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 3.73e+28"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 130.801762,
+      "triton_time_ms": 0.588007,
+      "speedup": 222.449231
+    }
   },
   "s2101": {
     "c_ref_available": true,
@@ -620,24 +626,26 @@
   "s221": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.14e+01"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.150009,
+      "triton_time_ms": 1.609877,
+      "speedup": 0.09318
+    }
   },
   "s222": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.96e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.120506,
+      "triton_time_ms": 2.513436,
+      "speedup": 0.047945
+    }
   },
   "s2233": {
     "c_ref_available": true,
@@ -729,13 +737,14 @@
   "s235": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 5.90e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.266966,
+      "triton_time_ms": 0.098071,
+      "speedup": 2.722175
+    }
   },
   "s241": {
     "c_ref_available": true,
@@ -923,13 +932,14 @@
   "s2710": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 5.07e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.177636,
+      "triton_time_ms": 0.123172,
+      "speedup": 1.442179
+    }
   },
   "s2711": {
     "c_ref_available": true,
@@ -1024,13 +1034,17 @@
   "s277": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.33e+00"
+      "type": "compilation",
+      "message": "ck (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s277/test_s277_correctness.py\", line 75, in test_correctness\n    triton_result = s277_triton(**tr_kwargs)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test25/llm_triton/s277/attempt1.py\", line 48, in s277_triton\n    s277_kernel[grid](\n  File \"/home/qinxiao/anaconda3/lib"
     },
-    "benchmark": null
+    "benchmark": {
+      "c_ref_time_ms": 0.227456,
+      "triton_time_ms": 3.573335,
+      "speedup": 0.063654
+    }
   },
   "s278": {
     "c_ref_available": true,
@@ -1248,13 +1262,14 @@
   "s317": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "runtime",
-      "message": "======================================================================\nCorrectness Testing: s317\nComparing Triton vs TSVC C reference\n======================================================================\nTesting N=   100... ERROR: name 'a_c' is not defined\nTesting N=  1000... ERROR: name 'a_c' is not defined\nTesting N= 10000... ERROR: name 'a_c' is not defined\n======================================================================\nSome tests FAILED!\n=============================================="
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.006708,
+      "triton_time_ms": 0.072852,
+      "speedup": 0.092084
+    }
   },
   "s318": {
     "c_ref_available": true,
@@ -1493,13 +1508,17 @@
   "s4116": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
+    "test_passed": true,
+    "attempts": 2,
     "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 5.52e+00"
+      "type": "compilation",
+      "message": "e <[1], int32> in `tl.store`\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s4116/test_s4116_correctness.py\", line 69, in test_correctness\n    triton_result = s4116_triton(**tr_kwargs)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test25/l"
     },
-    "benchmark": null
+    "benchmark": {
+      "c_ref_time_ms": 0.047399,
+      "triton_time_ms": 0.116135,
+      "speedup": 0.40814
+    }
   },
   "s4117": {
     "c_ref_available": true,
@@ -1594,13 +1613,14 @@
   "s441": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 10,
-    "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.60e+00"
-    },
-    "benchmark": null
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.204376,
+      "triton_time_ms": 0.10419,
+      "speedup": 1.961568
+    }
   },
   "s442": {
     "c_ref_available": true,

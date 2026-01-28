@@ -6,31 +6,9 @@ Your last attempt failed with a compilation or runtime error:
 **Error type**: runtime
 **Error message**:
 ```
-======================================================================
-Correctness Testing: s317
-Comparing Triton vs TSVC C reference
-======================================================================
-Testing N=   100... ERROR: name 'a_c' is not defined
-Testing N=  1000... ERROR: name 'a_c' is not defined
-Testing N= 10000... ERROR: name 'a_c' is not defined
-======================================================================
-Some tests FAILED!
-======================================================================
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s317/test_s317_correctness.py", line 79, in test_correctness
-    c_arr = c_result if isinstance(c_result, np.ndarray) else a_c
-                                                              ^^^
-NameError: name 'a_c' is not defined
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s317/test_s317_correctness.py", line 79, in test_correctness
-    c_arr = c_result if isinstance(c_result, np.ndarray) else a_c
-                                                              ^^^
-NameError: name 'a_c' is not defined
-Traceback (most recent call last):
-  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s317/test_s317_correctness.py", line 79, in test_correctness
-    c_arr = c_result if isinstance(c_result, np.ndarray) else a_c
-                                                              ^^^
-NameError: name 'a_c' is not defined
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s317/test_s317_correctness.py", line 65
+    c_val = float(c_result) if c_result is not None else 0.0
+IndentationError: unexpected indent
 
 ```
 
@@ -46,25 +24,48 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s317_kernel():
-    q = 1.0
-    for i in range(16000):  # LEN_1D/2 where LEN_1D is typically 32000
-        q *= 0.99
-    tl.store(tl.program_id(0) + tl.zeros([1], dtype=tl.float32), q)
+def s317_kernel(output_ptr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    
+    if pid == 0:
+        # This is a simple scalar computation: q = 0.99^(LEN_1D/2)
+        # Since LEN_1D is typically 32000, LEN_1D/2 = 16000
+        # We'll compute this directly
+        q = 1.0
+        # Since we can't use loops efficiently in Triton for this case,
+        # we'll use the mathematical equivalent: q = 0.99^16000
+        # But we need to get LEN_1D/2 from somewhere
+        # We'll pass it as a parameter through the grid
+        iterations = BLOCK_SIZE  # This will be set to LEN_1D/2
+        
+        # Compute 0.99^iterations using repeated multiplication in blocks
+        factor = 0.99
+        
+        # Use a more efficient approach with powers
+        # q = factor^iterations
+        log_factor = tl.log(factor)
+        log_q = log_factor * iterations
+        q = tl.exp(log_q)
+        
+        tl.store(output_ptr, q)
 
-def s317_triton(n):
-    # Calculate LEN_1D/2 from input parameter n
-    half_len = n // 2
+def s317_triton():
+    # Create a simple scalar output
+    output = torch.zeros(1, dtype=torch.float32, device='cuda')
     
-    # Create output tensor
-    result = torch.zeros(1, dtype=torch.float32, device='cuda')
+    # We need LEN_1D/2 - using a typical value of 32000/2 = 16000
+    # In a real implementation, this would be passed as a parameter
+    LEN_1D = 32000
+    iterations = LEN_1D // 2
     
-    # Simple calculation without kernel since this is just a mathematical formula
-    # q = 0.99^(LEN_1D/2)
-    q = 0.99 ** half_len
-    result[0] = q
+    # Launch kernel with single thread
+    grid = (1,)
+    s317_kernel[grid](
+        output,
+        BLOCK_SIZE=iterations
+    )
     
-    return q
+    return output.item()
 ```
 
 
@@ -136,7 +137,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s317_triton(n):
+def s317_triton():
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -201,20 +202,31 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s317_kernel(output_ptr, n_half):
-    q = 1.0
-    for i in range(n_half):
-        q *= 0.99
-    
+def s317_kernel(output_ptr, iterations):
     pid = tl.program_id(0)
+    
     if pid == 0:
+        # Compute q = 0.99^iterations using logarithms for numerical stability
+        factor = 0.99
+        log_factor = tl.log(factor)
+        log_q = log_factor * iterations
+        q = tl.exp(log_q)
+        
         tl.store(output_ptr, q)
 
-def s317_triton(n):
-    half_len = n // 2
+def s317_triton():
+    # Create a simple scalar output
+    output = torch.zeros(1, dtype=torch.float32, device='cuda')
     
-    result = torch.zeros(1, dtype=torch.float32, device='cuda')
+    # Use a typical value for LEN_1D since no arrays are passed
+    LEN_1D = 32000
+    iterations = LEN_1D // 2
     
-    s317_kernel[(1,)](result, half_len)
+    # Launch kernel with single thread
+    grid = (1,)
+    s317_kernel[grid](
+        output,
+        iterations
+    )
     
-    return result[0].item()
+    return output.item()
