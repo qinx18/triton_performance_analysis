@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s2275_c
-    from test25.llm_triton.s2275.attempt2 import s2275_triton
+    from test26.llm_triton.s2275.attempt4 import s2275_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -53,12 +53,11 @@ def benchmark():
     c = torch.randn(N, device='cuda', dtype=torch.float32)
     cc = torch.randn(N, N, device='cuda', dtype=torch.float32)
     d = torch.randn(N, device='cuda', dtype=torch.float32)
-    len_2d = 1
 
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {"a": a.cpu().numpy().copy(), "aa": aa.cpu().numpy().copy(), "b": b.cpu().numpy().copy(), "bb": bb.cpu().numpy().copy(), "c": c.cpu().numpy().copy(), "cc": cc.cpu().numpy().copy(), "d": d.cpu().numpy().copy()}
     tr_tensors = {"a": a.clone(), "aa": aa.clone(), "b": b.clone(), "bb": bb.clone(), "c": c.clone(), "cc": cc.clone(), "d": d.clone()}
-    scalars = {"len_2d": len_2d}
+    scalars = {}
 
     c_kwargs = build_kwargs(s2275_c, c_arrays, scalars)
     tr_kwargs = build_kwargs(s2275_triton, tr_tensors, scalars)

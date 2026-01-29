@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s421_c
-    from test25.llm_triton.s421.attempt6 import s421_triton
+    from test26.llm_triton.s421.attempt2 import s421_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -81,16 +81,19 @@ def test_correctness():
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # Array comparison - C function modifies arrays in-place or returns array
-                c_arr = c_result if isinstance(c_result, np.ndarray) else xx_c
-                xx_c_torch = torch.from_numpy(c_arr).cuda()
-                max_error = torch.max(torch.abs(xx_c_torch - xx_tr)).item()
+                # Array comparison - compare primary output array directly
+                # Using xx which is the first output array (rw or w mode)
+                c_arr = xx_c
+                c_arr_flat = c_arr.flatten()
+                c_arr_torch = torch.from_numpy(c_arr_flat.copy()).cuda()
+                tr_arr = xx_tr.flatten()
+                max_error = torch.max(torch.abs(c_arr_torch - tr_arr)).item()
                 is_scalar_comparison = False
 
             if is_scalar_comparison:
                 passed = max_error < 0.001 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 0.001)
             else:
-                passed = max_error < 0.001 or torch.allclose(xx_c_torch, xx_tr, rtol=0.001, atol=0.001)
+                passed = max_error < 0.001 or torch.allclose(c_arr_torch, tr_arr, rtol=0.001, atol=0.001)
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

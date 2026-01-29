@@ -1785,7 +1785,7 @@ def s2233_c(aa, bb, cc, len_2d=None):
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
     _lib.s2233_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
-    return aa.reshape(aa_shape)
+    return aa.reshape(aa_shape), bb.reshape(aa_shape)
 def s2244_c(a, b, c, e):
     """C reference for s2244"""
     a = np.ascontiguousarray(a, dtype=np.float32)
@@ -1845,7 +1845,7 @@ def s233_c(aa, bb, cc, len_2d=None):
     cc = np.ascontiguousarray(cc.flatten(), dtype=np.float32)
     n = len(aa)
     _lib.s233_kernel(_to_ptr(aa), _to_ptr(bb), _to_ptr(cc), n, len_2d if len_2d else aa_shape[0])
-    return aa.reshape(aa_shape)
+    return aa.reshape(aa_shape), bb.reshape(aa_shape)
 def s235_c(a, aa, b, bb, c, len_2d=None):
     """C reference for s235"""
     a = np.ascontiguousarray(a, dtype=np.float32)
@@ -2434,10 +2434,15 @@ def s424_c(a, flat_2d_array, xx):
     """C reference for s424"""
     a = np.ascontiguousarray(a, dtype=np.float32)
     flat_2d_array = np.ascontiguousarray(flat_2d_array, dtype=np.float32)
-    xx = np.ascontiguousarray(xx, dtype=np.float32)
     n = len(a)
-    _lib.s424_kernel(_to_ptr(a), _to_ptr(flat_2d_array), _to_ptr(xx), n)
-    return xx
+    # xx aliases flat_2d_array + vl (vl=63) in the original C code
+    vl = 63
+    xx_ptr = ctypes.cast(
+        ctypes.c_void_p(flat_2d_array.ctypes.data + vl * flat_2d_array.itemsize),
+        ctypes.POINTER(ctypes.c_float)
+    )
+    _lib.s424_kernel(_to_ptr(a), _to_ptr(flat_2d_array), xx_ptr, n)
+    return flat_2d_array
 
 def s431_c(a, b, k=1):
     """C reference for s431"""

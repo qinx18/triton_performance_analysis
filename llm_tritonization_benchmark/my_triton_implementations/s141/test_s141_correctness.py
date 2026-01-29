@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s141_c
-    from test25.llm_triton.s141.attempt1 import s141_triton
+    from test26.llm_triton.s141.attempt1 import s141_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -79,11 +79,11 @@ def test_correctness():
                 is_scalar_comparison = True
             else:
                 # Array comparison - compare primary output array directly
-                # Using bb which is the first output array (rw or w mode)
-                c_arr = bb_c
+                # Using flat_2d_array which is the first output array (rw or w mode)
+                c_arr = flat_2d_array_c
                 c_arr_flat = c_arr.flatten()
                 c_arr_torch = torch.from_numpy(c_arr_flat.copy()).cuda()
-                tr_arr = bb_tr.flatten()
+                tr_arr = flat_2d_array_tr.flatten()
                 max_error = torch.max(torch.abs(c_arr_torch - tr_arr)).item()
                 is_scalar_comparison = False
 

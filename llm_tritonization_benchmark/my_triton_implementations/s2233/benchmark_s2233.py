@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s2233_c
-    from test25.llm_triton.s2233.attempt1 import s2233_triton
+    from test26.llm_triton.s2233.attempt1 import s2233_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -49,7 +49,7 @@ def benchmark():
     aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
     bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
     cc = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
-    len_2d = 1
+    len_2d = N
 
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {"aa": aa.cpu().numpy().copy(), "bb": bb.cpu().numpy().copy(), "cc": cc.cpu().numpy().copy()}

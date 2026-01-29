@@ -124,6 +124,14 @@ except ImportError:
     analyze_kernel_convolution = None
     build_convolution_instructions = None
 
+try:
+    from compute_loop_interchange import analyze_kernel_loop_interchange, format_interchange_for_prompt
+    HAS_LOOP_INTERCHANGE_ANALYSIS = True
+except ImportError:
+    HAS_LOOP_INTERCHANGE_ANALYSIS = False
+    analyze_kernel_loop_interchange = None
+    format_interchange_for_prompt = None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 
@@ -267,10 +275,6 @@ def enrich_func_spec(func_spec: dict) -> dict:
                 sig = inspect.signature(c_func)
                 array_names = set(enriched['arrays'].keys())
                 for param_name, param in sig.parameters.items():
-                    # Skip parameters with default values (like len_2d=None)
-                    # These are optional and can be derived from array shapes
-                    if param.default is not inspect.Parameter.empty:
-                        continue
                     if param_name not in array_names and param_name not in scalar_params:
                         scalar_params[param_name] = 'scalar'
         except ImportError:
@@ -419,10 +423,10 @@ def get_exact_function_signature(kernel_name: str) -> Optional[str]:
         if hasattr(tsvc_all_reference, c_func_name):
             c_func = getattr(tsvc_all_reference, c_func_name)
             sig = inspect.signature(c_func)
-            # Only include required parameters (no default value)
-            # Optional params like len_2d=None can be derived from array shapes
-            params = [name for name, param in sig.parameters.items()
-                      if param.default is inspect.Parameter.empty]
+            # Include all parameters - scalar params like n1, n3, len_2d must be
+            # included so the LLM doesn't hardcode them (len_2d differs from array
+            # shape when has_offset is True)
+            params = [name for name, param in sig.parameters.items()]
             return ", ".join(params) if params else None
     except ImportError:
         pass
@@ -854,6 +858,30 @@ def build_convolution_pattern_instructions(kernel_name: str, conv_result: dict) 
     return ""
 
 
+def load_loop_interchange_analysis(kernel_name: str) -> Optional[dict]:
+    """Load loop interchange analysis for a kernel."""
+    if not HAS_LOOP_INTERCHANGE_ANALYSIS or analyze_kernel_loop_interchange is None:
+        return None
+
+    try:
+        return analyze_kernel_loop_interchange(kernel_name)
+    except Exception:
+        return None
+
+
+def build_loop_interchange_instructions(kernel_name: str, interchange_result: dict) -> str:
+    """Build specific instructions for handling loop interchange requirements."""
+    if not interchange_result or not interchange_result.get('applicable'):
+        return ""
+
+    if format_interchange_for_prompt:
+        formatted = format_interchange_for_prompt(interchange_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
 def detect_identity_matrix_pattern(c_code: str, seq_dim: str, par_dim: str) -> bool:
     """
     Detect identity matrix initialization pattern:
@@ -1051,7 +1079,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       crossing_threshold_section: str = "", loop_unrolling_section: str = "",
                       early_exit_section: str = "", statement_reordering_section: str = "",
                       scalar_expansion_section: str = "", reduction_section: str = "",
-                      convolution_section: str = "") -> str:
+                      convolution_section: str = "", interchange_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -1084,7 +1112,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
+{helper_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{interchange_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -1096,7 +1124,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 Please generate a complete Triton implementation that:
 1. Includes a @triton.jit kernel function named `{kernel_name}_kernel`
 2. Includes a Python wrapper function named `{kernel_name}_triton`
-3. The wrapper should accept ONLY the tensor arrays used in the computation
+3. The wrapper should accept the tensor arrays and scalar parameters shown in the required signature
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
@@ -1274,8 +1302,10 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     reduction_section = build_reduction_type_instructions(kernel_name, reduction_result)
     convolution_result = load_convolution_analysis(kernel_name)
     convolution_section = build_convolution_pattern_instructions(kernel_name, convolution_result)
+    interchange_result = load_loop_interchange_analysis(kernel_name)
+    interchange_section = build_loop_interchange_instructions(kernel_name, interchange_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section, interchange_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
@@ -1319,6 +1349,146 @@ RESPONSE:
 # The infrastructure now uses the original tsvc.c functions (compiled as C library)
 # as the correctness reference and performance baseline.
 # See c_reference/tsvc_all_reference.py for the C function wrappers.
+
+
+# Checksum mapping: which arrays to sum for each function, parsed from TSVC_2/src/core/common.c calc_checksum()
+# Format: func_name -> list of (array_name, is_2d) tuples to sum
+# For 2D arrays like aa, bb, cc: is_2d=True; for 1D arrays: is_2d=False
+# Special cases: 'flat_2d_array' for flattened 2D, 'xx_half' for sum of first half of xx
+CHECKSUM_MAP = {
+    's000': [('a', False)],
+    's111': [('a', False)],
+    's1111': [('a', False)],
+    's112': [('a', False)],
+    's1112': [('a', False)],
+    's113': [('a', False)],
+    's1113': [('a', False)],
+    's114': [('aa', True)],
+    's115': [('a', False)],
+    's1115': [('aa', True)],
+    's116': [('a', False)],
+    's118': [('a', False)],
+    's119': [('aa', True)],
+    's1119': [('aa', True)],
+    's121': [('a', False)],
+    's122': [('a', False)],
+    's123': [('a', False)],
+    's124': [('a', False)],
+    's125': [('flat_2d_array', False)],
+    's126': [('bb', True)],
+    's127': [('a', False)],
+    's128': [('a', False), ('b', False)],
+    's131': [('a', False)],
+    's132': [('aa', True)],
+    's141': [('flat_2d_array', False)],
+    's151': [('a', False)],
+    's152': [('a', False)],
+    's161': [('a', False), ('c', False)],
+    's1161': [('a', False), ('c', False)],
+    's162': [('a', False)],
+    's171': [('a', False)],
+    's172': [('a', False)],
+    's173': [('a', False)],
+    's174': [('a', False)],
+    's175': [('a', False)],
+    's176': [('a', False)],
+    's211': [('a', False), ('b', False)],
+    's212': [('a', False), ('b', False)],
+    's1213': [('a', False), ('b', False)],
+    's221': [('a', False), ('b', False)],
+    's1221': [('a', False), ('b', False)],
+    's222': [('a', False), ('b', False)],
+    's231': [('aa', True)],
+    's232': [('aa', True)],
+    's1232': [('aa', True)],
+    's233': [('aa', True), ('bb', True)],
+    's2233': [('aa', True), ('bb', True)],
+    's235': [('a', False), ('b', False)],
+    's241': [('a', False), ('b', False)],
+    's242': [('a', False)],
+    's243': [('a', False), ('b', False)],
+    's244': [('a', False), ('b', False)],
+    's1244': [('a', False), ('b', False)],
+    's2244': [('a', False), ('b', False)],
+    's251': [('a', False)],
+    's1251': [('a', False)],
+    's2251': [('a', False)],
+    's3251': [('a', False)],
+    's252': [('a', False)],
+    's253': [('a', False), ('c', False)],
+    's254': [('a', False)],
+    's255': [('a', False)],
+    's256': [('a', False), ('aa', True)],
+    's257': [('a', False), ('aa', True)],
+    's258': [('b', False), ('e', False)],
+    's261': [('a', False), ('c', False)],
+    's271': [('a', False)],
+    's272': [('a', False), ('b', False)],
+    's273': [('a', False), ('b', False), ('c', False)],
+    's274': [('a', False), ('b', False)],
+    's275': [('aa', True)],
+    's2275': [('aa', True)],
+    's276': [('a', False)],
+    's277': [('a', False), ('b', False)],
+    's278': [('a', False), ('b', False), ('c', False)],
+    's279': [('a', False), ('b', False), ('c', False)],
+    's1279': [('a', False), ('b', False), ('c', False)],
+    's2710': [('a', False), ('b', False), ('c', False)],
+    's2711': [('a', False)],
+    's2712': [('a', False)],
+    's281': [('a', False), ('b', False)],
+    's1281': [('a', False), ('b', False)],
+    's291': [('a', False)],
+    's292': [('a', False)],
+    's293': [('a', False)],
+    's2101': [('aa', True)],
+    's2102': [('aa', True)],
+    's2111': [('aa', True)],
+    's311': [('a', False)],
+    's31111': [('a', False)],
+    's321': [('a', False)],
+    's322': [('a', False)],
+    's323': [('a', False), ('b', False)],
+    's341': [('a', False)],
+    's342': [('a', False)],
+    's343': [('flat_2d_array', False)],
+    's351': [('a', False)],
+    's1351': [('a', False)],
+    's353': [('a', False)],
+    's421': [('xx', False)],
+    's1421': [('xx_half', False)],
+    's422': [('xx', False)],
+    's423': [('flat_2d_array', False)],
+    's424': [('flat_2d_array', False)],
+    's431': [('a', False)],
+    's441': [('a', False)],
+    's442': [('a', False)],
+    's443': [('a', False)],
+    's451': [('a', False)],
+    's452': [('a', False)],
+    's453': [('a', False)],
+    's471': [('x', False), ('b', False)],
+    's481': [('a', False)],
+    's482': [('a', False)],
+    's491': [('a', False)],
+    's4112': [('a', False)],
+    's4113': [('a', False)],
+    's4114': [('a', False)],
+    's4117': [('a', False)],
+    's4121': [('a', False)],
+    'va': [('a', False)],
+    'vag': [('a', False)],
+    'vas': [('a', False)],
+    'vif': [('a', False)],
+    'vpv': [('a', False)],
+    'vtv': [('a', False)],
+    'vpvtv': [('a', False)],
+    'vpvts': [('a', False)],
+    'vpvpv': [('a', False)],
+    'vtvtv': [('a', False)],
+    'vsumr': [('a', False)],
+    'vbor': [('x', False)],
+}
 
 
 def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1) -> str:
@@ -1408,13 +1578,32 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
         triton_clones.append(f"            {arr}_tr = {arr}.clone()")
     triton_clone_str = '\n'.join(triton_clones) if triton_clones else "            pass"
 
-    # Generate unified comparison that detects at runtime whether to compare scalars or arrays
-    # This removes dependency on database flags - the comparison type is determined by actual return types
+    # Generate checksum-based comparison (matching TSVC_2 calc_checksum approach)
+    # For scalar returns, compare values directly. For array outputs, compare checksums.
     primary_arr = output_arrays[0] if output_arrays else (array_names[0] if array_names else None)
 
-    # Build dict string for dynamic array matching
-    array_dict_entries = [f"'{arr}': {arr}_tr" for arr in array_names]
-    array_dict_str = ', '.join(array_dict_entries)
+    # Determine checksum arrays for this function
+    checksum_arrays = CHECKSUM_MAP.get(func_name, None)
+    if checksum_arrays is None:
+        # Fallback: sum all output arrays (rw/w mode)
+        checksum_arrays = [(arr, has_2d and len(arr) == 2 and arr[0] == arr[1]) for arr in output_arrays]
+
+    # Build checksum computation code for C side and Triton side
+    # C wrapper returns modified arrays; for array functions c_result contains the return value
+    # We need to compute checksums from the c_result (returned arrays) and triton tensors
+    c_checksum_parts = []
+    tr_checksum_parts = []
+    for arr_name, is_2d in checksum_arrays:
+        if arr_name == 'xx_half':
+            # Special case: sum first half of xx
+            c_checksum_parts.append(f"float(np.sum(c_tensors_after['{arr_name.replace('_half', '')}'][:len(c_tensors_after['{arr_name.replace('_half', '')}'])//2]))")
+            tr_checksum_parts.append(f"float(torch.sum(tr_tensors_after['{arr_name.replace('_half', '')}'][:tr_tensors_after['{arr_name.replace('_half', '')}'].numel()//2]).item())")
+        else:
+            c_checksum_parts.append(f"float(np.sum(c_tensors_after['{arr_name}']))")
+            tr_checksum_parts.append(f"float(torch.sum(tr_tensors_after['{arr_name}']).item())")
+
+    c_checksum_expr = ' + '.join(c_checksum_parts) if c_checksum_parts else '0.0'
+    tr_checksum_expr = ' + '.join(tr_checksum_parts) if tr_checksum_parts else '0.0'
 
     if primary_arr is None:
         # No arrays at all - pure scalar function, only compare return values
@@ -1431,7 +1620,11 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
 
         passed_check_str = f"""passed = max_error < {atol} or (abs(c_val) > 1e-6 and max_error / abs(c_val) < {rtol})"""
     else:
-        compare_str = f"""            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
+        compare_str = f"""            # Collect post-execution arrays for checksum
+            c_tensors_after = {{{', '.join([f'"{arr}": {arr}_c' for arr in array_names])}}}
+            tr_tensors_after = {{{', '.join([f'"{arr}": {arr}_tr' for arr in array_names])}}}
+
+            # Runtime detection: compare scalars if C returns scalar, otherwise use checksum
             if isinstance(c_result, (int, float)):
                 # Scalar return - compare values directly
                 c_val = float(c_result)
@@ -1444,19 +1637,36 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # Array comparison - compare primary output array directly
-                # Using {primary_arr} which is the first output array (rw or w mode)
-                c_arr = {primary_arr}_c
-                c_arr_flat = c_arr.flatten()
-                c_arr_torch = torch.from_numpy(c_arr_flat.copy()).cuda()
-                tr_arr = {primary_arr}_tr.flatten()
-                max_error = torch.max(torch.abs(c_arr_torch - tr_arr)).item()
+                # C wrapper returned array(s) - update c_tensors_after with return value
+                if isinstance(c_result, np.ndarray):
+                    # Single array return: map back to the primary output array
+                    c_tensors_after['{primary_arr}'] = c_result
+                elif isinstance(c_result, tuple):
+                    # Multiple array return: map to output arrays in order
+                    for i, out_arr in enumerate({repr([arr for arr in output_arrays])}):
+                        if i < len(c_result) and isinstance(c_result[i], np.ndarray):
+                            c_tensors_after[out_arr] = c_result[i]
+
+                # Checksum-based comparison (matches TSVC_2 calc_checksum)
+                c_checksum = {c_checksum_expr}
+                tr_checksum = {tr_checksum_expr}
+                # Handle inf/nan: if both are same inf, treat as match
+                import math
+                if math.isinf(c_checksum) and math.isinf(tr_checksum) and (c_checksum > 0) == (tr_checksum > 0):
+                    max_error = 0.0
+                elif math.isnan(c_checksum) or math.isnan(tr_checksum):
+                    max_error = float('inf')
+                else:
+                    max_error = abs(c_checksum - tr_checksum)
+                    # Use relative tolerance for large checksums
+                    if abs(c_checksum) > 1e-6:
+                        max_error = max_error / abs(c_checksum)
                 is_scalar_comparison = False"""
 
         passed_check_str = f"""if is_scalar_comparison:
                 passed = max_error < {atol} or (abs(c_val) > 1e-6 and max_error / abs(c_val) < {rtol})
             else:
-                passed = max_error < {atol} or torch.allclose(c_arr_torch, tr_arr, rtol={rtol}, atol={atol})"""
+                passed = max_error < {atol}"""
 
     available_arrays = array_names
     available_scalars = all_scalar_names
@@ -1481,7 +1691,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test25.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test27.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1572,12 +1782,15 @@ def run_test(func_name: str, test_file: Path) -> Tuple[bool, dict]:
             - max_error: (for numerical errors) the max error value
     """
     try:
+        env = os.environ.copy()
+        env['MKL_THREADING_LAYER'] = 'GNU'
         result = subprocess.run(
             [sys.executable, str(test_file)],
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=Path.cwd()
+            cwd=Path.cwd(),
+            env=env
         )
 
         stdout = result.stdout
@@ -1722,7 +1935,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test25.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test27.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -1874,12 +2087,15 @@ def run_benchmark(func_name: str, benchmark_file: Path) -> Optional[dict]:
         dict with 'c_ref_time_ms', 'triton_time_ms', 'speedup', or None if failed
     """
     try:
+        env = os.environ.copy()
+        env['MKL_THREADING_LAYER'] = 'GNU'
         result = subprocess.run(
             [sys.executable, str(benchmark_file)],
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout for benchmarking
-            cwd=Path.cwd()
+            cwd=Path.cwd(),
+            env=env
         )
 
         stdout = result.stdout
@@ -1913,7 +2129,7 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"  Offset: {func_spec['has_offset']}, Conditional: {func_spec['has_conditional']}, Reduction: {func_spec['has_reduction']}")
     print(f"{'=' * 70}")
 
-    test_dir = Path("test25")
+    test_dir = Path("test27")
     llm_triton_dir = test_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
@@ -2172,7 +2388,7 @@ def main():
 
     # Save results to JSON file
     import json
-    results_file = Path("test25") / "results.json"
+    results_file = Path("test27") / "results.json"
 
     # Load existing results if file exists
     existing_results = {}
@@ -2203,7 +2419,7 @@ def main():
         }
 
     # Save updated results
-    Path("test25").mkdir(exist_ok=True)
+    Path("test27").mkdir(exist_ok=True)
     with open(results_file, 'w') as f:
         json.dump(existing_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")

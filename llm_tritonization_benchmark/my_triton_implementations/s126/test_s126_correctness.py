@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s126_c
-    from test25.llm_triton.s126.attempt1 import s126_triton
+    from test26.llm_triton.s126.attempt2 import s126_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -49,7 +49,6 @@ def test_correctness():
             cc = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
             flat_2d_array = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)
             k = 0
-            len_2d = 1
 
             bb_c = bb.cpu().numpy().copy()
             cc_c = cc.cpu().numpy().copy()
@@ -61,7 +60,7 @@ def test_correctness():
 
             c_tensors = {"bb": bb_c, "cc": cc_c, "flat_2d_array": flat_2d_array_c}
             tr_tensors = {"bb": bb_tr, "cc": cc_tr, "flat_2d_array": flat_2d_array_tr}
-            scalars = {"k": k, "len_2d": len_2d}
+            scalars = {"k": k}
 
             c_kwargs = build_kwargs(s126_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s126_triton, tr_tensors, scalars)
@@ -69,7 +68,11 @@ def test_correctness():
             c_result = s126_c(**c_kwargs)
             triton_result = s126_triton(**tr_kwargs)
 
-            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
+            # Collect post-execution arrays for checksum
+            c_tensors_after = {"bb": bb_c, "cc": cc_c, "flat_2d_array": flat_2d_array_c}
+            tr_tensors_after = {"bb": bb_tr, "cc": cc_tr, "flat_2d_array": flat_2d_array_tr}
+
+            # Runtime detection: compare scalars if C returns scalar, otherwise use checksum
             if isinstance(c_result, (int, float)):
                 # Scalar return - compare values directly
                 c_val = float(c_result)
@@ -82,16 +85,29 @@ def test_correctness():
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # Array comparison - C function modifies arrays in-place or returns array
-                c_arr = c_result if isinstance(c_result, np.ndarray) else bb_c
-                bb_c_torch = torch.from_numpy(c_arr).cuda()
-                max_error = torch.max(torch.abs(bb_c_torch - bb_tr)).item()
+                # C wrapper returned array(s) - update c_tensors_after with return value
+                if isinstance(c_result, np.ndarray):
+                    # Single array return: map back to the primary output array
+                    c_tensors_after['bb'] = c_result
+                elif isinstance(c_result, tuple):
+                    # Multiple array return: map to output arrays in order
+                    for i, out_arr in enumerate(['bb']):
+                        if i < len(c_result) and isinstance(c_result[i], np.ndarray):
+                            c_tensors_after[out_arr] = c_result[i]
+
+                # Checksum-based comparison (matches TSVC_2 calc_checksum)
+                c_checksum = float(np.sum(c_tensors_after['bb']))
+                tr_checksum = float(torch.sum(tr_tensors_after['bb']).item())
+                max_error = abs(c_checksum - tr_checksum)
+                # Use relative tolerance for large checksums
+                if abs(c_checksum) > 1e-6:
+                    max_error = max_error / abs(c_checksum)
                 is_scalar_comparison = False
 
             if is_scalar_comparison:
                 passed = max_error < 0.001 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 0.001)
             else:
-                passed = max_error < 0.001 or torch.allclose(bb_c_torch, bb_tr, rtol=0.001, atol=0.001)
+                passed = max_error < 0.001
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:
