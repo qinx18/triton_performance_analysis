@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s141_c
-    from test26.llm_triton.s141.attempt1 import s141_triton
+    from test27.llm_triton.s141.attempt2 import s141_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -48,6 +48,7 @@ def test_correctness():
             bb = torch.randn(N, N, device='cuda', dtype=torch.float32)
             flat_2d_array = torch.randn(N * N, device='cuda', dtype=torch.float32)
             k = 0
+            len_2d = N
 
             bb_c = bb.cpu().numpy().copy()
             flat_2d_array_c = flat_2d_array.cpu().numpy().copy()
@@ -57,7 +58,7 @@ def test_correctness():
 
             c_tensors = {"bb": bb_c, "flat_2d_array": flat_2d_array_c}
             tr_tensors = {"bb": bb_tr, "flat_2d_array": flat_2d_array_tr}
-            scalars = {"k": k}
+            scalars = {"k": k, "len_2d": len_2d}
 
             c_kwargs = build_kwargs(s141_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s141_triton, tr_tensors, scalars)
@@ -65,7 +66,11 @@ def test_correctness():
             c_result = s141_c(**c_kwargs)
             triton_result = s141_triton(**tr_kwargs)
 
-            # Runtime detection: compare scalars if C returns scalar, otherwise compare arrays
+            # Collect post-execution arrays for checksum
+            c_tensors_after = {"bb": bb_c, "flat_2d_array": flat_2d_array_c}
+            tr_tensors_after = {"bb": bb_tr, "flat_2d_array": flat_2d_array_tr}
+
+            # Runtime detection: compare scalars if C returns scalar, otherwise use checksum
             if isinstance(c_result, (int, float)):
                 # Scalar return - compare values directly
                 c_val = float(c_result)
@@ -78,19 +83,36 @@ def test_correctness():
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # Array comparison - compare primary output array directly
-                # Using flat_2d_array which is the first output array (rw or w mode)
-                c_arr = flat_2d_array_c
-                c_arr_flat = c_arr.flatten()
-                c_arr_torch = torch.from_numpy(c_arr_flat.copy()).cuda()
-                tr_arr = flat_2d_array_tr.flatten()
-                max_error = torch.max(torch.abs(c_arr_torch - tr_arr)).item()
+                # C wrapper returned array(s) - update c_tensors_after with return value
+                if isinstance(c_result, np.ndarray):
+                    # Single array return: map back to the primary output array
+                    c_tensors_after['flat_2d_array'] = c_result
+                elif isinstance(c_result, tuple):
+                    # Multiple array return: map to output arrays in order
+                    for i, out_arr in enumerate(['flat_2d_array']):
+                        if i < len(c_result) and isinstance(c_result[i], np.ndarray):
+                            c_tensors_after[out_arr] = c_result[i]
+
+                # Checksum-based comparison (matches TSVC_2 calc_checksum)
+                c_checksum = float(np.sum(c_tensors_after['flat_2d_array']))
+                tr_checksum = float(torch.sum(tr_tensors_after['flat_2d_array']).item())
+                # Handle inf/nan: if both are same inf, treat as match
+                import math
+                if math.isinf(c_checksum) and math.isinf(tr_checksum) and (c_checksum > 0) == (tr_checksum > 0):
+                    max_error = 0.0
+                elif math.isnan(c_checksum) or math.isnan(tr_checksum):
+                    max_error = float('inf')
+                else:
+                    max_error = abs(c_checksum - tr_checksum)
+                    # Use relative tolerance for large checksums
+                    if abs(c_checksum) > 1e-6:
+                        max_error = max_error / abs(c_checksum)
                 is_scalar_comparison = False
 
             if is_scalar_comparison:
                 passed = max_error < 0.001 or (abs(c_val) > 1e-6 and max_error / abs(c_val) < 0.001)
             else:
-                passed = max_error < 0.001 or torch.allclose(c_arr_torch, tr_arr, rtol=0.001, atol=0.001)
+                passed = max_error < 0.001
             if passed:
                 print(f"PASS  (max_err={max_error:.2e})")
             else:

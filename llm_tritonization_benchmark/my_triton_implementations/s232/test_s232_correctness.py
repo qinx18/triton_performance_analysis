@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s232_c
-    from test26.llm_triton.s232.attempt1 import s232_triton
+    from test27.llm_triton.s232.attempt1 import s232_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -47,6 +47,7 @@ def test_correctness():
         try:
             aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
             bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+            len_2d = N
 
             aa_c = aa.cpu().numpy().copy()
             bb_c = bb.cpu().numpy().copy()
@@ -56,7 +57,7 @@ def test_correctness():
 
             c_tensors = {"aa": aa_c, "bb": bb_c}
             tr_tensors = {"aa": aa_tr, "bb": bb_tr}
-            scalars = {}
+            scalars = {"len_2d": len_2d}
 
             c_kwargs = build_kwargs(s232_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s232_triton, tr_tensors, scalars)

@@ -1819,7 +1819,7 @@ def s2275_c(a, aa, b, bb, c, cc, d, len_2d=None):
     d = np.ascontiguousarray(d, dtype=np.float32)
     n = len(a)
     _lib.s2275_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(b), _to_ptr(bb), _to_ptr(c), _to_ptr(cc), _to_ptr(d), n, len_2d if len_2d else aa_shape[0])
-    return a
+    return aa.reshape(aa_shape)
 
 def s231_c(aa, bb, len_2d=None):
     """C reference for s231"""
@@ -1954,7 +1954,7 @@ def s256_c(a, aa, bb, d, len_2d=None):
     d = np.ascontiguousarray(d, dtype=np.float32)
     n = len(a)
     _lib.s256_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(bb), _to_ptr(d), n, len_2d if len_2d else aa_shape[0])
-    return a
+    return a, aa.reshape(aa_shape)
 
 def s257_c(a, aa, bb, len_2d=None):
     """C reference for s257"""
@@ -1964,7 +1964,7 @@ def s257_c(a, aa, bb, len_2d=None):
     bb = np.ascontiguousarray(bb.flatten(), dtype=np.float32)
     n = len(a)
     _lib.s257_kernel(_to_ptr(a), _to_ptr(aa), _to_ptr(bb), n, len_2d if len_2d else aa_shape[0])
-    return a
+    return a, aa.reshape(aa_shape)
 
 def s258_c(a, aa, b, c, d, e, len_2d=None):
     """C reference for s258"""

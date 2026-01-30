@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s232_c
-    from test26.llm_triton.s232.attempt1 import s232_triton
+    from test27.llm_triton.s232.attempt1 import s232_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -48,11 +48,12 @@ def benchmark():
     # Initialize arrays on GPU
     aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
     bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+    len_2d = N
 
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {"aa": aa.cpu().numpy().copy(), "bb": bb.cpu().numpy().copy()}
     tr_tensors = {"aa": aa.clone(), "bb": bb.clone()}
-    scalars = {}
+    scalars = {"len_2d": len_2d}
 
     c_kwargs = build_kwargs(s232_c, c_arrays, scalars)
     tr_kwargs = build_kwargs(s232_triton, tr_tensors, scalars)

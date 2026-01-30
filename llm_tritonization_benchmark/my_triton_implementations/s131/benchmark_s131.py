@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s131_c
-    from test26.llm_triton.s131.attempt1 import s131_triton
+    from test27.llm_triton.s131.attempt1 import s131_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -49,11 +49,12 @@ def benchmark():
     a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
     b = torch.randn(N + 10, device='cuda', dtype=torch.float32)
     iterations = 1
+    m = 1
 
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {"a": a.cpu().numpy().copy(), "b": b.cpu().numpy().copy()}
     tr_tensors = {"a": a.clone(), "b": b.clone()}
-    scalars = {"iterations": iterations}
+    scalars = {"iterations": iterations, "m": m}
 
     c_kwargs = build_kwargs(s131_c, c_arrays, scalars)
     tr_kwargs = build_kwargs(s131_triton, tr_tensors, scalars)

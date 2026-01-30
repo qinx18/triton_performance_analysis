@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s1119_c
-    from test26.llm_triton.s1119.attempt1 import s1119_triton
+    from test27.llm_triton.s1119.attempt1 import s1119_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -47,6 +47,7 @@ def test_correctness():
         try:
             aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
             bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+            len_2d = N
 
             aa_c = aa.cpu().numpy().copy()
             bb_c = bb.cpu().numpy().copy()
@@ -56,7 +57,7 @@ def test_correctness():
 
             c_tensors = {"aa": aa_c, "bb": bb_c}
             tr_tensors = {"aa": aa_tr, "bb": bb_tr}
-            scalars = {}
+            scalars = {"len_2d": len_2d}
 
             c_kwargs = build_kwargs(s1119_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s1119_triton, tr_tensors, scalars)
@@ -94,10 +95,17 @@ def test_correctness():
                 # Checksum-based comparison (matches TSVC_2 calc_checksum)
                 c_checksum = float(np.sum(c_tensors_after['aa']))
                 tr_checksum = float(torch.sum(tr_tensors_after['aa']).item())
-                max_error = abs(c_checksum - tr_checksum)
-                # Use relative tolerance for large checksums
-                if abs(c_checksum) > 1e-6:
-                    max_error = max_error / abs(c_checksum)
+                # Handle inf/nan: if both are same inf, treat as match
+                import math
+                if math.isinf(c_checksum) and math.isinf(tr_checksum) and (c_checksum > 0) == (tr_checksum > 0):
+                    max_error = 0.0
+                elif math.isnan(c_checksum) or math.isnan(tr_checksum):
+                    max_error = float('inf')
+                else:
+                    max_error = abs(c_checksum - tr_checksum)
+                    # Use relative tolerance for large checksums
+                    if abs(c_checksum) > 1e-6:
+                        max_error = max_error / abs(c_checksum)
                 is_scalar_comparison = False
 
             if is_scalar_comparison:

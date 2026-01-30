@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s4112_c
-    from test26.llm_triton.s4112.attempt1 import s4112_triton
+    from test27.llm_triton.s4112.attempt1 import s4112_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -50,11 +50,12 @@ def benchmark():
     b = torch.randn(N, device='cuda', dtype=torch.float32)
     ip = torch.randperm(N, device='cuda', dtype=torch.long)
     iterations = 1
+    s = 1
 
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {"a": a.cpu().numpy().copy(), "b": b.cpu().numpy().copy(), "ip": ip.cpu().numpy().copy()}
     tr_tensors = {"a": a.clone(), "b": b.clone(), "ip": ip.clone()}
-    scalars = {"iterations": iterations}
+    scalars = {"iterations": iterations, "s": s}
 
     c_kwargs = build_kwargs(s4112_c, c_arrays, scalars)
     tr_kwargs = build_kwargs(s4112_triton, tr_tensors, scalars)

@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s132_c
-    from test26.llm_triton.s132.attempt1 import s132_triton
+    from test27.llm_triton.s132.attempt1 import s132_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -52,11 +52,12 @@ def benchmark():
     iterations = 1
     j = 1
     k = 0
+    len_2d = N
 
     # Create numpy arrays for C reference (on CPU)
     c_arrays = {"aa": aa.cpu().numpy().copy(), "b": b.cpu().numpy().copy(), "c": c.cpu().numpy().copy()}
     tr_tensors = {"aa": aa.clone(), "b": b.clone(), "c": c.clone()}
-    scalars = {"iterations": iterations, "j": j, "k": k}
+    scalars = {"iterations": iterations, "j": j, "k": k, "len_2d": len_2d}
 
     c_kwargs = build_kwargs(s132_c, c_arrays, scalars)
     tr_kwargs = build_kwargs(s132_triton, tr_tensors, scalars)
