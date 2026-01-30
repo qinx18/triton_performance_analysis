@@ -3,20 +3,16 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s317_kernel(output_ptr, n, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    
-    if pid == 0:
-        q = 1.0
-        iterations = n // 2
-        for i in range(iterations):
-            q = q * 0.99
-        tl.store(output_ptr, q)
+def s317_kernel(result_ptr, num_iters):
+    q = 1.0
+    for i in range(num_iters):
+        q *= 0.99
+    tl.store(result_ptr, q)
 
 def s317_triton(n):
-    output = torch.zeros(1, dtype=torch.float32, device='cuda')
+    result = torch.zeros(1, dtype=torch.float32, device='cuda')
     
-    grid = (1,)
-    s317_kernel[grid](output, n, BLOCK_SIZE=128)
+    num_iters = n // 2
+    s317_kernel[(1,)](result, num_iters)
     
-    return output.item()
+    return result.item()

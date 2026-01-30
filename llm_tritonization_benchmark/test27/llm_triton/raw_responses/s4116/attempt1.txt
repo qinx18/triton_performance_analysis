@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s4116
-# Generated: 2026-01-30 00:14:10
+# Generated: 2026-01-30 16:21:23
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -159,70 +159,65 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s4116_kernel(a_ptr, aa_ptr, ip_ptr, len_2d, inc, j, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and compute offsets
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+def s4116_kernel(a_ptr, aa_ptr, ip_ptr, sum_ptr, 
+                 len_2d, inc, j,
+                 BLOCK_SIZE: tl.constexpr):
+    
+    # Calculate offsets for this block
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
+    i_offsets = block_start + offsets
     
     # Mask for valid indices
-    mask = indices < n_elements
+    mask = i_offsets < (len_2d - 1)
     
-    # Load ip values
-    ip_vals = tl.load(ip_ptr + indices, mask=mask, other=0)
+    # Calculate off = inc + i (scalar expansion)
+    off_values = inc + i_offsets
     
-    # Compute off = inc + i (scalar expansion applied)
-    off_vals = inc + indices
+    # Load ip[i] values
+    ip_indices = tl.load(ip_ptr + i_offsets, mask=mask, other=0)
     
     # Load a[off] values
-    a_vals = tl.load(a_ptr + off_vals, mask=mask, other=0.0)
+    a_values = tl.load(a_ptr + off_values, mask=mask, other=0.0)
     
-    # Compute aa indices: (j-1) * len_2d + ip[i]
-    aa_indices = (j - 1) * len_2d + ip_vals
+    # Calculate aa indices: (j-1) * len_2d + ip[i]
+    aa_indices = (j - 1) * len_2d + ip_indices
     
-    # Load aa values
-    aa_vals = tl.load(aa_ptr + aa_indices, mask=mask, other=0.0)
+    # Load aa[j-1][ip[i]] values
+    aa_values = tl.load(aa_ptr + aa_indices, mask=mask, other=0.0)
     
     # Compute products
-    products = a_vals * aa_vals
+    products = tl.where(mask, a_values * aa_values, 0.0)
     
-    # Zero out invalid products
-    products = tl.where(mask, products, 0.0)
+    # Sum the products
+    partial_sum = tl.sum(products)
     
-    # Sum within block
-    block_sum = tl.sum(products)
-    
-    # Store block sum (each block writes one value)
-    if tl.program_id(0) == 0:
-        tl.store(a_ptr + len_2d * len_2d, block_sum)
-    else:
-        # Use atomic add for other blocks
-        tl.atomic_add(a_ptr + len_2d * len_2d, block_sum)
+    # Store partial sum
+    pid = tl.program_id(0)
+    tl.store(sum_ptr + pid, partial_sum)
 
 def s4116_triton(a, aa, ip, len_2d, inc, j):
-    n_elements = len_2d - 1
-    
-    # Choose block size
     BLOCK_SIZE = 256
+    n = len_2d - 1
+    num_blocks = triton.cdiv(n, BLOCK_SIZE)
     
-    # Calculate grid size
-    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
-    
-    # Clear the accumulator location
-    with torch.no_grad():
-        a[len_2d * len_2d] = 0.0
+    # Create tensor to store partial sums
+    partial_sums = torch.zeros(num_blocks, dtype=torch.float32, device=a.device)
     
     # Launch kernel
-    s4116_kernel[(grid_size,)](
-        a, aa, ip, len_2d, inc, j, n_elements, BLOCK_SIZE
+    grid = (num_blocks,)
+    s4116_kernel[grid](
+        a, aa, ip, partial_sums,
+        len_2d, inc, j,
+        BLOCK_SIZE=BLOCK_SIZE
     )
     
-    # Return the accumulated sum
-    return a[len_2d * len_2d].item()
+    # Sum all partial results
+    total_sum = torch.sum(partial_sums)
+    return total_sum.item()
 ```

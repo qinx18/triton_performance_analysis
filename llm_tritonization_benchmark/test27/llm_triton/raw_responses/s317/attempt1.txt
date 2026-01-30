@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s317
-# Generated: 2026-01-30 00:05:13
+# Generated: 2026-01-30 16:14:45
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -134,30 +134,31 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s317_kernel(q_ptr, BLOCK_SIZE: tl.constexpr):
-    block_id = tl.program_id(0)
+def s317_kernel(q_ptr, n_iterations, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     
-    if block_id == 0:  # Only one block computes the result
-        q = 1.0
-        # This is a simple scalar computation that doesn't vectorize well
-        # The original loop just multiplies by 0.99 repeatedly
-        # We can compute this directly as 0.99^(n/2)
-        # But to match the original exactly, we'll do the multiplication
-        
-        # Since this is inherently scalar, we just do it once per kernel launch
-        tl.store(q_ptr, q)
+    if pid >= 1:
+        return
+    
+    q = 1.0
+    for i in range(n_iterations):
+        q *= 0.99
+    
+    tl.store(q_ptr, q)
 
 def s317_triton(n):
-    # Create output tensor
-    q = torch.zeros(1, dtype=torch.float32, device='cuda')
+    n_iterations = n // 2
     
-    # The original computation is just q *= 0.99 for n//2 iterations
-    # This is equivalent to q = 0.99^(n//2)
-    factor = 0.99
-    iterations = n // 2
-    result = factor ** iterations
+    q_tensor = torch.zeros(1, dtype=torch.float32, device='cuda')
     
-    q[0] = result
+    grid = (1,)
+    BLOCK_SIZE = 128
     
-    return q[0].item()
+    s317_kernel[grid](
+        q_tensor,
+        n_iterations,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
+    
+    return q_tensor.item()
 ```

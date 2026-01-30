@@ -1,56 +1,86 @@
 
-## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
 
-Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
+Your last attempt failed with a compilation or runtime error:
 
-**Error type**: Numerical error (values don't match)
-**Max error observed**: 2.41e+00
+**Error type**: compilation
+**Error message**:
+```
+ost recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s2275/test_s2275_correctness.py", line 81, in test_correctness
+    triton_result = s2275_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test27/llm_triton/s2275/attempt4.py", line 40, in s2275_triton
+    s2275_kernel[grid](
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
+    kernel = self.compile(
+             ^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
+    module = src.make_ir(options, codegen_fns, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 23:15:
+        cc_ptrs = cc_ptr + j_idx * len_2d + i
 
-Please fix the numerical computation. Common causes:
-- Incorrect loop bounds or indices
-- Wrong array access patterns
-- Missing or incorrect operations
-- Off-by-one errors in indexing
+        aa_vals = tl.load(aa_ptrs, mask=j_mask, other=0.0)
+        bb_vals = tl.load(bb_ptrs, mask=j_mask, other=0.0)
+        cc_vals = tl.load(cc_ptrs, mask=j_mask, other=0.0)
+
+        result = aa_vals + bb_vals * cc_vals
+        tl.store(aa_ptrs, result, mask=j_mask)
+
+        # Compute a[i] = b[i] + c[i] * d[i] (only first thread in first block)
+        if pid == 0:
+            if j_idx[0] < 1:
+               ^
+ValueError('unsupported tensor index: constexpr[0]')
+
+```
+
+Please fix the error. Make sure to:
+- Follow all Triton compilation rules
+- Use correct Triton API functions
+- Avoid Python constructs not supported in Triton kernels
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s2275_kernel(
-    a_ptr, aa_ptr, b_ptr, bb_ptr, c_ptr, cc_ptr, d_ptr,
-    len_2d: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr
-):
+def s2275_kernel(a_ptr, aa_ptr, b_ptr, bb_ptr, c_ptr, cc_ptr, d_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
+    
     j_offsets = tl.arange(0, BLOCK_SIZE)
     j_idx = pid * BLOCK_SIZE + j_offsets
     j_mask = j_idx < len_2d
     
     for i in range(len_2d):
-        # 2D array operation: aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
-        aa_idx = j_idx * len_2d + i
-        bb_idx = j_idx * len_2d + i
-        cc_idx = j_idx * len_2d + i
+        # Compute aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
+        aa_ptrs = aa_ptr + j_idx * len_2d + i
+        bb_ptrs = bb_ptr + j_idx * len_2d + i
+        cc_ptrs = cc_ptr + j_idx * len_2d + i
         
-        aa_vals = tl.load(aa_ptr + aa_idx, mask=j_mask, other=0.0)
-        bb_vals = tl.load(bb_ptr + bb_idx, mask=j_mask, other=0.0)
-        cc_vals = tl.load(cc_ptr + cc_idx, mask=j_mask, other=0.0)
+        aa_vals = tl.load(aa_ptrs, mask=j_mask, other=0.0)
+        bb_vals = tl.load(bb_ptrs, mask=j_mask, other=0.0)
+        cc_vals = tl.load(cc_ptrs, mask=j_mask, other=0.0)
         
         result = aa_vals + bb_vals * cc_vals
-        tl.store(aa_ptr + aa_idx, result, mask=j_mask)
+        tl.store(aa_ptrs, result, mask=j_mask)
         
-        # 1D array operation: a[i] = b[i] + c[i] * d[i] (only for first workgroup)
+        # Compute a[i] = b[i] + c[i] * d[i] (only first thread in first block)
         if pid == 0:
-            first_thread = tl.sum(j_offsets) == 0
-            if first_thread:
+            if j_idx[0] < 1:
                 a_val = tl.load(a_ptr + i)
-                b_val = tl.load(b_ptr + i) 
+                b_val = tl.load(b_ptr + i)
                 c_val = tl.load(c_ptr + i)
                 d_val = tl.load(d_ptr + i)
-                
                 result_1d = b_val + c_val * d_val
                 tl.store(a_ptr + i, result_1d)
 
@@ -59,9 +89,7 @@ def s2275_triton(a, aa, b, bb, c, cc, d, len_2d):
     grid = (triton.cdiv(len_2d, BLOCK_SIZE),)
     
     s2275_kernel[grid](
-        a, aa, b, bb, c, cc, d,
-        len_2d,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, aa, b, bb, c, cc, d, len_2d, BLOCK_SIZE
     )
 ```
 
@@ -244,42 +272,39 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s2275_kernel(
-    a_ptr, aa_ptr, b_ptr, bb_ptr, c_ptr, cc_ptr, d_ptr,
-    len_2d: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr
-):
+def s2275_kernel(a_ptr, aa_ptr, b_ptr, bb_ptr, c_ptr, cc_ptr, d_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
+    
     j_offsets = tl.arange(0, BLOCK_SIZE)
     j_idx = pid * BLOCK_SIZE + j_offsets
     j_mask = j_idx < len_2d
     
     for i in range(len_2d):
-        # 2D array operation: aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
-        aa_idx = j_idx * len_2d + i
-        bb_idx = j_idx * len_2d + i
-        cc_idx = j_idx * len_2d + i
+        # Compute aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
+        aa_ptrs = aa_ptr + j_idx * len_2d + i
+        bb_ptrs = bb_ptr + j_idx * len_2d + i
+        cc_ptrs = cc_ptr + j_idx * len_2d + i
         
-        aa_vals = tl.load(aa_ptr + aa_idx, mask=j_mask, other=0.0)
-        bb_vals = tl.load(bb_ptr + bb_idx, mask=j_mask, other=0.0)
-        cc_vals = tl.load(cc_ptr + cc_idx, mask=j_mask, other=0.0)
+        aa_vals = tl.load(aa_ptrs, mask=j_mask, other=0.0)
+        bb_vals = tl.load(bb_ptrs, mask=j_mask, other=0.0)
+        cc_vals = tl.load(cc_ptrs, mask=j_mask, other=0.0)
         
         result = aa_vals + bb_vals * cc_vals
-        tl.store(aa_ptr + aa_idx, result, mask=j_mask)
+        tl.store(aa_ptrs, result, mask=j_mask)
         
-        # 1D array operation: a[i] = b[i] + c[i] * d[i] (only for first thread of first workgroup)
+        # Compute a[i] = b[i] + c[i] * d[i] (only first thread in first block)
         if pid == 0:
-            if j_offsets[0] == 0:
+            first_thread_mask = j_offsets < 1
+            if tl.any(first_thread_mask):
                 a_val = tl.load(a_ptr + i)
-                b_val = tl.load(b_ptr + i) 
+                b_val = tl.load(b_ptr + i)
                 c_val = tl.load(c_ptr + i)
                 d_val = tl.load(d_ptr + i)
-                
                 result_1d = b_val + c_val * d_val
                 tl.store(a_ptr + i, result_1d)
 
@@ -288,7 +313,5 @@ def s2275_triton(a, aa, b, bb, c, cc, d, len_2d):
     grid = (triton.cdiv(len_2d, BLOCK_SIZE),)
     
     s2275_kernel[grid](
-        a, aa, b, bb, c, cc, d,
-        len_2d,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, aa, b, bb, c, cc, d, len_2d, BLOCK_SIZE
     )

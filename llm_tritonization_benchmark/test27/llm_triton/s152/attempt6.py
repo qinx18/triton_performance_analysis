@@ -9,24 +9,29 @@ def s152_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.co
     idx = block_start + offsets
     mask = idx < n_elements
     
-    # Load d and e
+    # Load d and e values
     d_vals = tl.load(d_ptr + idx, mask=mask)
     e_vals = tl.load(e_ptr + idx, mask=mask)
     
     # Compute b[i] = d[i] * e[i]
     b_vals = d_vals * e_vals
+    
+    # Store b values
     tl.store(b_ptr + idx, b_vals, mask=mask)
     
-    # Load a and c for s152s function
-    a_vals = tl.load(a_ptr + idx, mask=mask)
+    # Load c and a values for s152s computation
     c_vals = tl.load(c_ptr + idx, mask=mask)
+    a_vals = tl.load(a_ptr + idx, mask=mask)
     
-    # s152s: a[i] += b[i] * c[i]
+    # Compute a[i] += b[i] * c[i]
     a_vals = a_vals + b_vals * c_vals
+    
+    # Store updated a values
     tl.store(a_ptr + idx, a_vals, mask=mask)
 
 def s152_triton(a, b, c, d, e):
     n_elements = a.shape[0]
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     

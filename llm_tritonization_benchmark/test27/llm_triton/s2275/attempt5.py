@@ -1,39 +1,36 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s2275_kernel(
-    a_ptr, aa_ptr, b_ptr, bb_ptr, c_ptr, cc_ptr, d_ptr,
-    len_2d: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr
-):
+def s2275_kernel(a_ptr, aa_ptr, b_ptr, bb_ptr, c_ptr, cc_ptr, d_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
+    
     j_offsets = tl.arange(0, BLOCK_SIZE)
     j_idx = pid * BLOCK_SIZE + j_offsets
     j_mask = j_idx < len_2d
     
     for i in range(len_2d):
-        # 2D array operation: aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
-        aa_idx = j_idx * len_2d + i
-        bb_idx = j_idx * len_2d + i
-        cc_idx = j_idx * len_2d + i
+        # Compute aa[j][i] = aa[j][i] + bb[j][i] * cc[j][i]
+        aa_ptrs = aa_ptr + j_idx * len_2d + i
+        bb_ptrs = bb_ptr + j_idx * len_2d + i
+        cc_ptrs = cc_ptr + j_idx * len_2d + i
         
-        aa_vals = tl.load(aa_ptr + aa_idx, mask=j_mask, other=0.0)
-        bb_vals = tl.load(bb_ptr + bb_idx, mask=j_mask, other=0.0)
-        cc_vals = tl.load(cc_ptr + cc_idx, mask=j_mask, other=0.0)
+        aa_vals = tl.load(aa_ptrs, mask=j_mask, other=0.0)
+        bb_vals = tl.load(bb_ptrs, mask=j_mask, other=0.0)
+        cc_vals = tl.load(cc_ptrs, mask=j_mask, other=0.0)
         
         result = aa_vals + bb_vals * cc_vals
-        tl.store(aa_ptr + aa_idx, result, mask=j_mask)
+        tl.store(aa_ptrs, result, mask=j_mask)
         
-        # 1D array operation: a[i] = b[i] + c[i] * d[i] (only for first thread of first workgroup)
+        # Compute a[i] = b[i] + c[i] * d[i] (only first thread in first block)
         if pid == 0:
-            if j_offsets[0] == 0:
+            first_thread_mask = j_offsets < 1
+            if tl.any(first_thread_mask):
                 a_val = tl.load(a_ptr + i)
-                b_val = tl.load(b_ptr + i) 
+                b_val = tl.load(b_ptr + i)
                 c_val = tl.load(c_ptr + i)
                 d_val = tl.load(d_ptr + i)
-                
                 result_1d = b_val + c_val * d_val
                 tl.store(a_ptr + i, result_1d)
 
@@ -42,7 +39,5 @@ def s2275_triton(a, aa, b, bb, c, cc, d, len_2d):
     grid = (triton.cdiv(len_2d, BLOCK_SIZE),)
     
     s2275_kernel[grid](
-        a, aa, b, bb, c, cc, d,
-        len_2d,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, aa, b, bb, c, cc, d, len_2d, BLOCK_SIZE
     )
