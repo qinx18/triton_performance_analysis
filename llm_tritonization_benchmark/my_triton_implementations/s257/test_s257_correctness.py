@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s257_c
-    from test27.llm_triton.s257.attempt10 import s257_triton
+    from test28.llm_triton.s257.attempt1 import s257_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -45,9 +45,10 @@ def test_correctness():
         print(f"Testing N={N:>6}...", end=" ")
 
         try:
-            a = torch.randn(N, device='cuda', dtype=torch.float32)
-            aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
-            bb = torch.randn(N, N, device='cuda', dtype=torch.float32)
+            a = torch.randn(N + 10, device='cuda', dtype=torch.float32)
+            aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+            bb = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+            len_2d = N
 
             a_c = a.cpu().numpy().copy()
             aa_c = aa.cpu().numpy().copy()
@@ -59,7 +60,7 @@ def test_correctness():
 
             c_tensors = {"a": a_c, "aa": aa_c, "bb": bb_c}
             tr_tensors = {"a": a_tr, "aa": aa_tr, "bb": bb_tr}
-            scalars = {}
+            scalars = {"len_2d": len_2d}
 
             c_kwargs = build_kwargs(s257_c, c_tensors, scalars)
             tr_kwargs = build_kwargs(s257_triton, tr_tensors, scalars)
@@ -84,10 +85,17 @@ def test_correctness():
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # C wrapper modifies arrays in-place via ctypes pointers,
-                # so c_tensors_after already has correct post-execution values.
-                # Do NOT override with return value (which may be a different array
-                # than the primary output, e.g. s152_c returns b but modifies a).
+                # C wrapper modifies 1D arrays in-place via ctypes pointers,
+                # so c_tensors_after already has correct values for 1D arrays.
+                # However, 2D arrays (aa, bb, cc) are flattened copies in the C wrapper,
+                # so their modifications are NOT reflected in c_tensors_after.
+                # Update c_tensors_after with any 2D arrays from the return value.
+                _checksum_2d = [name for name, is_2d in [('a', False), ('aa', True)] if is_2d]
+                if c_result is not None and _checksum_2d:
+                    _returns = (c_result,) if isinstance(c_result, np.ndarray) else (c_result if isinstance(c_result, tuple) else ())
+                    _ret_2d = [r for r in _returns if isinstance(r, np.ndarray) and r.ndim == 2]
+                    for _name, _arr in zip(_checksum_2d, _ret_2d):
+                        c_tensors_after[_name] = _arr
 
                 # Checksum-based comparison (matches TSVC_2 calc_checksum)
                 c_checksum = float(np.sum(c_tensors_after['a'])) + float(np.sum(c_tensors_after['aa']))

@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s13110_c
-    from test27.llm_triton.s13110.attempt1 import s13110_triton
+    from test28.llm_triton.s13110.attempt1 import s13110_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -79,15 +79,17 @@ def test_correctness():
                 max_error = abs(c_val - tr_val)
                 is_scalar_comparison = True
             else:
-                # C wrapper returned array(s) - update c_tensors_after with return value
-                if isinstance(c_result, np.ndarray):
-                    # Single array return: map back to the primary output array
-                    c_tensors_after['aa'] = c_result
-                elif isinstance(c_result, tuple):
-                    # Multiple array return: map to output arrays in order
-                    for i, out_arr in enumerate(['aa']):
-                        if i < len(c_result) and isinstance(c_result[i], np.ndarray):
-                            c_tensors_after[out_arr] = c_result[i]
+                # C wrapper modifies 1D arrays in-place via ctypes pointers,
+                # so c_tensors_after already has correct values for 1D arrays.
+                # However, 2D arrays (aa, bb, cc) are flattened copies in the C wrapper,
+                # so their modifications are NOT reflected in c_tensors_after.
+                # Update c_tensors_after with any 2D arrays from the return value.
+                _checksum_2d = [name for name, is_2d in [('aa', True)] if is_2d]
+                if c_result is not None and _checksum_2d:
+                    _returns = (c_result,) if isinstance(c_result, np.ndarray) else (c_result if isinstance(c_result, tuple) else ())
+                    _ret_2d = [r for r in _returns if isinstance(r, np.ndarray) and r.ndim == 2]
+                    for _name, _arr in zip(_checksum_2d, _ret_2d):
+                        c_tensors_after[_name] = _arr
 
                 # Checksum-based comparison (matches TSVC_2 calc_checksum)
                 c_checksum = float(np.sum(c_tensors_after['aa']))

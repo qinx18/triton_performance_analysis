@@ -882,7 +882,7 @@ def _setup_functions():
     _lib.s317_kernel.argtypes = [
         ctypes.c_int
     ]
-    _lib.s317_kernel.restype = None
+    _lib.s317_kernel.restype = ctypes.c_float
     # s318
     _lib.s318_kernel.argtypes = [
         ctypes.POINTER(ctypes.c_float),
@@ -2217,7 +2217,7 @@ def s316_c(a):
 def s317_c(n=100):
     """C reference for s317"""
     n = n if n else 100
-    _lib.s317_kernel(n)
+    return _lib.s317_kernel(n)
 
 def s318_c(a, abs=1, inc=1):
     """C reference for s318"""

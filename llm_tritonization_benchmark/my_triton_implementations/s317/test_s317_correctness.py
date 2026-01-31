@@ -13,7 +13,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s317_c
-    from test27.llm_triton.s317.attempt10 import s317_triton
+    from test28.llm_triton.s317.attempt2 import s317_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -46,7 +46,7 @@ def test_correctness():
 
         try:
             iterations = 1
-            n = 1
+            n = N
 
             pass
 

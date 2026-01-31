@@ -1554,6 +1554,9 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
         elif scalar_name == 'len_2d':
             # len_2d represents the 2D matrix dimension, should be N not 1
             array_inits.append(f"            {var_name} = N")
+        elif scalar_name == 'n':
+            # n typically represents array length (e.g., LEN_1D), should scale with test size
+            array_inits.append(f"            {var_name} = N")
         else:
             array_inits.append(f"            {var_name} = 1")
 

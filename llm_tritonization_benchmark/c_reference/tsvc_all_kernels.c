@@ -1067,12 +1067,13 @@ void s316_kernel(real_t* a, int n) {
 }
 
 /* s317 */
-void s317_kernel(int n) {
+real_t s317_kernel(int n) {
     real_t q;
         q = (real_t)1.;
         for (int i = 0; i < n/2; i++) {
             q *= (real_t).99;
         }
+    return q;
 }
 
 /* s318 */
