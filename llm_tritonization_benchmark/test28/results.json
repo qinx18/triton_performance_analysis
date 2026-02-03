@@ -599,13 +599,16 @@
   "s211": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
+    "test_passed": false,
+    "attempts": 10,
+    "final_error": {
+      "type": "import",
+      "message": "Import error: No module named 'test28.llm_triton.s211.attempt10'\n"
+    },
     "benchmark": {
-      "c_ref_time_ms": 0.09646,
-      "triton_time_ms": 2.442271,
-      "speedup": 0.039496
+      "c_ref_time_ms": 0.10287,
+      "triton_time_ms": 2.360427,
+      "speedup": 0.043581
     }
   },
   "s2111": {

@@ -226,7 +226,7 @@ For each function, automatically generates:
 
 ---
 
-## Current State (Test 29 Results)
+## Current State (Test 28 (Current) Results)
 
 ### Summary Metrics
 | Metric | Count | Percentage |
@@ -250,8 +250,8 @@ For each function, automatically generates:
 | 6 | 2 | 150 | 99.3% |
 | 8 | 1 | 151 | 100.0% |
 
-### Comparison: Test 28 → Test 29
-| Metric | Test 28 | Test 29 | Change |
+### Comparison: Test 28 → Test 28 (Current)
+| Metric | Test 28 | Test 28 (Current) | Change |
 |--------|---------|---------|--------|
 | Pass Rate | 96.7% (146/151) | **100%** (151/151) | +5 functions |
 | First-try Success | 82.8% (125) | 84.8% (128) | +3 functions |
@@ -260,15 +260,15 @@ For each function, automatically generates:
 
 ---
 
-## Correctness Results (Test 29)
+## Correctness Results (Test 28 (Current))
 
 ### All 151 Functions Pass
 
-Test 29 achieved **100% correctness** — all 151 functions pass correctness tests.
+Test 28 (Current) achieved **100% correctness** — all 151 functions pass correctness tests.
 
-The 5 functions that failed in Test 28 (s123, s256, s281, s317, s3112) all passed in Test 29:
+The 5 functions that failed in Test 28 (s123, s256, s281, s317, s3112) all passed in Test 28 (Current):
 
-| Function | Test 28 | Test 29 | Attempts | Speedup |
+| Function | Test 28 | Test 28 (Current) | Attempts | Speedup |
 |----------|---------|---------|----------|---------|
 | **s123** | FAIL (numerical) | PASS | 2 | 0.46x |
 | **s256** | FAIL (numerical) | PASS | 1 | 3.41x |
@@ -322,7 +322,7 @@ requirement, the LLM could not escape this pattern across 10 retries.
 
 ## Key Correctness Insights
 
-### 1. **100% Pass Rate Achieved (Test 29)**
+### 1. **100% Pass Rate Achieved (Test 28 (Current))**
 - All 151 functions now pass with the current infrastructure
 - Previous failures were due to LLM non-determinism, not systematic bugs
 - The 5+5 retry strategy successfully recovers all edge cases
@@ -376,10 +376,10 @@ requirement, the LLM could not escape this pattern across 10 retries.
 
 ---
 
-## Performance Summary (Test 29)
+## Performance Summary (Test 28 (Current))
 
 ### Overall Statistics
-| Metric | Test 28 (Initial) | Test 29 | Change |
+| Metric | Test 28 (Initial) | Test 28 (Current) | Change |
 |--------|-------------------|---------|--------|
 | **Benchmarked** | 151 | 151 | - |
 | **Valid Speedups** | 148 | 148 | - |
@@ -406,10 +406,10 @@ Triton faster (>=1x)  :  47   (31.8%)
 Triton slower (<1x)   : 101   (68.2%)
 ```
 
-### Visual Distribution Comparison: Test 28 (Initial) → Test 29
+### Visual Distribution Comparison: Test 28 (Initial) → Test 28 (Current)
 
 ```
-                         Test 28 (Initial)              Test 29                  Change
+                         Test 28 (Initial)              Test 28 (Current)                  Change
                     ─────────────────────────────────────────────────────────────────────
 <0.1x (slowest)     █████████████████████████████  29   ████████████████  16       -13  ✓
 0.1x-0.5x           ███████████████████████████████████████████  43   ███████████████████████████████████████████  43        0
@@ -475,9 +475,9 @@ Key improvement: 13 functions moved OUT of <0.1x tier (extremely slow) to faster
 
 **Note:** Slowdowns are primarily due to kernel launch overhead dominating small operations. s422/s423/s424 had C reference timeouts (>60s) with Triton completing in ~10ms.
 
-### Significant Improvements from Test 28 (Initial) → Test 29
+### Significant Improvements from Test 28 (Initial) → Test 28 (Current)
 
-| Function | Initial | Test 29 | Improvement | Root Cause |
+| Function | Initial | Test 28 (Current) | Improvement | Root Cause |
 |----------|---------|---------|-------------|------------|
 | s1221 | 0.0004x | 0.048x | **107x** | Fixed strip-vectorizable kernel launch |
 | s256 | 0.037x | 3.41x | **92x** | j-sequential recurrence optimization |
@@ -488,7 +488,7 @@ Key improvement: 13 functions moved OUT of <0.1x tier (extremely slow) to faster
 
 ---
 
-## Performance by Category (Test 29)
+## Performance by Category (Test 28 (Current))
 
 ### Performance Tiers Observed
 
@@ -584,7 +584,7 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - ✅ Retry logic with context reset (5+5 strategy)
 - ✅ Timeout-aware benchmarking
 
-### Results (Test 29)
+### Results (Test 28 (Current))
 - **Correctness rate:** 100% (151/151 functions)
 - **First-try success rate:** 84.8% (128/151 functions)
 - **Retry recovery:** +23 functions via retries
@@ -669,7 +669,7 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - 5+5 retry strategy
 - Comprehensive testing vs C reference
 
-**Results (Test 29):**
+**Results (Test 28 (Current)):**
 - **100% correctness** (151/151 functions pass)
 - **84.8% first-try success** (128 functions)
 - **31.8% achieve GPU speedup** (47/148 functions)

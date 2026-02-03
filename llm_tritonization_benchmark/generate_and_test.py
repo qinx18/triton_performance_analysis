@@ -1427,6 +1427,47 @@ Please fix the numerical computation. Common causes:
 ```
 
 """
+    elif error_info['type'] == 'low_speedup':
+        error_section = f"""
+## PREVIOUS ATTEMPT HAS LOW PERFORMANCE - NEEDS BETTER PARALLELIZATION
+
+Your last attempt is CORRECT but has very low performance (speedup: {error_info.get('speedup', 'unknown')}x).
+This indicates the code is NOT properly parallelized for GPU execution.
+
+**CRITICAL ISSUE**: Your kernel is likely running sequentially instead of in parallel.
+
+**Common parallelization mistakes to fix**:
+1. Using a `for` loop inside the kernel to iterate over ALL elements - this is SEQUENTIAL!
+2. NOT using `tl.program_id(0)` to get the block index for parallel execution
+3. Every thread/block processes ALL data instead of just its assigned portion
+
+**CORRECT parallel pattern** (each block handles different elements):
+```python
+@triton.jit
+def kernel(..., BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)                    # Get unique block ID
+    block_start = pid * BLOCK_SIZE            # Each block starts at different offset
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)  # Each block handles BLOCK_SIZE elements
+    mask = offsets < n_elements
+    # Load, compute, store for THIS block only - NO for loop over all elements!
+```
+
+**WRONG sequential pattern** (every block processes everything):
+```python
+@triton.jit
+def kernel(..., BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    for block_start in range(0, n_elements, BLOCK_SIZE):  # WRONG! Sequential loop!
+        current_offsets = block_start + offsets
+        # This makes EVERY block process ALL elements - completely sequential!
+```
+
+## LAST ATTEMPT (NEEDS PARALLELIZATION FIX):
+```python
+{last_attempt}
+```
+
+"""
     else:
         error_section = f"""
 ## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
@@ -1907,7 +1948,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test28.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test29.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -2151,7 +2192,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import {func_name}_c
-    from test28.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
+    from test29.llm_triton.{func_name}.attempt{attempt} import {func_name}_triton
 except ImportError as e:
     print(f"Import error: {{e}}")
     sys.exit(1)
@@ -2455,7 +2496,20 @@ def process_function(func_name: str, func_spec: dict) -> dict:
                 benchmark_results = run_benchmark(func_name, benchmark_file)
                 if benchmark_results:
                     results["benchmark"] = benchmark_results
-                    print(f"  Benchmark complete: {benchmark_results['speedup']:.2f}x speedup")
+                    speedup = benchmark_results.get('speedup', 0)
+                    print(f"  Benchmark complete: {speedup:.2f}x speedup")
+
+                    # Check if speedup is too low - retry with parallelization feedback
+                    if speedup < 0.1 and attempt < MAX_ATTEMPTS:
+                        print(f"  Speedup too low ({speedup:.2f}x < 0.1x). Retrying for better parallelization...")
+                        error_info = {
+                            'type': 'low_speedup',
+                            'speedup': speedup,
+                            'message': f'Code is correct but speedup is only {speedup:.2f}x. Needs better parallelization.'
+                        }
+                        # Reset test_passed so we continue retrying
+                        results["test_passed"] = False
+                        continue  # Continue to next attempt
                 else:
                     print(f"  Benchmark failed or timed out")
                     results["benchmark"] = None
@@ -2610,7 +2664,7 @@ def main():
 
     # Save results to JSON file
     import json
-    results_file = Path("test28") / "results.json"
+    results_file = Path("test29") / "results.json"
 
     # Load existing results if file exists
     existing_results = {}
@@ -2641,7 +2695,7 @@ def main():
         }
 
     # Save updated results
-    Path("test28").mkdir(exist_ok=True)
+    Path("test29").mkdir(exist_ok=True)
     with open(results_file, 'w') as f:
         json.dump(existing_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")
