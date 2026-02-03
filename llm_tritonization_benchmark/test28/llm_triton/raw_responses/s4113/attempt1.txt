@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s4113
-# Generated: 2026-01-30 18:19:16
+# Generated: 2026-02-03 05:01:55
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -40,6 +40,43 @@ real_t s4113(struct args_t * func_args)
             a[ip[i]] = b[ip[i]] + c[i];
         }
 ```
+
+
+============================================================
+INDIRECT ADDRESSING PATTERN DETECTED
+============================================================
+
+**Pattern: GATHER** (parallel indirect load)
+
+Expression: `b[ip[i]]`
+- Index array: `ip`
+- Data array: `b`
+
+**Implementation:**
+```python
+# Load indices
+indices = tl.load(index_ptr + offsets, mask=mask)
+# Gather from data array using indices
+gathered = tl.load(data_ptr + indices, mask=mask)
+```
+
+**Pattern: SCATTER** (parallel indirect store)
+
+Expression: `a[ip[i]] = ...`
+- Index array: `ip`
+- Target array: `a`
+
+**Implementation:**
+```python
+# Load indices
+indices = tl.load(index_ptr + offsets, mask=mask)
+# Scatter to data array using indices
+tl.store(data_ptr + indices, values, mask=mask)
+```
+
+**Warning:** Scatter may have race conditions if indices are not unique.
+Use `tl.atomic_add()` if duplicates are possible.
+
 
 
 ## Array Information:
@@ -134,17 +171,19 @@ def s4113_kernel(a_ptr, b_ptr, c_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constex
     idx = block_start + offsets
     mask = idx < n_elements
     
-    # Load indices and direct values
+    # Load indices from ip array
     indices = tl.load(ip_ptr + idx, mask=mask)
-    c_vals = tl.load(c_ptr + idx, mask=mask)
     
-    # Load indirect values from b
+    # Gather from b array using indices
     b_vals = tl.load(b_ptr + indices, mask=mask)
+    
+    # Load from c array directly
+    c_vals = tl.load(c_ptr + idx, mask=mask)
     
     # Compute result
     result = b_vals + c_vals
     
-    # Store to indirect locations in a
+    # Scatter to a array using indices
     tl.store(a_ptr + indices, result, mask=mask)
 
 def s4113_triton(a, b, c, ip):

@@ -1,47 +1,42 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s256_kernel(a_ptr, aa_ptr, bb_ptr, d_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
-    i_offsets = tl.arange(0, BLOCK_SIZE)
+def s256_kernel(a_ptr, aa_ptr, bb_ptr, d_ptr, len_2d: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    i_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     i_mask = i_offsets < len_2d
-    
-    # Load bb[j][i] and d[j] for current j (broadcast d[j] to match bb shape)
-    bb_vals = tl.load(bb_ptr + i_offsets, mask=i_mask)
-    d_val = tl.load(d_ptr)
-    
-    # Load a[j-1]
-    a_prev = tl.load(a_ptr)
-    
-    # Compute a[j] = 1.0 - a[j-1]
-    a_val = 1.0 - a_prev
-    
-    # Store a[j]
-    tl.store(a_ptr + 1, a_val)
-    
-    # Compute aa[j][i] = a[j] + bb[j][i] * d[j]
-    aa_vals = a_val + bb_vals * d_val
-    
-    # Store aa[j][i]
-    tl.store(aa_ptr + i_offsets, aa_vals, mask=i_mask)
+
+    # Load a[0] once
+    a0 = tl.load(a_ptr)
+
+    for j in range(1, len_2d):
+        # Closed-form: a[j] = a0 if j even, else 1.0 - a0
+        a_j = tl.where(j % 2 == 0, a0, 1.0 - a0)
+
+        # Parallel load of bb[j][i] for all i
+        bb_offsets = j * len_2d + i_offsets
+        bb_vals = tl.load(bb_ptr + bb_offsets, mask=i_mask)
+        d_j = tl.load(d_ptr + j)
+
+        # Parallel compute and store aa[j][i]
+        aa_vals = a_j + bb_vals * d_j
+        aa_offsets = j * len_2d + i_offsets
+        tl.store(aa_ptr + aa_offsets, aa_vals, mask=i_mask)
+
+        # Store a[j] (only thread 0 needs to do this)
+        if pid == 0:
+            if tl.program_id(1) == 0:
+                tl.store(a_ptr + j, a_j)
 
 def s256_triton(a, aa, bb, d, len_2d):
-    BLOCK_SIZE = triton.next_power_of_2(len_2d)
+    BLOCK_SIZE = 64
     
-    for j in range(1, len_2d):
-        # Calculate pointers for current j
-        a_ptr = a
-        aa_ptr = aa[j]
-        bb_ptr = bb[j]
-        d_ptr = d[j:j+1]  # Single element as tensor
-        
-        # Launch kernel for all i values in parallel
-        s256_kernel[(1,)](
-            a_ptr + j - 1,  # Point to a[j-1] for reading
-            aa_ptr,
-            bb_ptr,
-            d_ptr,
-            len_2d,
-            BLOCK_SIZE=BLOCK_SIZE
-        )
+    grid = (triton.cdiv(len_2d, BLOCK_SIZE),)
+    
+    s256_kernel[grid](
+        a, aa, bb, d,
+        len_2d=len_2d,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

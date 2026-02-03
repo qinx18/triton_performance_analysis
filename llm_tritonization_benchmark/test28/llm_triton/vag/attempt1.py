@@ -4,28 +4,27 @@ import torch
 
 @triton.jit
 def vag_kernel(a_ptr, b_ptr, ip_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < n_elements
     
-    # Load indices from ip array
-    ip_indices = tl.load(ip_ptr + indices, mask=mask)
-    
-    # Gather from b array using loaded indices
-    b_values = tl.load(b_ptr + ip_indices, mask=mask)
-    
-    # Store to a array
-    tl.store(a_ptr + indices, b_values, mask=mask)
+    for block_start in range(0, n_elements, BLOCK_SIZE):
+        current_offsets = block_start + offsets
+        mask = current_offsets < n_elements
+        
+        # Load indices from ip array
+        indices = tl.load(ip_ptr + current_offsets, mask=mask)
+        
+        # Gather from b array using indices
+        gathered = tl.load(b_ptr + indices, mask=mask)
+        
+        # Store to a array
+        tl.store(a_ptr + current_offsets, gathered, mask=mask)
 
 def vag_triton(a, b, ip):
-    N = a.shape[0]
+    n_elements = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    vag_kernel[grid](
+    vag_kernel[(1,)](
         a, b, ip,
-        N,
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE
     )

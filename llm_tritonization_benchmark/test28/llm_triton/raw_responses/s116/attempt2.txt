@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 1.91e-01
+**Max error observed**: 1.29e-02
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -14,64 +14,38 @@ Please fix the numerical computation. Common causes:
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s116_kernel(a_ptr, a_copy_ptr, n):
-    # This kernel must be strictly sequential due to RAW dependencies
-    # Use a single thread to process all elements sequentially
+def s116_kernel(a_ptr, a_copy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    offsets = tl.arange(0, 1024)  # Define once at start
+    # Load from read-only copy
+    a_val = tl.load(a_copy_ptr + offsets, mask=mask)
+    a_next = tl.load(a_copy_ptr + offsets + 1, mask=mask & (offsets + 1 < n_elements))
     
-    # Process elements sequentially in chunks
-    for block_start in range(0, n - 5, 1024):
-        block_end = min(block_start + 1024, n - 5)
-        
-        for local_i in range(block_end - block_start):
-            i = block_start + local_i
-            
-            # Each iteration processes 5 consecutive elements
-            if i + 5 < n:
-                # Load values from read-only copy
-                val_i = tl.load(a_copy_ptr + i)
-                val_i1 = tl.load(a_copy_ptr + i + 1)
-                val_i2 = tl.load(a_copy_ptr + i + 2)
-                val_i3 = tl.load(a_copy_ptr + i + 3)
-                val_i4 = tl.load(a_copy_ptr + i + 4)
-                val_i5 = tl.load(a_copy_ptr + i + 5)
-                
-                # Compute new values following the dependency chain
-                new_val_i = val_i1 * val_i
-                tl.store(a_ptr + i, new_val_i)
-                
-                # Update val_i1 to use the newly computed value
-                new_val_i1 = val_i2 * new_val_i
-                tl.store(a_ptr + i + 1, new_val_i1)
-                
-                new_val_i2 = val_i3 * new_val_i1
-                tl.store(a_ptr + i + 2, new_val_i2)
-                
-                new_val_i3 = val_i4 * new_val_i2
-                tl.store(a_ptr + i + 3, new_val_i3)
-                
-                new_val_i4 = val_i5 * new_val_i3
-                tl.store(a_ptr + i + 4, new_val_i4)
+    # Compute result
+    result = a_next * a_val
+    
+    # Store to original array
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s116_triton(a):
-    n = a.shape[0]
+    N = a.shape[0]
+    n_elements = N - 5
     
-    # Create read-only copy to handle WAR dependencies
+    # Create read-only copy
     a_copy = a.clone()
     
-    # Use single thread for strictly sequential execution
-    grid = (1,)
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s116_kernel[grid](
-        a,
-        a_copy,
-        n
+        a, a_copy, n_elements, BLOCK_SIZE
     )
 ```
 
@@ -197,188 +171,15 @@ def s116_triton(...):
 
 **CRITICAL: Use forward iteration** - ALWAYS use forward iteration with ascending offsets.
 
-============================================================
-POINTER ALIASING PATTERN DETECTED
-============================================================
+## Parallelization Analysis
 
+Despite the apparent self-dependency (same array read and written at different offsets),
+the loop stride is 5, which means writes and reads access DISJOINT index sets.
+This loop is **FULLY PARALLEL** — each iteration is independent.
 
-Same-array read/write pairs (after resolving aliases):
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 0
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 5
-  Array: a
-    Write: [a] -> offset 0
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 0
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 5
-  Array: a
-    Write: [a] -> offset 1
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 0
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 5
-  Array: a
-    Write: [a] -> offset 2
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 0
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 5
-  Array: a
-    Write: [a] -> offset 3
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 0
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 1
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 2
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 4
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 3
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 5
-  Array: a
-    Write: [a] -> offset 4
-    Read:  [a] -> offset 4
-
-Pattern type: sequential
-Safe strip size: 1
-
-⚠️ STRICTLY SEQUENTIAL - NO PARALLELIZATION POSSIBLE
-
-Pattern: a[i+1] = a[i+0] + ...
-Write offset: 1, Read offset: 0
-Offset difference: 1
-
-This pattern has a DIRECT loop-carried RAW dependency:
-- Each iteration reads the value written in the PREVIOUS iteration
-- Iterations CANNOT be parallelized or vectorized
-
-IMPLEMENTATION: Process ALL iterations strictly sequentially:
-```python
-# SEQUENTIAL ONLY - no parallelization!
-for i in range(start, end):
-    # Load a[i-1] (from previous iteration)
-    # Compute a[i] = ...
-    # Store a[i]
-```
-
-For Triton: Use a single thread with a sequential loop inside the kernel.
-
-============================================================
+Implement this with a standard parallel Triton kernel (one element per thread).
+Map the original loop index `i` to thread indices: `i = pid * BLOCK_SIZE + offsets`
+Remember the loop starts at a non-zero index and uses stride 5.
 
 
 ## Array Information:
@@ -464,50 +265,36 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s116_kernel(a_ptr, a_copy_ptr, n):
-    # Process strictly sequentially due to RAW dependencies
-    # Use single thread processing all elements in order
+def s116_kernel(a_ptr, a_copy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    for i in range(n - 5):
-        if i % 5 == 0:
-            # Load the initial values for this group of 5
-            val_0 = tl.load(a_copy_ptr + i)
-            val_1 = tl.load(a_copy_ptr + i + 1)
-            val_2 = tl.load(a_copy_ptr + i + 2)
-            val_3 = tl.load(a_copy_ptr + i + 3)
-            val_4 = tl.load(a_copy_ptr + i + 4)
-            val_5 = tl.load(a_copy_ptr + i + 5)
-            
-            # Apply the dependency chain
-            new_0 = val_1 * val_0
-            new_1 = val_2 * new_0  # Use updated value
-            new_2 = val_3 * new_1  # Use updated value
-            new_3 = val_4 * new_2  # Use updated value
-            new_4 = val_5 * new_3  # Use updated value
-            
-            # Store all 5 results
-            tl.store(a_ptr + i, new_0)
-            tl.store(a_ptr + i + 1, new_1)
-            tl.store(a_ptr + i + 2, new_2)
-            tl.store(a_ptr + i + 3, new_3)
-            tl.store(a_ptr + i + 4, new_4)
+    # Load current and next values from read-only copy
+    a_current = tl.load(a_copy_ptr + offsets, mask=mask, other=0.0)
+    a_next = tl.load(a_copy_ptr + offsets + 1, mask=mask, other=0.0)
+    
+    # Compute result: a[i] = a[i + 1] * a[i]
+    result = a_next * a_current
+    
+    # Store to original array
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s116_triton(a):
-    n = a.shape[0]
+    N = a.shape[0]
+    n_elements = N - 5
     
-    # Create read-only copy to handle dependencies
+    # Create read-only copy
     a_copy = a.clone()
     
-    # Use single thread for strictly sequential execution
-    grid = (1,)
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s116_kernel[grid](
-        a,
-        a_copy,
-        n
+        a, a_copy, n_elements, BLOCK_SIZE
     )

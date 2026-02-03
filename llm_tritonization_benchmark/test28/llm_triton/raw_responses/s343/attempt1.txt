@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s343
-# Generated: 2026-01-30 18:18:05
+# Generated: 2026-02-03 01:17:35
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -126,17 +126,10 @@ CRITICAL IMPLEMENTATION REQUIREMENTS:
    The original code only writes to positions 0..counter.
    Elements after counter should remain UNCHANGED.
 
-2. This pattern is DIFFICULT to parallelize because:
-   - Output index depends on how many previous elements passed the condition
-   - Requires prefix sum (exclusive scan) of condition mask
+2. DO NOT use a serial single-thread loop — it will be extremely slow on GPU.
+   Use PyTorch's boolean indexing to implement this in the Python wrapper.
 
-3. CORRECT parallel implementation:
-   a) Compute condition mask: mask[i] = (condition is true)
-   b) Compute prefix sum: indices = torch.cumsum(mask, dim=0) - 1
-   c) Use indices for scatter: output[indices[mask]] = input[mask]
-
-4. SIMPLE correct implementation (recommended):
-   Use PyTorch's boolean indexing which handles this correctly:
+3. IMPLEMENTATION (use this approach in the Python wrapper, with a stub @triton.jit kernel):
    ```python
    # For stream compaction: flat_2d_array[counter] = source[i] when condition
    mask = source > 0.0  # or whatever the condition is
@@ -234,44 +227,29 @@ RESPONSE:
 ```python
 import torch
 import triton
-import triton.language as tl
 
 @triton.jit
-def s343_kernel(aa_ptr, bb_ptr, flat_2d_array_ptr, len_2d: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    j_offsets = tl.arange(0, BLOCK_SIZE)
-    j_idx = pid * BLOCK_SIZE + j_offsets
-    j_mask = j_idx < len_2d
-    
-    counter = 0
-    
-    for i in range(len_2d):
-        aa_ptrs = aa_ptr + i * len_2d + j_idx
-        bb_ptrs = bb_ptr + i * len_2d + j_idx
-        
-        aa_vals = tl.load(aa_ptrs, mask=j_mask, other=0.0)
-        bb_vals = tl.load(bb_ptrs, mask=j_mask, other=0.0)
-        
-        condition = bb_vals > 0.0
-        valid_mask = j_mask & condition
-        
-        for j_offset in range(BLOCK_SIZE):
-            if j_idx[j_offset] < len_2d:
-                if condition[j_offset]:
-                    output_ptr = flat_2d_array_ptr + counter
-                    tl.store(output_ptr, aa_vals[j_offset])
-                    counter += 1
+def s343_kernel():
+    # Stub kernel - actual computation done in wrapper
+    pass
 
 def s343_triton(aa, bb, flat_2d_array, len_2d):
-    BLOCK_SIZE = 64
+    # Stream compaction using PyTorch boolean indexing
+    # Condition: bb[j][i] > 0.0
+    # Pack: flat_2d_array[k] = aa[j][i] for elements where condition is true
     
-    # Sequential processing with stream compaction
-    mask = bb > 0.0
-    packed_values = aa[mask]
+    # Flatten arrays in column-major order (j varies first, then i)
+    aa_flat = aa.T.flatten()  # aa[j][i] -> flatten with j varying first
+    bb_flat = bb.T.flatten()  # bb[j][i] -> flatten with j varying first
+    
+    # Create mask where bb > 0
+    mask = bb_flat > 0.0
+    
+    # Pack values using boolean indexing
+    packed_values = aa_flat[mask]
     num_packed = packed_values.numel()
     
-    if num_packed > 0:
-        flat_2d_array[:num_packed] = packed_values
-    
-    return num_packed
+    # Store packed values at beginning of flat_2d_array
+    # DO NOT clear the rest of the array
+    flat_2d_array[:num_packed] = packed_values
 ```

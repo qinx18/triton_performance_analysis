@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s1221
-# Generated: 2026-01-30 17:41:06
+# Generated: 2026-02-01 03:47:46
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -78,28 +78,26 @@ for strip_start in range(0, n_elements, STRIP_SIZE):
     arr[idx + 0] = arr[idx + -4] + ...
 ```
 
-For Triton kernel:
+For Triton kernel (single kernel launch with strip loop inside):
 ```python
 @triton.jit
-def kernel(arr_ptr, ..., BLOCK_SIZE: tl.constexpr):  # BLOCK_SIZE <= 4
-    # Each block processes one strip
-    strip_id = tl.program_id(0)
-    strip_start = strip_id * 4
-    offsets = tl.arange(0, BLOCK_SIZE)
-    idx = strip_start + offsets
-    
-    # Load from read position (idx + -4)
-    vals = tl.load(arr_ptr + idx + -4, mask=...)
-    # Store to write position (idx + 0)
-    tl.store(arr_ptr + idx + 0, result, mask=...)
+def kernel(arr_ptr, ..., n_elements, STRIP_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Loop over strips sequentially inside the kernel
+    offsets = tl.arange(0, BLOCK_SIZE)  # BLOCK_SIZE <= 4
+    for strip_start in range(0, n_elements, STRIP_SIZE):
+        idx = strip_start + offsets
+        mask = idx < n_elements
+        # Load from read position (idx + -4)
+        vals = tl.load(arr_ptr + idx + -4, mask=mask)
+        # Store to write position (idx + 0)
+        tl.store(arr_ptr + idx + 0, result, mask=mask)
 
-# Launch with sequential strips
-for strip_id in range(num_strips):
-    kernel[1,](arr, ..., BLOCK_SIZE=min({strip_size}, remaining))
+# Launch a SINGLE kernel (grid=1), strip loop runs inside the kernel
+kernel[(1,)](arr, ..., n_elements=N, STRIP_SIZE=4, BLOCK_SIZE=4)
 ```
 
-CRITICAL: Block size must be <= 4 to avoid race conditions!
-Each strip must complete before the next strip starts.
+CRITICAL: BLOCK_SIZE and STRIP_SIZE must be <= 4 to avoid race conditions!
+Strips are processed sequentially inside the kernel to avoid multiple kernel launches.
 
 ============================================================
 
@@ -185,36 +183,37 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def s1221_kernel(b_ptr, a_ptr, strip_start, n_elements, BLOCK_SIZE: tl.constexpr):
+def s1221_kernel(a_ptr, b_ptr, n_elements, STRIP_SIZE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
-    idx = strip_start + offsets + 4
     
-    mask = idx < n_elements
-    
-    b_vals = tl.load(b_ptr + idx - 4, mask=mask)
-    a_vals = tl.load(a_ptr + idx, mask=mask)
-    
-    result = b_vals + a_vals
-    
-    tl.store(b_ptr + idx, result, mask=mask)
+    for strip_start in range(4, n_elements, STRIP_SIZE):
+        strip_end = min(strip_start + STRIP_SIZE, n_elements)
+        
+        idx = strip_start + offsets
+        mask = idx < strip_end
+        
+        read_idx = idx - 4
+        a_vals = tl.load(a_ptr + idx, mask=mask)
+        b_vals = tl.load(b_ptr + read_idx, mask=mask)
+        
+        result = b_vals + a_vals
+        
+        tl.store(b_ptr + idx, result, mask=mask)
 
 def s1221_triton(a, b):
     n_elements = a.shape[0]
     STRIP_SIZE = 4
     BLOCK_SIZE = 4
     
-    for strip_start in range(0, n_elements - 4, STRIP_SIZE):
-        strip_end = min(strip_start + STRIP_SIZE, n_elements - 4)
-        actual_block_size = strip_end - strip_start
-        
-        if actual_block_size > 0:
-            s1221_kernel[(1,)](
-                b, a, strip_start, n_elements,
-                BLOCK_SIZE=BLOCK_SIZE
-            )
+    s1221_kernel[(1,)](
+        a, b,
+        n_elements,
+        STRIP_SIZE=STRIP_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```

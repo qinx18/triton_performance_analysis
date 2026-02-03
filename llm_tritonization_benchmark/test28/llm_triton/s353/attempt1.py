@@ -8,19 +8,19 @@ def s353_kernel(a_ptr, b_ptr, ip_ptr, alpha, n_elements, BLOCK_SIZE: tl.constexp
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     
-    # Load indices
+    # Load indices from ip array
     indices = tl.load(ip_ptr + offsets, mask=mask)
     
-    # Load a values
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    
-    # Gather b values using indices
+    # Gather values from b array using indices
     b_vals = tl.load(b_ptr + indices, mask=mask)
     
-    # Compute saxpy: a[i] += alpha * b[ip[i]]
+    # Load current values from a array
+    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    
+    # Compute: a[i] += alpha * b[ip[i]]
     result = a_vals + alpha * b_vals
     
-    # Store result
+    # Store result back to a array
     tl.store(a_ptr + offsets, result, mask=mask)
 
 def s353_triton(a, b, ip, alpha):
@@ -29,8 +29,6 @@ def s353_triton(a, b, ip, alpha):
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s353_kernel[grid](
-        a, b, ip,
-        alpha,
-        n_elements,
-        BLOCK_SIZE
+        a, b, ip, alpha, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
     )

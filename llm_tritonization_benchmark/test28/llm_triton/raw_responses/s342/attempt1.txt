@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s342
-# Generated: 2026-01-30 18:17:42
+# Generated: 2026-02-03 01:17:02
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -47,6 +47,40 @@ real_t s342(struct args_t * func_args)
             }
         }
 ```
+
+============================================================
+STREAM COMPACTION PATTERN DETECTED
+============================================================
+
+CONDITIONAL SCATTER (UNPACK) PATTERN DETECTED
+
+This kernel reads from a packed source array using a counter variable,
+and writes to positions in the output array where a condition is true.
+
+Pattern detected:
+  - S3: a[i] = b[j] when condition is true
+    Loop variables: i, Counter variable: j
+
+CRITICAL IMPLEMENTATION REQUIREMENTS:
+
+1. Only elements where the condition is true should be modified.
+   Other elements must remain UNCHANGED.
+
+2. DO NOT use a serial single-thread loop — it will be extremely slow on GPU.
+   Use PyTorch's parallel prefix sum to compute the counter indices.
+
+3. IMPLEMENTATION (use this approach in the Python wrapper, with a stub @triton.jit kernel):
+   ```python
+   mask = (a > 0.0).to(torch.int32)  # or whatever the condition is
+   indices = torch.cumsum(mask, dim=0) - 1  # prefix sum gives counter value at each position
+   bool_mask = mask.bool()
+   a[bool_mask] = b[indices[bool_mask]]  # gather from source at counter positions
+   # Only positions where condition is true are modified
+   ```
+
+WARNING: Do NOT modify elements where the condition is false!
+
+============================================================
 
 
 ## Array Information:
@@ -130,57 +164,23 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s342_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # This kernel processes the sequential dependency by doing it in serial
-    # We use a single thread block to maintain the sequential nature of j
-    
-    block_id = tl.program_id(0)
-    if block_id > 0:
-        return
-    
-    # Process elements in blocks but maintain sequential j counter
-    j = -1
-    
-    # Pre-compute offsets for reuse
-    offsets = tl.arange(0, BLOCK_SIZE)
-    
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load block of a values
-        a_vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
-        
-        # Process each element in the block sequentially
-        for i in range(BLOCK_SIZE):
-            if block_start + i >= n_elements:
-                break
-            
-            # Check if current element is positive
-            current_offset = block_start + i
-            a_val = tl.load(a_ptr + current_offset)
-            
-            if a_val > 0.0:
-                j += 1
-                b_val = tl.load(b_ptr + j)
-                tl.store(a_ptr + current_offset, b_val)
+def s342_kernel():
+    # This is a stub kernel - the actual computation is done in PyTorch
+    pass
 
 def s342_triton(a, b):
-    n_elements = a.shape[0]
+    # Stream compaction pattern - use PyTorch parallel operations
+    mask = (a > 0.0).to(torch.int32)
+    indices = torch.cumsum(mask, dim=0) - 1
+    bool_mask = mask.bool()
     
-    # Use single block since we need sequential processing
-    BLOCK_SIZE = 1024
-    grid = (1,)
-    
-    s342_kernel[grid](
-        a, b, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    # Only modify elements where condition is true
+    a[bool_mask] = b[indices[bool_mask]]
     
     return a
 ```

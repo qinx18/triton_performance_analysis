@@ -267,11 +267,12 @@ Each function has passed in prior tests — the failures are purely due to LLM s
 | **s317** | numerical | `range(n)` instead of `range(n//2)` | test27 (attempt 1) | Simple loop with correct iteration count |
 | **s3112** | compilation | `BLOCK_SIZE` not declared as `tl.constexpr` | test27 (attempt 2) | Pass `BLOCK_SIZE` as kernel parameter with `tl.constexpr` |
 
-**Evidence: re-running the same 4 functions with identical prompts all passed:**
+**Evidence: re-running the same 5 functions with identical prompts all passed:**
 
 | Function | Attempts on Re-run | Speedup |
 |----------|-------------------|---------|
 | s123 | 2 | 0.48x |
+| s256 | 2 | 0.04x |
 | s281 | 8 | 0.31x |
 | s317 | 2 | 0.10x |
 | s3112 | 1 | 0.04x |
@@ -294,11 +295,17 @@ failed. The C kernel and wrapper have been fixed to return the scalar, and the
 test harness now sets `n=N`.
 
 **s256** involves a sequential recurrence (`a[j] = 1.0 - a[j-1]`) combined with a
-2D computation. The prompt correctly prescribes j-sequential, i-parallel strategy,
-but the LLM frequently gets implementation details wrong (pointer arithmetic,
-scalar value passing). It is chronically unstable — cleanly passed in only 4 of 16
-test runs (test14, test17, test18, test25). In test28, all 5 attempts had
-`max_error = 5.61`, and the benchmark timed out.
+2D computation (`aa[j][i] = a[j] + bb[j][i]*d[j]`). The prompt correctly prescribes
+j-sequential, i-parallel strategy, but the LLM frequently gets implementation details
+wrong (pointer arithmetic, scalar value passing). It is chronically unstable — cleanly
+passed in only 4 of 16 test runs (test14, test17, test18, test25), with a per-attempt
+pass rate of ~14% (10/72 attempts across all tests). In test28, all 5 attempts had
+`max_error = 5.61`, and the benchmark timed out. On re-run, it passed on attempt 2
+(0.04x speedup). Notably, the recurrence `a[j] = 1.0 - a[j-1]` is an involution
+(`f(f(x)) = x`), so `a[j]` simply alternates between `a[0]` (even j) and `1.0 - a[0]`
+(odd j). If the LLM recognized this closed form, the entire computation would become
+embarrassingly parallel with no sequential dependency — but no attempt has ever
+exploited this simplification.
 
 **s3112** failed all 10 attempts with the same compilation error — defining
 `BLOCK_SIZE` as a regular variable inside the kernel instead of as a
@@ -370,42 +377,44 @@ requirement, the LLM could not escape this pattern across 10 retries.
 
 ---
 
-## Performance Summary (Test 28)
+## Performance Summary (Test 28 + Re-runs)
+
+*Includes re-run benchmarks for the 5 failed functions (s123, s256, s281, s317, s3112).*
 
 ### Overall Statistics
 | Metric | Value |
 |--------|-------|
-| **Benchmarked** | 146 |
-| **Valid Speedups** | 143 |
+| **Benchmarked** | 151 |
+| **Valid Speedups** | 148 |
 | **C Ref Timeouts** | 3 |
 | **Triton Timeouts** | 0 |
-| **Mean Speedup** | 2.64x |
-| **Median Speedup** | 0.57x |
-| **Min Speedup** | 0.0004x |
+| **Mean Speedup** | 2.55x |
+| **Median Speedup** | 0.53x |
+| **Min Speedup** | 0.0091x |
 | **Max Speedup** | 246.41x |
 
-### Performance Distribution (143 functions with valid speedups)
+### Performance Distribution (148 functions with valid speedups)
 
 ```
 Speedup Range          Count    %     Distribution
 ─────────────────────────────────────────────────────────────────
->=2x faster           :  22   (15.4%) ██████████████████████
-1.5x-2x faster        :  12   ( 8.4%) ████████████
-1x-1.5x faster        :  14   ( 9.8%) ██████████████
-0.5x-1x (slower)      :  28   (19.6%) ████████████████████████████
-0.1x-0.5x (slower)    :  41   (28.7%) █████████████████████████████████████████
-<0.1x (much slower)   :  26   (18.2%) ██████████████████████████
+>=2x faster           :  22   (14.9%) ██████████████████████
+1.5x-2x faster        :  12   ( 8.1%) ████████████
+1x-1.5x faster        :  14   ( 9.5%) ██████████████
+0.5x-1x (slower)      :  28   (18.9%) ████████████████████████████
+0.1x-0.5x (slower)    :  43   (29.1%) ███████████████████████████████████████████
+<0.1x (much slower)   :  29   (19.6%) █████████████████████████████
 ─────────────────────────────────────────────────────────────────
-Triton faster (>=1x)  :  48   (33.6%)
-Triton slower (<1x)   :  95   (66.4%)
+Triton faster (>=1x)  :  48   (32.4%)
+Triton slower (<1x)   : 100   (67.6%)
 ```
 
 ### Visual Distribution
 ```
                     SLOWER  ◄─────────────────────►  FASTER
 
-<0.1x   ██████████████████████████████████████████████████████  26
-0.1-0.5x████████████████████████████████████████████████████████████████████████████████  41
+<0.1x   ██████████████████████████████████████████████████████████  29
+0.1-0.5x██████████████████████████████████████████████████████████████████████████████████████  43
 0.5-1x  ████████████████████████████████████████████████████████  28
 1-1.5x  ████████████████████████████  14
 1.5-2x  ████████████████████████  12
@@ -439,18 +448,18 @@ Triton slower (<1x)   :  95   (66.4%)
 
 | Rank | Function | Speedup | Notes |
 |------|----------|---------|-------|
-| 1 | s1221 | 0.0004x | Severe kernel overhead |
-| 2 | s116 | 0.0091x | Loop overhead |
-| 3 | s252 | 0.0091x | Statement reorder |
-| 4 | s115 | 0.0174x | Loop overhead |
-| 5 | s318 | 0.0181x | Loop overhead |
-| 6 | s119 | 0.0222x | Loop overhead |
-| 7 | s118 | 0.0224x | Loop overhead |
-| 8 | s222 | 0.0257x | Loop overhead |
-| 9 | s342 | 0.0281x | Recurrence |
-| 10 | s111 | 0.0317x | Reduction |
+| 1 | s116 | 0.0091x | Loop overhead |
+| 2 | s252 | 0.0091x | Statement reorder |
+| 3 | s115 | 0.0174x | Loop overhead |
+| 4 | s318 | 0.0181x | Loop overhead |
+| 5 | s119 | 0.0222x | Loop overhead |
+| 6 | s118 | 0.0224x | Loop overhead |
+| 7 | s222 | 0.0257x | Loop overhead |
+| 8 | s342 | 0.0281x | Recurrence |
+| 9 | s111 | 0.0317x | Reduction |
+| 10 | s1213 | 0.0333x | Loop overhead |
 
-**Note:** Slowdowns are primarily due to kernel launch overhead dominating small operations. s422/s423/s424 had C reference timeouts (>60s) with Triton completing in ~10ms.
+**Note:** Slowdowns are primarily due to kernel launch overhead dominating small operations. s422/s423/s424 had C reference timeouts (>60s) with Triton completing in ~10ms. s1221 improved from 0.0004x to 0.05x after fixing the strip-vectorizable prompt to use a single kernel launch instead of per-strip kernel launches.
 
 ---
 
@@ -554,7 +563,7 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - **Correctness rate:** 96.7% (146/151 functions)
 - **First-try success rate:** 82.8% (125/151 functions)
 - **Retry recovery:** +21 functions via retries
-- **Performance:** 33.6% faster than C, 66.4% slower
+- **Performance:** 32.4% faster than C, 67.6% slower
 - **Max speedup:** 246.41x (s176)
 
 ---
@@ -637,9 +646,9 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 **Results (Test 28):**
 - **96.7% correctness** (146/151 functions pass)
 - **82.8% first-try success** (125 functions)
-- **33.6% achieve GPU speedup** (48/143 functions)
+- **32.4% achieve GPU speedup** (48/148 functions)
 - **Max 246.41x speedup** (s176)
-- **Median 0.57x** (kernel overhead often dominates)
+- **Median 0.53x** (kernel overhead often dominates)
 
 **Impact:**
 - Demonstrates LLM capability for specialized GPU kernel generation

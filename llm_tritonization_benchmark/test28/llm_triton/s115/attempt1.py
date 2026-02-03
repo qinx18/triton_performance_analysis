@@ -1,43 +1,45 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s115_kernel(a_ptr, aa_ptr, j, len_2d, BLOCK_SIZE: tl.constexpr):
+def s115_kernel(a_ptr, aa_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
+    # Get program ID for i dimension
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    i_offsets = block_start + offsets + (j + 1)
     
-    mask = (i_offsets < len_2d) & (i_offsets > j)
+    # Calculate i offsets for this block
+    i_offsets = tl.arange(0, BLOCK_SIZE)
+    i_idx = pid * BLOCK_SIZE + i_offsets
     
-    # Load a[j]
-    a_j = tl.load(a_ptr + j)
-    
-    # Load aa[j][i_offsets]
-    aa_offsets = j * len_2d + i_offsets
-    aa_vals = tl.load(aa_ptr + aa_offsets, mask=mask)
-    
-    # Load a[i_offsets]
-    a_vals = tl.load(a_ptr + i_offsets, mask=mask)
-    
-    # Compute a[i] -= aa[j][i] * a[j]
-    new_vals = a_vals - aa_vals * a_j
-    
-    # Store back to a[i_offsets]
-    tl.store(a_ptr + i_offsets, new_vals, mask=mask)
+    # Sequential loop over j inside kernel
+    for j in range(len_2d):
+        # Only process i values where i > j and i < len_2d
+        i_mask = (i_idx > j) & (i_idx < len_2d)
+        
+        # Load a[j] (scalar, broadcast to vector)
+        a_j = tl.load(a_ptr + j)
+        
+        # Load a[i] values for valid indices
+        a_i = tl.load(a_ptr + i_idx, mask=i_mask, other=0.0)
+        
+        # Load aa[j][i] values
+        aa_offsets = j * len_2d + i_idx
+        aa_ji = tl.load(aa_ptr + aa_offsets, mask=i_mask, other=0.0)
+        
+        # Compute: a[i] -= aa[j][i] * a[j]
+        result = a_i - aa_ji * a_j
+        
+        # Store back to a[i]
+        tl.store(a_ptr + i_idx, result, mask=i_mask)
 
 def s115_triton(a, aa, len_2d):
     BLOCK_SIZE = 256
     
-    for j in range(len_2d):
-        num_elements = len_2d - (j + 1)
-        if num_elements <= 0:
-            continue
-            
-        grid = (triton.cdiv(num_elements, BLOCK_SIZE),)
-        
-        s115_kernel[grid](
-            a, aa, j, len_2d,
-            BLOCK_SIZE=BLOCK_SIZE
-        )
+    # Calculate grid size for i dimension
+    grid = (triton.cdiv(len_2d, BLOCK_SIZE),)
+    
+    # Launch kernel
+    s115_kernel[grid](
+        a, aa, len_2d,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

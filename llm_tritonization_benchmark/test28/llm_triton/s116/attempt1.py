@@ -1,59 +1,33 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s116_kernel(a_ptr, a_copy_ptr, n):
-    # This kernel must be strictly sequential due to RAW dependencies
-    # Use a single thread to process all elements sequentially
+def s116_kernel(a_ptr, a_copy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    offsets = tl.arange(0, 1024)  # Define once at start
+    # Load from read-only copy
+    a_val = tl.load(a_copy_ptr + offsets, mask=mask)
+    a_next = tl.load(a_copy_ptr + offsets + 1, mask=mask & (offsets + 1 < n_elements))
     
-    # Process elements sequentially in chunks
-    for block_start in range(0, n - 5, 1024):
-        block_end = min(block_start + 1024, n - 5)
-        
-        for local_i in range(block_end - block_start):
-            i = block_start + local_i
-            
-            # Each iteration processes 5 consecutive elements
-            if i + 5 < n:
-                # Load values from read-only copy
-                val_i = tl.load(a_copy_ptr + i)
-                val_i1 = tl.load(a_copy_ptr + i + 1)
-                val_i2 = tl.load(a_copy_ptr + i + 2)
-                val_i3 = tl.load(a_copy_ptr + i + 3)
-                val_i4 = tl.load(a_copy_ptr + i + 4)
-                val_i5 = tl.load(a_copy_ptr + i + 5)
-                
-                # Compute new values following the dependency chain
-                new_val_i = val_i1 * val_i
-                tl.store(a_ptr + i, new_val_i)
-                
-                # Update val_i1 to use the newly computed value
-                new_val_i1 = val_i2 * new_val_i
-                tl.store(a_ptr + i + 1, new_val_i1)
-                
-                new_val_i2 = val_i3 * new_val_i1
-                tl.store(a_ptr + i + 2, new_val_i2)
-                
-                new_val_i3 = val_i4 * new_val_i2
-                tl.store(a_ptr + i + 3, new_val_i3)
-                
-                new_val_i4 = val_i5 * new_val_i3
-                tl.store(a_ptr + i + 4, new_val_i4)
+    # Compute result
+    result = a_next * a_val
+    
+    # Store to original array
+    tl.store(a_ptr + offsets, result, mask=mask)
 
 def s116_triton(a):
-    n = a.shape[0]
+    N = a.shape[0]
+    n_elements = N - 5
     
-    # Create read-only copy to handle WAR dependencies
+    # Create read-only copy
     a_copy = a.clone()
     
-    # Use single thread for strictly sequential execution
-    grid = (1,)
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s116_kernel[grid](
-        a,
-        a_copy,
-        n
+        a, a_copy, n_elements, BLOCK_SIZE
     )

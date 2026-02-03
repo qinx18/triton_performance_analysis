@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s453
-# Generated: 2026-01-30 18:27:28
+# Generated: 2026-02-02 19:28:30
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -46,6 +46,32 @@ real_t s453(struct args_t * func_args)
             a[i] = s * b[i];
         }
 ```
+
+================================================================================
+SCALAR EXPANSION PATTERN DETECTED
+================================================================================
+
+Kernel s453 contains scalar variables that create loop-carried
+dependencies but can be PARALLELIZED through SCALAR EXPANSION.
+
+Variable: s
+  Initial value: 0.
+  Expansion type: induction_variable
+  Reason: s is an induction variable with constant increment 2. Closed form: s = 2*(i+1)
+
+  Pattern: INDUCTION VARIABLE (trivially eliminable)
+  s increments by 2 each iteration.
+  Closed form: s = 2*(i+1)
+  Initial value: 0.
+
+  SIMPLIFICATION: Replace s with closed-form expression:
+    s → 2*(i+1)
+
+  After substitution, the loop becomes FULLY PARALLEL.
+  No scan or sequential phase is needed!
+
+================================================================================
+
 
 
 ## Array Information:
@@ -129,39 +155,55 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s453_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s453_kernel(
+    a_ptr, b_ptr,
+    N,
+    BLOCK_SIZE: tl.constexpr,
+):
+    # Get program ID and compute block start
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    
+    # Create offset vector once
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Sequential computation - each iteration depends on previous
-    for block_start in range(0, n_elements, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < n_elements
-        
-        # Load b values
-        b_vals = tl.load(b_ptr + current_offsets, mask=mask, other=0.0)
-        
-        # Compute s values: s = 2 * (i + 1) for each position
-        s_vals = 2.0 * (current_offsets + 1)
-        
-        # Compute a[i] = s * b[i]
-        a_vals = s_vals * b_vals
-        
-        # Store results
-        tl.store(a_ptr + current_offsets, a_vals, mask=mask)
+    # Compute current offsets for this block
+    current_offsets = block_start + offsets
+    
+    # Create mask for boundary checking
+    mask = current_offsets < N
+    
+    # Load b values
+    b_vals = tl.load(b_ptr + current_offsets, mask=mask)
+    
+    # Compute s values using closed form: s = 2 * (i + 1)
+    s_vals = 2.0 * (current_offsets + 1).to(tl.float32)
+    
+    # Compute a[i] = s * b[i]
+    a_vals = s_vals * b_vals
+    
+    # Store results
+    tl.store(a_ptr + current_offsets, a_vals, mask=mask)
 
 def s453_triton(a, b):
-    n_elements = a.shape[0]
+    N = a.shape[0]
     
+    # Choose block size
     BLOCK_SIZE = 256
     
-    s453_kernel[(1,)](
-        a, b, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+    # Calculate grid size
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    
+    # Launch kernel
+    s453_kernel[grid](
+        a, b,
+        N,
+        BLOCK_SIZE=BLOCK_SIZE,
     )
     
     return a

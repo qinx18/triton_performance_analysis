@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results. The output values don't match the expected TSVC C reference.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 5.42e+01
+**Max error observed**: 4.63e+00
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -14,53 +14,52 @@ Please fix the numerical computation. Common causes:
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s256_kernel(a_ptr, aa_ptr, bb_ptr, d_ptr, len_2d, BLOCK_SIZE: tl.constexpr):
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_mask = i_offsets < len_2d
+def s257_kernel(a_ptr, aa_ptr, bb_ptr, len_2d: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_mask = j_offsets < len_2d
     
-    # Load bb[j][i] and d[j] for current j (broadcast d[j] to match bb shape)
-    bb_vals = tl.load(bb_ptr + i_offsets, mask=i_mask)
-    d_val = tl.load(d_ptr)
-    
-    # Load a[j-1]
-    a_prev = tl.load(a_ptr)
-    
-    # Compute a[j] = 1.0 - a[j-1]
-    a_val = 1.0 - a_prev
-    
-    # Store a[j]
-    tl.store(a_ptr + 1, a_val)
-    
-    # Compute aa[j][i] = a[j] + bb[j][i] * d[j]
-    aa_vals = a_val + bb_vals * d_val
-    
-    # Store aa[j][i]
-    tl.store(aa_ptr + i_offsets, aa_vals, mask=i_mask)
-
-def s256_triton(a, aa, bb, d, len_2d):
-    BLOCK_SIZE = triton.next_power_of_2(len_2d)
-    
-    for j in range(1, len_2d):
-        # Calculate pointers for current j
-        a_ptr = a
-        aa_ptr = aa[j]
-        bb_ptr = bb[j]
-        d_ptr = d[j:j+1]  # Single element as tensor
+    for i in range(1, len_2d):
+        # Load a[i-1] (scalar)
+        a_prev = tl.load(a_ptr + (i - 1))
         
-        # Launch kernel for all i values in parallel
-        s256_kernel[(1,)](
-            a_ptr + j - 1,  # Point to a[j-1] for reading
-            aa_ptr,
-            bb_ptr,
-            d_ptr,
-            len_2d,
-            BLOCK_SIZE=BLOCK_SIZE
-        )
+        # For all j, compute a[i] = aa[j][i] - a[i-1]
+        # Since all j iterations write the same value to a[i], we compute it once
+        # Using aa[0][i] for the computation (any j would work since result is same)
+        aa_0_i = tl.load(aa_ptr + i)
+        a_i = aa_0_i - a_prev
+        
+        # Store a[i]
+        tl.store(a_ptr + i, a_i)
+        
+        # Now for each j, compute aa[j][i] = a[i] + bb[j][i]
+        aa_offsets = j_offsets * len_2d + i
+        bb_offsets = j_offsets * len_2d + i
+        
+        # Load bb[j][i] for all j
+        bb_vals = tl.load(bb_ptr + bb_offsets, mask=j_mask)
+        
+        # Compute aa[j][i] = a[i] + bb[j][i] for each j
+        aa_new = a_i + bb_vals
+        
+        # Store aa[j][i]
+        tl.store(aa_ptr + aa_offsets, aa_new, mask=j_mask)
+
+def s257_triton(a, aa, bb, len_2d):
+    BLOCK_SIZE = triton.next_power_of_2(len_2d)
+    BLOCK_SIZE = min(BLOCK_SIZE, 1024)
+    
+    grid = (1,)
+    
+    s257_kernel[grid](
+        a, aa, bb, 
+        len_2d,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
 ```
 
 
@@ -71,7 +70,7 @@ I have an original TSVC (Test Suite for Vectorizing Compilers) C function that I
 ## Original TSVC C Code:
 ```c
 
-real_t s256(struct args_t * func_args)
+real_t s257(struct args_t * func_args)
 {
 
 //    scalar and array expansion
@@ -81,10 +80,10 @@ real_t s256(struct args_t * func_args)
     gettimeofday(&func_args->t1, NULL);
 
     for (int nl = 0; nl < 10*(iterations/LEN_2D); nl++) {
-        for (int i = 0; i < LEN_2D; i++) {
-            for (int j = 1; j < LEN_2D; j++) {
-                a[j] = (real_t)1.0 - a[j - 1];
-                aa[j][i] = a[j] + bb[j][i]*d[j];
+        for (int i = 1; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                a[i] = aa[j][i] - a[i-1];
+                aa[j][i] = a[i] + bb[j][i];
             }
         }
         dummy(a, b, c, d, e, aa, bb, cc, 0.);
@@ -97,10 +96,10 @@ real_t s256(struct args_t * func_args)
 
 ## Kernel Loop to Implement:
 ```c
-        for (int i = 0; i < LEN_2D; i++) {
-            for (int j = 1; j < LEN_2D; j++) {
-                a[j] = (real_t)1.0 - a[j - 1];
-                aa[j][i] = a[j] + bb[j][i]*d[j];
+        for (int i = 1; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                a[i] = aa[j][i] - a[i-1];
+                aa[j][i] = a[i] + bb[j][i];
             }
         }
 ```
@@ -117,12 +116,12 @@ real_t aa[LEN_2D][LEN_2D], bb[LEN_2D][LEN_2D], cc[LEN_2D][LEN_2D], tt[LEN_2D][LE
 real_t flat_2d_array[LEN_2D*LEN_2D];
 int indx[LEN_1D];
 
-void s256_kernel() {
+void s257_kernel() {
 #pragma scop
-for (int i = 0; i < LEN_2D; i++) {
-            for (int j = 1; j < LEN_2D; j++) {
-                a[j] = (real_t)1.0 - a[j - 1];
-                aa[j][i] = a[j] + bb[j][i]*d[j];
+for (int i = 1; i < LEN_2D; i++) {
+            for (int j = 0; j < LEN_2D; j++) {
+                a[i] = aa[j][i] - a[i-1];
+                aa[j][i] = a[i] + bb[j][i];
             }
         }
 #pragma endscop
@@ -130,19 +129,38 @@ for (int i = 0; i < LEN_2D; i++) {
 **Dimensions**: ['i', 'j']
 
 **Data dependencies detected**:
-- Array `a`: write to `[(j)]`, read from `[(-1 + j)]`
+- Array `a`: write to `[(i)]`, read from `[(-1 + i)]`
 
-### Required Strategy: j-sequential, i-parallel
+### Required Strategy: i-sequential, j-parallel
 
-**Implementation Pattern (Sequential kernel launches):**
-- Python wrapper: loop over `j` sequentially, launching kernel each iteration
-- Triton kernel: parallelize ALL `i` values using VECTORIZED operations
+**Implementation Pattern (SINGLE KERNEL with in-kernel loop):**
+- Python wrapper: launch ONE kernel with `grid = (1,)`
+- Triton kernel: use `for i in range(...)` loop INSIDE the kernel
+- Triton kernel: parallelize `j` using `tl.arange(0, BLOCK_SIZE)` within the single block
 
-**Overwrite pattern:** Each i iteration overwrites the same location - last value wins
-**Implementation:** The final value will be from the last i iteration that executes
+**Why single-block works:** `j` ranges up to 256 (LEN_2D), which fits in one block.
+All threads in a block synchronize at each loop iteration, so cross-iteration
+dependencies are resolved automatically.
+
+**Example structure:**
+```python
+@triton.jit
+def kernel(...):
+    j_idx = tl.arange(0, BLOCK_SIZE)
+    for i in range(start, end):  # Sequential loop INSIDE kernel
+        # Load, compute, store for this i iteration
+        ...
+
+# Wrapper: single kernel launch!
+grid = (1,)  # one block covers all 256 elements
+kernel[grid](...)
+```
+
+**Overwrite pattern:** Each j iteration overwrites the same location - last value wins
+**Implementation:** The final value will be from the last j iteration that executes
 
 ### INVALID Parallelization (DO NOT USE)
-**i-sequential, j-parallel**: INCORRECT - causes race conditions
+**j-sequential, i-parallel**: INCORRECT - causes race conditions
 
 
 ## Array Information:
@@ -153,8 +171,8 @@ for (int i = 0; i < LEN_2D; i++) {
 
 ## Requirements:
 Please generate a complete Triton implementation that:
-1. Includes a @triton.jit kernel function named `s256_kernel`
-2. Includes a Python wrapper function named `s256_triton`
+1. Includes a @triton.jit kernel function named `s257_kernel`
+2. Includes a Python wrapper function named `s257_triton`
 3. The wrapper should accept the tensor arrays and scalar parameters shown in the required signature
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
@@ -168,7 +186,7 @@ Please generate a complete Triton implementation that:
 
 **REQUIRED function signature (use EXACTLY these parameter names):**
 ```python
-def s256_triton(a, aa, bb, d, len_2d):
+def s257_triton(a, aa, bb, len_2d):
     ...  # Just the kernel computation, NO timing loop
 ```
 
@@ -222,44 +240,49 @@ vals = tl.load(ptr + offsets, mask=mask)
 
 Provide ONLY the Python code, no additional explanation.
 
-This is attempt 2 of 10. Please provide a corrected implementation.
+This is attempt 4 of 10. Please provide a corrected implementation.
 Provide ONLY the Python code, no additional explanation.
 
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s256_kernel(aa_ptr, bb_ptr, d_ptr, a_val, len_2d, BLOCK_SIZE: tl.constexpr):
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    i_mask = i_offsets < len_2d
+def s257_kernel(a_ptr, aa_ptr, bb_ptr, len_2d: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    j_offsets = tl.arange(0, BLOCK_SIZE)
+    j_mask = j_offsets < len_2d
     
-    # Load bb[j][i] and d[j]
-    bb_vals = tl.load(bb_ptr + i_offsets, mask=i_mask)
-    d_val = tl.load(d_ptr)
-    
-    # Compute aa[j][i] = a[j] + bb[j][i] * d[j]
-    aa_vals = a_val + bb_vals * d_val
-    
-    # Store aa[j][i]
-    tl.store(aa_ptr + i_offsets, aa_vals, mask=i_mask)
-
-def s256_triton(a, aa, bb, d, len_2d):
-    BLOCK_SIZE = triton.next_power_of_2(len_2d)
-    
-    for j in range(1, len_2d):
-        # Compute a[j] = 1.0 - a[j-1]
-        a[j] = 1.0 - a[j-1]
+    for i in range(1, len_2d):
+        # Load a[i-1] (scalar)
+        a_prev = tl.load(a_ptr + (i - 1))
         
-        # Launch kernel for aa[j][i] computation
-        s256_kernel[(1,)](
-            aa[j],
-            bb[j],
-            d[j:j+1],
-            a[j],
-            len_2d,
-            BLOCK_SIZE=BLOCK_SIZE
-        )
+        # Process all j values for this i
+        for j in range(len_2d):
+            # Compute a[i] = aa[j][i] - a[i-1]
+            aa_ji = tl.load(aa_ptr + j * len_2d + i)
+            a_i = aa_ji - a_prev
+            
+            # Store a[i] (overwrites with each j)
+            tl.store(a_ptr + i, a_i)
+            
+            # Compute aa[j][i] = a[i] + bb[j][i]
+            bb_ji = tl.load(bb_ptr + j * len_2d + i)
+            aa_new = a_i + bb_ji
+            
+            # Store aa[j][i]
+            tl.store(aa_ptr + j * len_2d + i, aa_new)
+
+def s257_triton(a, aa, bb, len_2d):
+    BLOCK_SIZE = triton.next_power_of_2(len_2d)
+    BLOCK_SIZE = min(BLOCK_SIZE, 1024)
+    
+    grid = (1,)
+    
+    s257_kernel[grid](
+        a, aa, bb, 
+        len_2d,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

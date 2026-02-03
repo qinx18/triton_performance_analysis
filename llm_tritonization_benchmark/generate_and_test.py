@@ -20,6 +20,7 @@ import sys
 import subprocess
 import anthropic
 import re
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, List
@@ -131,6 +132,14 @@ except ImportError:
     HAS_LOOP_INTERCHANGE_ANALYSIS = False
     analyze_kernel_loop_interchange = None
     format_interchange_for_prompt = None
+
+try:
+    from compute_indirect_addressing import analyze_indirect_addressing, build_indirect_addressing_instructions
+    HAS_INDIRECT_ADDRESSING_ANALYSIS = True
+except ImportError:
+    HAS_INDIRECT_ADDRESSING_ANALYSIS = False
+    analyze_indirect_addressing = None
+    build_indirect_addressing_instructions = None
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
@@ -649,8 +658,14 @@ def build_stream_compaction_instructions(kernel_name: str, compaction_result: di
     return ""
 
 
-def load_pointer_aliasing_analysis(kernel_name: str) -> Optional[dict]:
-    """Load pointer aliasing analysis for a kernel."""
+def load_pointer_aliasing_analysis(kernel_name: str, reordering_result: dict = None) -> Optional[dict]:
+    """Load pointer aliasing analysis for a kernel.
+
+    Args:
+        kernel_name: Name of the kernel
+        reordering_result: Optional statement reordering result - if it indicates
+                          dependencies are eliminated, pass those to aliasing analysis
+    """
     if not HAS_POINTER_ALIASING_ANALYSIS or analyze_kernel_aliasing is None:
         return None
 
@@ -658,8 +673,13 @@ def load_pointer_aliasing_analysis(kernel_name: str) -> Optional[dict]:
     if not os.path.exists(kernel_file):
         return None
 
+    # Extract eliminated dependencies from reordering result
+    eliminated_deps = None
+    if reordering_result and reordering_result.get('applicable'):
+        eliminated_deps = reordering_result.get('eliminated_dependencies', [])
+
     try:
-        return analyze_kernel_aliasing(kernel_file)
+        return analyze_kernel_aliasing(kernel_file, eliminated_deps=eliminated_deps)
     except Exception:
         return None
 
@@ -669,8 +689,33 @@ def build_pointer_aliasing_instructions(kernel_name: str, aliasing_result: dict)
     if not aliasing_result:
         return ""
 
-    # Only include instructions for non-fully-parallel patterns
+    # For fully_parallel: only emit special advice when stride > 1 makes it look
+    # like a dependency but actually isn't (e.g., s111 with stride 2).
+    # For stride=1 cases that are fully_parallel (e.g., due to reordering or
+    # only WAR dependencies), don't emit misleading "disjoint" message.
     if aliasing_result.get('pattern_type') == 'fully_parallel':
+        stride = aliasing_result.get('details', {}).get('stride', 1)
+        same_array = aliasing_result.get('same_array_accesses', [])
+        has_offset_self_dep = any(
+            p['write_offset'] != p['read_offset'] for p in same_array
+            if p['write_offset'] is not None and p['read_offset'] is not None
+        )
+        # Only emit "disjoint due to stride" message when stride > 1
+        if has_offset_self_dep and stride > 1:
+            lines = [
+                "",
+                "## Parallelization Analysis",
+                "",
+                f"Despite the apparent self-dependency (same array read and written at different offsets),",
+                f"the loop stride is {stride}, which means writes and reads access DISJOINT index sets.",
+                "This loop is **FULLY PARALLEL** — each iteration is independent.",
+                "",
+                "Implement this with a standard parallel Triton kernel (one element per thread).",
+                f"Map the original loop index `i` to thread indices: `i = pid * BLOCK_SIZE + offsets`",
+                f"Remember the loop starts at a non-zero index and uses stride {stride}.",
+                "",
+            ]
+            return '\n'.join(lines)
         return ""
 
     # Use the formatted advice from the module
@@ -882,6 +927,30 @@ def build_loop_interchange_instructions(kernel_name: str, interchange_result: di
     return ""
 
 
+def load_indirect_addressing_analysis(kernel_name: str) -> Optional[dict]:
+    """Load indirect addressing analysis for a kernel."""
+    if not HAS_INDIRECT_ADDRESSING_ANALYSIS or analyze_indirect_addressing is None:
+        return None
+
+    try:
+        return analyze_indirect_addressing(kernel_name)
+    except Exception:
+        return None
+
+
+def build_indirect_addressing_prompt(kernel_name: str, indirect_result: dict) -> str:
+    """Build specific instructions for handling indirect addressing patterns."""
+    if not indirect_result or not indirect_result.get('has_indirect_addressing'):
+        return ""
+
+    if build_indirect_addressing_instructions:
+        formatted = build_indirect_addressing_instructions(indirect_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
 def detect_identity_matrix_pattern(c_code: str, seq_dim: str, par_dim: str) -> bool:
     """
     Detect identity matrix initialization pattern:
@@ -901,6 +970,40 @@ def detect_identity_matrix_pattern(c_code: str, seq_dim: str, par_dim: str) -> b
     has_column = bool(re.search(column_pattern, c_code))
 
     return has_diagonal and has_column
+
+
+def detect_alternating_recurrence(c_code: str, seq_dim: str) -> Optional[Dict]:
+    """
+    Detect alternating recurrence patterns like: a[j] = 1.0 - a[j-1]
+
+    This pattern has a closed form:
+    - a[j] = a[0] if j is even
+    - a[j] = 1.0 - a[0] if j is odd
+
+    Returns dict with pattern info or None if not detected.
+    """
+    import re
+    # Pattern: arr[seq] = constant - arr[seq-1] or arr[seq] = constant - arr[seq - 1]
+    pattern = rf'(\w+)\s*\[\s*{seq_dim}\s*\]\s*=\s*([\d.]+)\s*-\s*\1\s*\[\s*{seq_dim}\s*-\s*1\s*\]'
+    match = re.search(pattern, c_code)
+    if match:
+        return {
+            'array': match.group(1),
+            'constant': match.group(2),
+            'seq_dim': seq_dim,
+        }
+
+    # Also check for (real_t) cast: arr[j] = (real_t)1.0 - arr[j - 1]
+    pattern2 = rf'(\w+)\s*\[\s*{seq_dim}\s*\]\s*=\s*\(real_t\)\s*([\d.]+)\s*-\s*\1\s*\[\s*{seq_dim}\s*-\s*1\s*\]'
+    match = re.search(pattern2, c_code)
+    if match:
+        return {
+            'array': match.group(1),
+            'constant': match.group(2),
+            'seq_dim': seq_dim,
+        }
+
+    return None
 
 
 def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict]) -> str:
@@ -954,19 +1057,27 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
         lines.append("            aa[{}, {}] = ...".format(dims[0], dims[1]))
         lines.append("```")
         lines.append("")
-        lines.append("**Option 2: Wavefront/Anti-diagonal Parallelism (Advanced)**")
+        lines.append("**Option 2: Wavefront/Anti-diagonal Parallelism (Recommended)**")
         lines.append(f"Elements where `{dims[0]} + {dims[1]} = k` (same anti-diagonal) are independent.")
-        lines.append("Process anti-diagonals sequentially, parallelize within each:")
+        lines.append("Process anti-diagonals sequentially **inside a single kernel**, parallelize within each:")
+        lines.append("")
+        lines.append("**CRITICAL: Use a SINGLE kernel launch with an in-kernel loop over diagonals.**")
+        lines.append("DO NOT launch a separate kernel per diagonal — the launch overhead will dominate.")
+        lines.append("For LEN_2D=256, each diagonal fits in one block, so all threads synchronize")
+        lines.append("at each loop iteration boundary automatically.")
         lines.append("```python")
-        lines.append("def wrapper(aa):")
-        lines.append("    N = aa.shape[0]")
-        lines.append("    # Iterate over anti-diagonals")
-        lines.append("    for diag in range(2, 2*N - 1):  # diag = i + j")
-        lines.append(f"        # Elements on this diagonal: ({dims[0]}, {dims[1]}) where {dims[0]}+{dims[1]}=diag")
-        lines.append(f"        start_{dims[0]} = max(1, diag - N + 1)")
-        lines.append(f"        end_{dims[0]} = min(diag, N)")
-        lines.append(f"        # All elements on this diagonal can be computed in parallel")
-        lines.append(f"        kernel[grid](aa, diag, start_{dims[0]}, end_{dims[0]}, ...)")
+        lines.append("@triton.jit")
+        lines.append(f"def kernel(aa_ptr, bb_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):")
+        lines.append(f"    {dims[1]}_idx = tl.arange(0, BLOCK_SIZE)  # parallelize {dims[1]}")
+        lines.append(f"    for diag in range(2, 2 * N):  # anti-diagonal loop INSIDE kernel")
+        lines.append(f"        {dims[0]} = diag - {dims[1]}_idx")
+        lines.append(f"        mask = ({dims[0]} >= 1) & ({dims[0]} < N) & ({dims[1]}_idx >= 1) & ({dims[1]}_idx < N)")
+        lines.append(f"        # Load, compute, store with mask")
+        lines.append("        ...")
+        lines.append("")
+        lines.append("# Wrapper: SINGLE kernel launch!")
+        lines.append("grid = (1,)  # one block covers all 256 elements")
+        lines.append("kernel[grid](aa, bb, N, BLOCK_SIZE=256)")
         lines.append("```")
         lines.append("")
         return "\n".join(lines)
@@ -1050,11 +1161,106 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
                 lines.append("```")
                 lines.append("")
         else:
-            # Fallback to sequential kernel launches
-            lines.append("**Implementation Pattern (Sequential kernel launches):**")
-            lines.append(f"- Python wrapper: loop over `{seq_dim}` sequentially, launching kernel each iteration")
-            lines.append(f"- Triton kernel: parallelize ALL `{par_dim}` values using VECTORIZED operations")
-            lines.append("")
+            # Check if parallel dimension is small enough for single-block in-kernel loop
+            # For LEN_2D (256), one block covers the entire parallel dimension,
+            # so cross-block sync issues don't apply.
+            c_code = analysis.get('c_code', '')
+            par_fits_one_block = False
+            # Check if the parallel dimension fits in a single block (≤256)
+            # Case 1: par_dim < LEN_2D or par_dim < 256
+            import re as _re
+            bound_match = _re.search(rf'{par_dim}\s*<\s*(\w+)', c_code)
+            if bound_match and bound_match.group(1) in ('LEN_2D', '256'):
+                par_fits_one_block = True
+            # Case 2: par_dim <= expr where expr is bounded by LEN_2D
+            # (e.g., j <= i-1 where i < LEN_2D -> j <= 254)
+            if not par_fits_one_block:
+                # Check if the outer (sequential) loop is bounded by LEN_2D
+                seq_bound_match = _re.search(rf'{seq_dim}\s*<\s*(\w+)', c_code)
+                if seq_bound_match and seq_bound_match.group(1) in ('LEN_2D', '256'):
+                    # Inner par_dim is bounded by seq_dim, which is bounded by LEN_2D
+                    par_fits_one_block = True
+                # Also check if LEN_2D appears anywhere as a loop bound in the scop
+                if not par_fits_one_block and 'LEN_2D' in c_code and 'LEN_1D' not in c_code:
+                    par_fits_one_block = True
+
+            if par_fits_one_block:
+                # Check for alternating recurrence pattern
+                alt_recur = detect_alternating_recurrence(c_code, seq_dim)
+                if alt_recur:
+                    arr = alt_recur['array']
+                    const = alt_recur['constant']
+                    lines.append(f"**⚠️ CRITICAL: ALTERNATING RECURRENCE DETECTED**")
+                    lines.append("")
+                    lines.append(f"The pattern `{arr}[{seq_dim}] = {const} - {arr}[{seq_dim}-1]` has a **closed form**:")
+                    lines.append(f"- `{arr}[{seq_dim}] = {arr}[0]` when {seq_dim} is even")
+                    lines.append(f"- `{arr}[{seq_dim}] = {const} - {arr}[0]` when {seq_dim} is odd")
+                    lines.append("")
+                    lines.append(f"**This makes the ENTIRE loop fully parallel!**")
+                    lines.append("")
+                    lines.append(f"Pre-compute `{arr}` using the closed form, then parallelize everything:")
+                    lines.append("```python")
+                    lines.append("@triton.jit")
+                    lines.append(f"def kernel({arr}_ptr, aa_ptr, bb_ptr, d_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):")
+                    lines.append("    pid = tl.program_id(0)")
+                    lines.append(f"    {par_dim}_offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)")
+                    lines.append(f"    {par_dim}_mask = {par_dim}_offsets < N")
+                    lines.append("")
+                    lines.append(f"    # Load {arr}[0] once")
+                    lines.append(f"    {arr}0 = tl.load({arr}_ptr)")
+                    lines.append("")
+                    lines.append(f"    for {seq_dim} in range(1, N):")
+                    lines.append(f"        # Closed-form: {arr}[{seq_dim}] = {arr}0 if {seq_dim} even, else {const} - {arr}0")
+                    lines.append(f"        {arr}_{seq_dim} = tl.where({seq_dim} % 2 == 0, {arr}0, {const} - {arr}0)")
+                    lines.append("")
+                    lines.append(f"        # Parallel load of bb[{seq_dim}][{par_dim}] for all {par_dim}")
+                    lines.append(f"        bb_offsets = {seq_dim} * N + {par_dim}_offsets")
+                    lines.append(f"        bb_vals = tl.load(bb_ptr + bb_offsets, mask={par_dim}_mask)")
+                    lines.append(f"        d_{seq_dim} = tl.load(d_ptr + {seq_dim})")
+                    lines.append("")
+                    lines.append(f"        # Parallel compute and store aa[{seq_dim}][{par_dim}]")
+                    lines.append(f"        aa_vals = {arr}_{seq_dim} + bb_vals * d_{seq_dim}")
+                    lines.append(f"        aa_offsets = {seq_dim} * N + {par_dim}_offsets")
+                    lines.append(f"        tl.store(aa_ptr + aa_offsets, aa_vals, mask={par_dim}_mask)")
+                    lines.append("")
+                    lines.append(f"        # Also store {arr}[{seq_dim}] (only thread 0 needs to do this)")
+                    lines.append(f"        if pid == 0:")
+                    lines.append(f"            tl.store({arr}_ptr + {seq_dim}, {arr}_{seq_dim})")
+                    lines.append("")
+                    lines.append("# Wrapper: parallelize over columns")
+                    lines.append("grid = (triton.cdiv(N, BLOCK_SIZE),)")
+                    lines.append("kernel[grid](...)")
+                    lines.append("```")
+                    lines.append("")
+                else:
+                    lines.append("**Implementation Pattern (SINGLE KERNEL with in-kernel loop):**")
+                    lines.append(f"- Python wrapper: launch ONE kernel with `grid = (1,)`")
+                    lines.append(f"- Triton kernel: use `for {seq_dim} in range(...)` loop INSIDE the kernel")
+                    lines.append(f"- Triton kernel: parallelize `{par_dim}` using `tl.arange(0, BLOCK_SIZE)` within the single block")
+                    lines.append("")
+                    lines.append(f"**Why single-block works:** `{par_dim}` ranges up to 256 (LEN_2D), which fits in one block.")
+                    lines.append("All threads in a block synchronize at each loop iteration, so cross-iteration")
+                    lines.append("dependencies are resolved automatically.")
+                    lines.append("")
+                    lines.append("**Example structure:**")
+                    lines.append("```python")
+                    lines.append("@triton.jit")
+                    lines.append(f"def kernel(...):")
+                    lines.append(f"    {par_dim}_idx = tl.arange(0, BLOCK_SIZE)")
+                    lines.append(f"    for {seq_dim} in range(start, end):  # Sequential loop INSIDE kernel")
+                    lines.append(f"        # Load, compute, store for this {seq_dim} iteration")
+                    lines.append("        ...")
+                    lines.append("")
+                    lines.append("# Wrapper: single kernel launch!")
+                    lines.append("grid = (1,)  # one block covers all 256 elements")
+                    lines.append("kernel[grid](...)")
+                    lines.append("```")
+                    lines.append("")
+            else:
+                lines.append("**Implementation Pattern (Sequential kernel launches):**")
+                lines.append(f"- Python wrapper: loop over `{seq_dim}` sequentially, launching kernel each iteration")
+                lines.append(f"- Triton kernel: parallelize ALL `{par_dim}` values using VECTORIZED operations")
+                lines.append("")
 
         if par_type == 'reduction':
             lines.append(f"**Reduction pattern:** Use `tl.sum()` to reduce across {par_dim} dimension")
@@ -1079,7 +1285,8 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       crossing_threshold_section: str = "", loop_unrolling_section: str = "",
                       early_exit_section: str = "", statement_reordering_section: str = "",
                       scalar_expansion_section: str = "", reduction_section: str = "",
-                      convolution_section: str = "", interchange_section: str = "") -> str:
+                      convolution_section: str = "", interchange_section: str = "",
+                      indirect_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -1112,7 +1319,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{interchange_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
+{helper_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{interchange_section}{indirect_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -1286,7 +1493,11 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     war_section = build_war_instructions(kernel_name, war_result, overwrite_result)
     compaction_result = load_stream_compaction_analysis(kernel_name)
     compaction_section = build_stream_compaction_instructions(kernel_name, compaction_result)
-    aliasing_result = load_pointer_aliasing_analysis(kernel_name)
+    # Load statement reordering BEFORE aliasing so we can pass eliminated deps
+    statement_reordering_result = load_statement_reordering_analysis(kernel_name)
+    statement_reordering_section = build_statement_reordering_instructions(kernel_name, statement_reordering_result)
+    # Aliasing analysis should consider dependencies eliminated by statement reordering
+    aliasing_result = load_pointer_aliasing_analysis(kernel_name, reordering_result=statement_reordering_result)
     aliasing_section = build_pointer_aliasing_instructions(kernel_name, aliasing_result)
     crossing_threshold_result = load_crossing_threshold_analysis(kernel_name)
     crossing_threshold_section = build_crossing_threshold_instructions(kernel_name, crossing_threshold_result)
@@ -1294,8 +1505,6 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     loop_unrolling_section = build_loop_unrolling_instructions(kernel_name, loop_unrolling_result)
     early_exit_result = load_early_exit_analysis(kernel_name)
     early_exit_section = build_early_exit_instructions(kernel_name, early_exit_result)
-    statement_reordering_result = load_statement_reordering_analysis(kernel_name)
-    statement_reordering_section = build_statement_reordering_instructions(kernel_name, statement_reordering_result)
     scalar_expansion_result = load_scalar_expansion_analysis(kernel_name)
     scalar_expansion_section = build_scalar_expansion_instructions(kernel_name, scalar_expansion_result)
     reduction_result = load_reduction_analysis(kernel_name)
@@ -1304,8 +1513,10 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     convolution_section = build_convolution_pattern_instructions(kernel_name, convolution_result)
     interchange_result = load_loop_interchange_analysis(kernel_name)
     interchange_section = build_loop_interchange_instructions(kernel_name, interchange_result)
+    indirect_result = load_indirect_addressing_analysis(kernel_name)
+    indirect_section = build_indirect_addressing_prompt(kernel_name, indirect_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section, interchange_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section, interchange_section, indirect_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
@@ -2139,6 +2350,12 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
     test_dir = Path("my_triton_implementations") / func_name
+
+    # Clean up previous attempts before regenerating
+    if func_code_dir.exists():
+        shutil.rmtree(func_code_dir)
+    if func_raw_dir.exists():
+        shutil.rmtree(func_raw_dir)
 
     test_dir.mkdir(exist_ok=True)
     llm_triton_dir.mkdir(exist_ok=True)
