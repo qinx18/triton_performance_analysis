@@ -2345,7 +2345,7 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     print(f"  Offset: {func_spec['has_offset']}, Conditional: {func_spec['has_conditional']}, Reduction: {func_spec['has_reduction']}")
     print(f"{'=' * 70}")
 
-    test_dir = Path("test28")
+    test_dir = Path("test29")
     llm_triton_dir = test_dir / "llm_triton"
     func_code_dir = llm_triton_dir / func_name  # llm_triton/s000/
     func_raw_dir = llm_triton_dir / "raw_responses" / func_name  # llm_triton/raw_responses/s000/
