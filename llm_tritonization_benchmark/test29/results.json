@@ -1,0 +1,92 @@
+{
+  "s222": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.118139,
+      "triton_time_ms": 0.102681,
+      "speedup": 1.150544
+    }
+  },
+  "s211": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.098035,
+      "triton_time_ms": 0.123536,
+      "speedup": 0.793571
+    }
+  },
+  "s261": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 8,
+    "final_error": {
+      "type": "runtime",
+      "message": "xiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py\", line 167, in visit_FunctionDef\n    self.generic_visit(node)\n  File \"/home/qinxiao/anaconda3/lib/python3.12/ast.py\", line 415, in generic_visit\n    self.visit(item)\n  File \"/home/qinxiao/anaconda3/lib/python3.12/ast.py\", line 407, in visit\n    return visitor(node)\n           ^^^^^^^^^^^^^\n  File \"/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py\", line 233, in visit_For\n    self.generic_visit(node)\n  File"
+    },
+    "benchmark": {
+      "c_ref_time_ms": 0.122664,
+      "triton_time_ms": 0.106652,
+      "speedup": 1.150136
+    }
+  },
+  "s323": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.166072,
+      "triton_time_ms": 1.616179,
+      "speedup": 0.102756
+    }
+  },
+  "s3112": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 3,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 8.65e-01"
+    },
+    "benchmark": {
+      "c_ref_time_ms": 0.056757,
+      "triton_time_ms": 0.171732,
+      "speedup": 0.330496
+    }
+  },
+  "s3251": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.100434,
+      "triton_time_ms": 0.109469,
+      "speedup": 0.917464
+    }
+  },
+  "s1221": {
+    "c_ref_available": true,
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 0.043608,
+      "triton_time_ms": 0.083426,
+      "speedup": 0.522712
+    }
+  }
+}

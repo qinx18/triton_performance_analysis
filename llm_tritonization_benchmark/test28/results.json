@@ -232,8 +232,8 @@
     "final_error": null,
     "benchmark": {
       "c_ref_time_ms": 0.042621,
-      "triton_time_ms": 0.887646,
-      "speedup": 0.048016
+      "triton_time_ms": 0.082,
+      "speedup": 0.52
     }
   },
   "s123": {
@@ -608,7 +608,7 @@
     "benchmark": {
       "c_ref_time_ms": 0.10287,
       "triton_time_ms": 2.360427,
-      "speedup": 0.043581
+      "speedup": 0.79
     }
   },
   "s2111": {
@@ -657,9 +657,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.118431,
-      "triton_time_ms": 4.607035,
-      "speedup": 0.025706
+      "c_ref_time_ms": 0.112,
+      "triton_time_ms": 0.097,
+      "speedup": 1.15
     }
   },
   "s2233": {
@@ -929,7 +929,7 @@
     "benchmark": {
       "c_ref_time_ms": 0.121566,
       "triton_time_ms": 1.654964,
-      "speedup": 0.073455
+      "speedup": 1.15
     }
   },
   "s271": {
@@ -1185,12 +1185,12 @@
     "c_ref_available": true,
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
+    "attempts": 3,
     "final_error": null,
     "benchmark": {
       "c_ref_time_ms": 0.055826,
-      "triton_time_ms": 1.280618,
-      "speedup": 0.043593
+      "triton_time_ms": 0.169,
+      "speedup": 0.33
     }
   },
   "s3113": {
@@ -1351,8 +1351,8 @@
     "final_error": null,
     "benchmark": {
       "c_ref_time_ms": 0.096773,
-      "triton_time_ms": 2.094398,
-      "speedup": 0.046206
+      "triton_time_ms": 0.105,
+      "speedup": 0.92
     }
   },
   "s331": {

@@ -141,6 +141,14 @@ except ImportError:
     analyze_indirect_addressing = None
     build_indirect_addressing_instructions = None
 
+try:
+    from compute_loop_distribution import analyze_kernel_loop_distribution, format_loop_distribution_for_prompt
+    HAS_LOOP_DISTRIBUTION_ANALYSIS = True
+except ImportError:
+    HAS_LOOP_DISTRIBUTION_ANALYSIS = False
+    analyze_kernel_loop_distribution = None
+    format_loop_distribution_for_prompt = None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 
@@ -658,13 +666,16 @@ def build_stream_compaction_instructions(kernel_name: str, compaction_result: di
     return ""
 
 
-def load_pointer_aliasing_analysis(kernel_name: str, reordering_result: dict = None) -> Optional[dict]:
+def load_pointer_aliasing_analysis(kernel_name: str, reordering_result: dict = None, distribution_result: dict = None) -> Optional[dict]:
     """Load pointer aliasing analysis for a kernel.
 
     Args:
         kernel_name: Name of the kernel
         reordering_result: Optional statement reordering result - if it indicates
                           dependencies are eliminated, pass those to aliasing analysis
+        distribution_result: Optional loop distribution result - if it indicates
+                            arrays are fully transformed (canceling ops or power recurrence),
+                            skip aliasing analysis for those arrays
     """
     if not HAS_POINTER_ALIASING_ANALYSIS or analyze_kernel_aliasing is None:
         return None
@@ -674,12 +685,46 @@ def load_pointer_aliasing_analysis(kernel_name: str, reordering_result: dict = N
         return None
 
     # Extract eliminated dependencies from reordering result
-    eliminated_deps = None
+    eliminated_deps = []
     if reordering_result and reordering_result.get('applicable'):
         eliminated_deps = reordering_result.get('eliminated_dependencies', [])
 
+    # Extract arrays that are fully handled by loop distribution
+    # (canceling ops make them no-op, power recurrence transforms them to parallel,
+    # or distributable loops are verified parallelizable per-statement)
+    if distribution_result and distribution_result.get('applicable'):
+        # Arrays in canceling pairs are unchanged - skip aliasing for them
+        for pair in distribution_result.get('canceling_pairs', []):
+            arr = pair.get('array')
+            if arr and arr not in eliminated_deps:
+                eliminated_deps.append(arr)
+        # Arrays with power recurrence are transformed to parallel - skip aliasing
+        for rec in distribution_result.get('power_recurrences', []):
+            arr = rec.get('array')
+            if arr and arr not in eliminated_deps:
+                eliminated_deps.append(arr)
+        # For distributable loops: loop distribution already verified each statement
+        # is parallelizable by checking same-array read/write offsets. The cross-statement
+        # dependencies are handled by running distributed loops sequentially.
+        # Add all arrays involved in verified distributable statements.
+        distributable = distribution_result.get('distributable_loops')
+        if distributable:
+            all_verified = all(d.get('verified_safe') for d in distributable)
+            if all_verified:
+                for d in distributable:
+                    for arr in d.get('writes', []):
+                        if arr and arr not in eliminated_deps:
+                            eliminated_deps.append(arr)
+                    for arr in d.get('reads', []):
+                        if arr and arr not in eliminated_deps:
+                            eliminated_deps.append(arr)
+
     try:
-        return analyze_kernel_aliasing(kernel_file, eliminated_deps=eliminated_deps)
+        return analyze_kernel_aliasing(
+            kernel_file,
+            eliminated_deps=eliminated_deps if eliminated_deps else None,
+            distribution_result=distribution_result
+        )
     except Exception:
         return None
 
@@ -945,6 +990,30 @@ def build_indirect_addressing_prompt(kernel_name: str, indirect_result: dict) ->
 
     if build_indirect_addressing_instructions:
         formatted = build_indirect_addressing_instructions(indirect_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
+def load_loop_distribution_analysis(kernel_name: str) -> Optional[dict]:
+    """Load loop distribution analysis for a kernel."""
+    if not HAS_LOOP_DISTRIBUTION_ANALYSIS or analyze_kernel_loop_distribution is None:
+        return None
+
+    try:
+        return analyze_kernel_loop_distribution(kernel_name)
+    except Exception:
+        return None
+
+
+def build_loop_distribution_instructions(kernel_name: str, distribution_result: dict) -> str:
+    """Build specific instructions for handling loop distribution patterns."""
+    if not distribution_result or not distribution_result.get('applicable'):
+        return ""
+
+    if format_loop_distribution_for_prompt:
+        formatted = format_loop_distribution_for_prompt(distribution_result)
         if formatted:
             return f"\n{formatted}\n"
 
@@ -1286,7 +1355,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       early_exit_section: str = "", statement_reordering_section: str = "",
                       scalar_expansion_section: str = "", reduction_section: str = "",
                       convolution_section: str = "", interchange_section: str = "",
-                      indirect_section: str = "") -> str:
+                      indirect_section: str = "", loop_distribution_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -1319,7 +1388,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{interchange_section}{indirect_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
+{helper_section}{loop_distribution_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{interchange_section}{indirect_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -1537,8 +1606,12 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     # Load statement reordering BEFORE aliasing so we can pass eliminated deps
     statement_reordering_result = load_statement_reordering_analysis(kernel_name)
     statement_reordering_section = build_statement_reordering_instructions(kernel_name, statement_reordering_result)
-    # Aliasing analysis should consider dependencies eliminated by statement reordering
-    aliasing_result = load_pointer_aliasing_analysis(kernel_name, reordering_result=statement_reordering_result)
+    # Load loop distribution BEFORE aliasing - if it fully transforms a pattern,
+    # aliasing analysis should skip those arrays
+    loop_distribution_result = load_loop_distribution_analysis(kernel_name)
+    loop_distribution_section = build_loop_distribution_instructions(kernel_name, loop_distribution_result)
+    # Aliasing analysis should consider dependencies eliminated by statement reordering and loop distribution
+    aliasing_result = load_pointer_aliasing_analysis(kernel_name, reordering_result=statement_reordering_result, distribution_result=loop_distribution_result)
     aliasing_section = build_pointer_aliasing_instructions(kernel_name, aliasing_result)
     crossing_threshold_result = load_crossing_threshold_analysis(kernel_name)
     crossing_threshold_section = build_crossing_threshold_instructions(kernel_name, crossing_threshold_result)
@@ -1557,7 +1630,7 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     indirect_result = load_indirect_addressing_analysis(kernel_name)
     indirect_section = build_indirect_addressing_prompt(kernel_name, indirect_result)
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section, interchange_section, indirect_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section, interchange_section, indirect_section, loop_distribution_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 

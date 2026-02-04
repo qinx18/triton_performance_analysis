@@ -255,8 +255,8 @@ For each function, automatically generates:
 |--------|---------|---------|--------|
 | Pass Rate | 96.7% (146/151) | **100%** (151/151) | +5 functions |
 | First-try Success | 82.8% (125) | 84.8% (128) | +3 functions |
-| Mean Speedup | 2.55x | 2.62x | +2.7% |
-| Median Speedup | 0.53x | 0.60x | +13.2% |
+| Mean Speedup | 2.55x | 2.72x | +6.7% |
+| Median Speedup | 0.53x | 0.62x | +17.0% |
 
 ---
 
@@ -385,9 +385,9 @@ requirement, the LLM could not escape this pattern across 10 retries.
 | **Valid Speedups** | 148 | 148 | - |
 | **C Ref Timeouts** | 3 | 3 | - |
 | **Triton Timeouts** | 0 | 0 | - |
-| **Mean Speedup** | 2.55x | 2.62x | +2.7% |
-| **Median Speedup** | 0.53x | 0.60x | +13.2% |
-| **Min Speedup** | 0.0004x | 0.026x | +65x |
+| **Mean Speedup** | 2.55x | 2.72x | +6.7% |
+| **Median Speedup** | 0.53x | 0.62x | +17.0% |
+| **Min Speedup** | 0.0004x | 0.048x | +120x |
 | **Max Speedup** | 246.41x | 246.19x | - |
 
 ### Performance Distribution (148 functions with valid speedups)
@@ -397,13 +397,13 @@ Speedup Range          Count    %     Distribution
 ─────────────────────────────────────────────────────────────────
 >=2x faster           :  21   (14.2%) █████████████████████
 1.5x-2x faster        :  14   ( 9.5%) ██████████████
-1x-1.5x faster        :  12   ( 8.1%) ████████████
-0.5x-1x (slower)      :  42   (28.4%) ██████████████████████████████████████████
+1x-1.5x faster        :  15   (10.1%) ███████████████
+0.5x-1x (slower)      :  45   (30.4%) █████████████████████████████████████████████
 0.1x-0.5x (slower)    :  43   (29.1%) ███████████████████████████████████████████
-<0.1x (much slower)   :  16   (10.8%) ████████████████
+<0.1x (much slower)   :  10   ( 6.8%) ██████████
 ─────────────────────────────────────────────────────────────────
-Triton faster (>=1x)  :  47   (31.8%)
-Triton slower (<1x)   : 101   (68.2%)
+Triton faster (>=1x)  :  50   (33.8%)
+Triton slower (<1x)   :  98   (66.2%)
 ```
 
 ### Visual Distribution Comparison: Test 28 (Initial) → Test 28 (Current)
@@ -411,26 +411,26 @@ Triton slower (<1x)   : 101   (68.2%)
 ```
                          Test 28 (Initial)              Test 28 (Current)                  Change
                     ─────────────────────────────────────────────────────────────────────
-<0.1x (slowest)     █████████████████████████████  29   ████████████████  16       -13  ✓
+<0.1x (slowest)     █████████████████████████████  29   ██████████  10             -19  ✓
 0.1x-0.5x           ███████████████████████████████████████████  43   ███████████████████████████████████████████  43        0
-0.5x-1x             ████████████████████████████  28   ██████████████████████████████████████████  42       +14  ✓
-1x-1.5x             ██████████████  14                 ████████████  12                -2
+0.5x-1x             ████████████████████████████  28   █████████████████████████████████████████████  45       +17  ✓
+1x-1.5x             ██████████████  14                 ███████████████  15              +1  ✓
 1.5x-2x             ████████████  12                   ██████████████  14              +2
 >=2x (fastest)      ██████████████████████  22         █████████████████████  21       -1
                     ─────────────────────────────────────────────────────────────────────
-Triton >= 1x:       48 (32.4%)                         47 (31.8%)                      -1
+Triton >= 1x:       48 (32.4%)                         50 (33.8%)                      +2  ✓
 
-Key improvement: 13 functions moved OUT of <0.1x tier (extremely slow) to faster tiers
+Key improvement: 19 functions moved OUT of <0.1x tier (extremely slow) to faster tiers
 ```
 
 ### Performance Shift Analysis
 ```
                     SLOWER  ◄─────────────────────►  FASTER
 
-<0.1x   ████████████████  16  (was 29, improved by 13 functions)
+<0.1x   ██████████  10  (was 29, improved by 19 functions)
 0.1-0.5x███████████████████████████████████████████  43
-0.5-1x  ██████████████████████████████████████████  42  (gained 14 functions)
-1-1.5x  ████████████  12
+0.5-1x  █████████████████████████████████████████████  45  (gained 17 functions)
+1-1.5x  ███████████████  15
 1.5-2x  ██████████████  14
 >=2x    █████████████████████  21
         | - - - - | - - - - | - - - - | - - - - | - - - - |
@@ -462,16 +462,16 @@ Key improvement: 13 functions moved OUT of <0.1x tier (extremely slow) to faster
 
 | Rank | Function | Speedup | Notes |
 |------|----------|---------|-------|
-| 1 | s222 | 0.026x | Statement reorder pattern |
-| 2 | s211 | 0.040x | Statement reorder pattern |
-| 3 | s3112 | 0.044x | Recurrence |
-| 4 | s3251 | 0.046x | Loop overhead |
-| 5 | s1221 | 0.048x | Strip-vectorizable |
-| 6 | s251 | 0.048x | Loop overhead |
-| 7 | s277 | 0.056x | Conditional |
-| 8 | s1251 | 0.069x | Strip-vectorizable |
-| 9 | s261 | 0.074x | Statement reorder pattern |
-| 10 | s321 | 0.076x | Loop overhead |
+| 1 | s251 | 0.048x | Loop overhead |
+| 2 | s277 | 0.056x | Conditional |
+| 3 | s1251 | 0.069x | Strip-vectorizable |
+| 4 | s321 | 0.076x | Loop overhead |
+| 5 | s257 | 0.080x | Sequential pattern |
+| 6 | s221 | 0.082x | Statement reorder |
+| 7 | s322 | 0.082x | Loop overhead |
+| 8 | s253 | 0.087x | Loop overhead |
+| 9 | s317 | 0.088x | Scalar recurrence |
+| 10 | s2251 | 0.089x | Induction variable |
 
 **Note:** Slowdowns are primarily due to kernel launch overhead dominating small operations. s422/s423/s424 had C reference timeouts (>60s) with Triton completing in ~10ms.
 
@@ -479,12 +479,16 @@ Key improvement: 13 functions moved OUT of <0.1x tier (extremely slow) to faster
 
 | Function | Initial | Test 28 (Current) | Improvement | Root Cause |
 |----------|---------|---------|-------------|------------|
-| s1221 | 0.0004x | 0.048x | **107x** | Fixed strip-vectorizable kernel launch |
+| s1221 | 0.0004x | 0.52x | **1300x** | Strided prefix sum (4 parallel streams) |
 | s256 | 0.037x | 3.41x | **92x** | j-sequential recurrence optimization |
 | s252 | 0.009x | 0.51x | **56x** | Statement reorder fix |
 | s115 | 0.017x | 0.92x | **53x** | Loop overhead reduction |
+| s222 | 0.026x | 1.15x | **44x** | Statement reorder optimization |
 | s2111 | 0.092x | 3.70x | **40x** | Double dimension optimization |
-| s1213 | 0.033x | 0.60x | **18x** | Statement reordering module fix |
+| s3251 | 0.046x | 0.92x | **20x** | Loop distribution (verified parallel) |
+| s211 | 0.040x | 0.79x | **20x** | Statement reorder optimization |
+| s261 | 0.074x | 1.15x | **16x** | Statement reorder optimization |
+| s3112 | 0.044x | 0.33x | **8x** | Prefix sum with tl.cumsum() |
 
 ---
 
@@ -588,9 +592,9 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 - **Correctness rate:** 100% (151/151 functions)
 - **First-try success rate:** 84.8% (128/151 functions)
 - **Retry recovery:** +23 functions via retries
-- **Performance:** 31.8% faster than C, 68.2% slower
+- **Performance:** 33.8% faster than C, 66.2% slower
 - **Max speedup:** 246.19x (s176)
-- **Median speedup improved:** 0.53x → 0.60x (+13%)
+- **Median speedup improved:** 0.53x → 0.62x (+17%)
 
 ---
 
@@ -672,9 +676,9 @@ def kernel(a_ptr, b_ptr, n, BLOCK_SIZE: tl.constexpr):
 **Results (Test 28 (Current)):**
 - **100% correctness** (151/151 functions pass)
 - **84.8% first-try success** (128 functions)
-- **31.8% achieve GPU speedup** (47/148 functions)
+- **33.8% achieve GPU speedup** (50/148 functions)
 - **Max 246.19x speedup** (s176)
-- **Median 0.60x** (+13% improvement from Test 28)
+- **Median 0.62x** (+17% improvement from Test 28)
 
 **Impact:**
 - Demonstrates LLM capability for specialized GPU kernel generation
