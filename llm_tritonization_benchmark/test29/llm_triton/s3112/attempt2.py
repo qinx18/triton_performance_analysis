@@ -1,50 +1,54 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s3112_kernel(a_ptr, b_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def s3112_kernel(a_ptr, b_ptr, block_offsets_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     block_id = tl.program_id(0)
-    block_start = block_id * BLOCK_SIZE
+    
     offsets = tl.arange(0, BLOCK_SIZE)
+    block_start = block_id * BLOCK_SIZE
     current_offsets = block_start + offsets
     mask = current_offsets < n_elements
     
-    # Load values
+    # Load input values
     vals = tl.load(a_ptr + current_offsets, mask=mask, other=0.0)
     
-    # Compute prefix sum within block
+    # Compute prefix sum within the block
     prefix_sums = tl.cumsum(vals, axis=0)
     
-    # Add cumulative sum from previous blocks
+    # Add offset from previous blocks if not the first block
     if block_id > 0:
-        # Load the previous block's final cumulative sum
-        prev_block_end = block_start - 1
-        prev_sum = tl.load(b_ptr + prev_block_end)
-        prefix_sums = prefix_sums + prev_sum
+        block_offset = tl.load(block_offsets_ptr + block_id - 1)
+        prefix_sums = prefix_sums + block_offset
     
-    # Store results
+    # Store the prefix sums to output
     tl.store(b_ptr + current_offsets, prefix_sums, mask=mask)
 
 def s3112_triton(a, b):
     n = a.shape[0]
-    BLOCK_SIZE = 1024
-    num_blocks = triton.cdiv(n, BLOCK_SIZE)
+    BLOCK_SIZE = min(1024, triton.next_power_of_2(n))
+    n_blocks = triton.cdiv(n, BLOCK_SIZE)
     
-    # Process blocks sequentially to maintain dependency
-    for block_idx in range(num_blocks):
-        grid = (1,)
-        # Manually set the block ID by adjusting the starting position
-        block_start = block_idx * BLOCK_SIZE
-        remaining = min(BLOCK_SIZE, n - block_start)
+    # First pass: compute local prefix sums
+    grid = (n_blocks,)
+    block_offsets = torch.zeros(n_blocks, device=a.device, dtype=a.dtype)
+    
+    s3112_kernel[grid](a, b, block_offsets, n, BLOCK_SIZE)
+    
+    # If multiple blocks, compute block offsets and apply second pass
+    if n_blocks > 1:
+        # Extract block totals (last element of each block)
+        block_ends = torch.arange(BLOCK_SIZE - 1, n, BLOCK_SIZE, device=a.device)
+        block_ends = torch.clamp(block_ends, max=n-1)
+        block_totals = b[block_ends]
         
-        if remaining > 0:
-            s3112_kernel[grid](
-                a[block_start:], 
-                b[block_start:], 
-                remaining, 
-                BLOCK_SIZE
-            )
+        # Compute cumulative block offsets
+        if block_totals.shape[0] > 1:
+            block_offsets[1:block_totals.shape[0]] = torch.cumsum(block_totals[:-1], dim=0)
+            
+            # Second pass: add block offsets
+            s3112_kernel[grid](a, b, block_offsets, n, BLOCK_SIZE)
     
-    # Return final sum (last element)
+    # Return the final sum (last element of b)
     return b[n-1].item()
