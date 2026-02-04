@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s119
-# Generated: 2026-02-04 01:13:11
+# Generated: 2026-02-04 11:51:09
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -93,8 +93,11 @@ Process anti-diagonals sequentially **inside a single kernel**, parallelize with
 
 **CRITICAL: Use a SINGLE kernel launch with an in-kernel loop over diagonals.**
 DO NOT launch a separate kernel per diagonal — the launch overhead will dominate.
-For LEN_2D=256, each diagonal fits in one block, so all threads synchronize
-at each loop iteration boundary automatically.
+
+**CRITICAL: Memory synchronization between diagonals**
+Add `tl.debug_barrier()` after each store to ensure writes from all warps are visible
+before reading in the next diagonal iteration. Without this, cross-warp memory
+visibility is NOT guaranteed and will cause incorrect results!
 ```python
 @triton.jit
 def kernel(aa_ptr, bb_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
@@ -102,11 +105,16 @@ def kernel(aa_ptr, bb_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     for diag in range(2, 2 * N):  # anti-diagonal loop INSIDE kernel
         i = diag - j_idx
         mask = (i >= 1) & (i < N) & (j_idx >= 1) & (j_idx < N)
-        # Load, compute, store with mask
+        # Use N for stride (2D arrays are exactly N x N)
+        aa_idx = i * N + j_idx
+        aa_prev_idx = (i - 1) * N + (j_idx - 1)
+        # Load, compute, store with mask using aa_idx, aa_prev_idx
         ...
+        tl.debug_barrier()  # CRITICAL: sync all warps before next diagonal
 
 # Wrapper: SINGLE kernel launch!
 grid = (1,)  # one block covers all 256 elements
+N = len_2d  # Arrays are exactly N x N
 kernel[grid](aa, bb, N, BLOCK_SIZE=256)
 ```
 
@@ -125,9 +133,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -192,41 +207,34 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
 def s119_kernel(aa_ptr, bb_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     j_offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Process anti-diagonals sequentially inside kernel
     for diag in range(2, 2 * N):
-        i_vals = diag - j_offsets
+        i = diag - j_offsets
+        mask = (i >= 1) & (i < N) & (j_offsets >= 1) & (j_offsets < N)
         
-        # Mask for valid indices
-        mask = (i_vals >= 1) & (i_vals < N) & (j_offsets >= 1) & (j_offsets < N)
+        aa_idx = i * N + j_offsets
+        aa_prev_idx = (i - 1) * N + (j_offsets - 1)
+        bb_idx = i * N + j_offsets
         
-        # Calculate linear indices for aa[i,j], aa[i-1,j-1], and bb[i,j]
-        aa_current_idx = i_vals * N + j_offsets
-        aa_prev_idx = (i_vals - 1) * N + (j_offsets - 1)
-        bb_idx = i_vals * N + j_offsets
-        
-        # Load values
-        aa_prev = tl.load(aa_ptr + aa_prev_idx, mask=mask, other=0.0)
+        aa_prev_val = tl.load(aa_ptr + aa_prev_idx, mask=mask, other=0.0)
         bb_val = tl.load(bb_ptr + bb_idx, mask=mask, other=0.0)
         
-        # Compute new values
-        result = aa_prev + bb_val
+        result = aa_prev_val + bb_val
         
-        # Store results
-        tl.store(aa_ptr + aa_current_idx, result, mask=mask)
+        tl.store(aa_ptr + aa_idx, result, mask=mask)
+        tl.debug_barrier()
 
 def s119_triton(aa, bb, len_2d):
     N = len_2d
+    grid = (1,)
     BLOCK_SIZE = 256
     
-    # Single kernel launch with one block
-    grid = (1,)
     s119_kernel[grid](aa, bb, N, BLOCK_SIZE)
 ```

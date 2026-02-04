@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s261
-# Generated: 2026-02-04 01:43:58
+# Generated: 2026-02-04 07:33:46
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -49,98 +49,6 @@ real_t s261(struct args_t * func_args)
         }
 ```
 
-============================================================
-LOOP DISTRIBUTION OPPORTUNITY DETECTED
-============================================================
-
-LOOP DISTRIBUTION FOR PARALLELIZATION:
-
-This loop can be SPLIT into separate parallel loops!
-
-Original loop has cross-statement dependencies, but when distributed:
-
-  Loop 1 (Statement S0): writes t, reads a, b
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-  Loop 2 (Statement S1): writes a, reads c, t
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-  Loop 3 (Statement S2): writes t, reads c, d
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-  Loop 4 (Statement S3): writes c, reads t
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-
-IMPLEMENTATION STRATEGY:
-Split into separate Triton kernels, each processing in parallel:
-
-```python
-@triton.jit
-def kernel_loop1(...):
-    pid = tl.program_id(0)
-    # Parallel: each thread handles different indices
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    # Process statement S0 for all indices in parallel
-    ...
-
-@triton.jit
-def kernel_loop2(...):
-    # Similar parallel structure for statement S1
-    ...
-
-def wrapper(...):
-    # Run loops sequentially, but each loop is internally parallel
-    kernel_loop1[grid](...)
-    kernel_loop2[grid](...)
-    # etc.
-```
-
-KEY: Each distributed loop processes ALL iterations in parallel,
-     then the next loop runs. This satisfies cross-statement dependencies.
-
-============================================================
-
-============================================================
-STATEMENT REORDERING OPPORTUNITY DETECTED
-============================================================
-
-STATEMENT REORDERING TRANSFORMATION AVAILABLE
-
-Dependency pattern detected:
-  - Consumer (S1): reads c[i-1] (from previous iteration)
-  - Producer (S3): writes c[i]
-
-NOTE: Intermediate scalar variables detected. Simplified semantic pattern:
-  a[i] = f(c[i-1])
-  c[i] = f()
-
-This creates a loop-carried dependency: iteration i needs c[i-1] from iteration i-1.
-
-TRANSFORMATION: Reorder statements and shift consumer index by 1.
-After transformation, each iteration computes c[i] first, then uses it immediately.
-
-EXACT TRANSFORMED FUNCTION:
-```python
-def func_triton(a, b, c, d):
-    N = a.shape[0]
-
-    # PROLOGUE: First consumer uses original c[0]
-    a[1] = c[0]
-
-    # MAIN PARALLEL LOOP (i from 1 to N-2):
-    # Each iteration is independent - can be parallelized in Triton
-    for i in range(1, N-2):  # This becomes parallel in Triton
-        # Step 1: Compute c[i] (producer)
-        c[i] = 
-        # Step 2: Compute a[i+1] using c[i] just computed
-        a[i+1] = c[i]
-
-    # EPILOGUE: Last producer (no corresponding consumer)
-    c[N-2] = 
-```
-
-For Triton: Convert the main loop to a parallel kernel where each thread
-handles one value of i, computing both c[i] and a[i+1].
-
-============================================================
-
 ================================================================================
 SCALAR EXPANSION PATTERN DETECTED
 ================================================================================
@@ -162,6 +70,53 @@ Variable: t
 ================================================================================
 
 
+============================================================
+STATEMENT REORDERING OPPORTUNITY DETECTED
+============================================================
+
+STATEMENT REORDERING TRANSFORMATION AVAILABLE
+
+Dependency pattern detected:
+  - Consumer (S1): reads c[i-1] (from previous iteration)
+  - Producer (S3): writes c[i]
+
+NOTE: Intermediate scalar variables detected. Simplified semantic pattern:
+  a[i] = f(c[i-1])
+  c[i] = f()
+
+This creates a loop-carried dependency: iteration i needs c[i-1] from iteration i-1.
+
+TRANSFORMATION: Reorder statements and shift consumer index by 1.
+After transformation, each iteration computes c[i] first, then uses it immediately.
+
+ORIGINAL C STATEMENTS (after scalar inlining):
+    a[i] = (a[i] + b[i]) + c[i-1];  // consumer (reads c[i-1])
+    c[i] = (c[i] * d[i]);  // producer (writes c[i])
+
+TRANSFORMED C CODE (with statement reordering):
+```c
+
+// PROLOGUE (i=1):
+a[1] = (a[1] + b[1]) + c[0];
+
+// MAIN PARALLEL LOOP (i from 1 to N-2 inclusive):
+// Each iteration is independent - can be parallelized
+for (int i = 1; i < N-1; i++) {  // Triton mask: (i >= 1) & (i < N-1)
+    c[i] = (c[i] * d[i]);  // Step 1: compute c[i]
+    a[i+1] = (a[i+1] + b[i+1]) + c[i];  // Step 2: compute a[i+1] using c[i]
+}
+
+// EPILOGUE (i=N-1):
+c[N-1] = (c[N-1] * d[N-1]);
+```
+
+For Triton: Convert the main loop to a parallel kernel where each thread
+handles one value of i, computing both c[i] and a[i+1].
+
+CRITICAL: The main loop mask should be (i >= 1) & (i < N-1). The loop runs i from 1 to N-2 inclusive.
+
+============================================================
+
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -177,9 +132,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -244,48 +206,65 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s261_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+def s261_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n, BLOCK_SIZE: tl.constexpr):
+    # Get thread block offsets
+    block_start = tl.program_id(0) * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets + 1
     
-    mask = indices < n_elements
-    prev_indices = indices - 1
-    prev_mask = prev_indices >= 0
-    combined_mask = mask & prev_mask
+    # Prologue: compute a[1] using c[0]
+    if block_start == 0:
+        # Load values for prologue
+        a_val = tl.load(a_ptr + 1)
+        b_val = tl.load(b_ptr + 1)
+        c_val = tl.load(c_ptr + 0)
+        
+        # Compute a[1] = (a[1] + b[1]) + c[0]
+        result = (a_val + b_val) + c_val
+        tl.store(a_ptr + 1, result)
     
-    # Load values
-    a_vals = tl.load(a_ptr + indices, mask=mask, other=0.0)
-    b_vals = tl.load(b_ptr + indices, mask=mask, other=0.0)
-    c_prev_vals = tl.load(c_ptr + prev_indices, mask=combined_mask, other=0.0)
-    c_vals = tl.load(c_ptr + indices, mask=mask, other=0.0)
-    d_vals = tl.load(d_ptr + indices, mask=mask, other=0.0)
+    # Main parallel loop: each thread handles one i value from 1 to n-2
+    current_offsets = block_start + offsets
+    mask = (current_offsets >= 1) & (current_offsets < n - 1)
     
-    # Compute: t = a[i] + b[i], a[i] = t + c[i-1]
-    t1 = a_vals + b_vals
-    new_a = t1 + c_prev_vals
+    # Step 1: compute c[i] = c[i] * d[i]
+    c_vals = tl.load(c_ptr + current_offsets, mask=mask)
+    d_vals = tl.load(d_ptr + current_offsets, mask=mask)
+    c_results = c_vals * d_vals
+    tl.store(c_ptr + current_offsets, c_results, mask=mask)
     
-    # Compute: t = c[i] * d[i], c[i] = t
-    t2 = c_vals * d_vals
+    # Step 2: compute a[i+1] = (a[i+1] + b[i+1]) + c[i]
+    next_offsets = current_offsets + 1
+    next_mask = (current_offsets >= 1) & (current_offsets < n - 1)
     
-    # Store results
-    tl.store(a_ptr + indices, new_a, mask=mask)
-    tl.store(c_ptr + indices, t2, mask=mask)
+    a_next_vals = tl.load(a_ptr + next_offsets, mask=next_mask)
+    b_next_vals = tl.load(b_ptr + next_offsets, mask=next_mask)
+    a_results = (a_next_vals + b_next_vals) + c_results
+    tl.store(a_ptr + next_offsets, a_results, mask=next_mask)
+    
+    # Epilogue: compute c[n-1] = c[n-1] * d[n-1]
+    if block_start + BLOCK_SIZE >= n - 1:
+        epilogue_idx = n - 1
+        if epilogue_idx >= 1:
+            c_val = tl.load(c_ptr + epilogue_idx)
+            d_val = tl.load(d_ptr + epilogue_idx)
+            result = c_val * d_val
+            tl.store(c_ptr + epilogue_idx, result)
 
 def s261_triton(a, b, c, d):
-    n_elements = a.shape[0]
+    n = a.shape[0]
     BLOCK_SIZE = 256
-    grid = (triton.cdiv(n_elements - 1, BLOCK_SIZE),)
     
-    s261_kernel[grid](
-        a, b, c, d,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+    # Calculate grid size for main parallel loop (i from 1 to n-2)
+    grid_size = triton.cdiv(n - 1, BLOCK_SIZE)
+    
+    s261_kernel[(grid_size,)](
+        a, b, c, d, n, BLOCK_SIZE
     )
+    
+    return a, c
 ```

@@ -1,38 +1,55 @@
 
-## PREVIOUS ATTEMPT HAS LOW PERFORMANCE - NEEDS BETTER PARALLELIZATION
+## PREVIOUS ATTEMPT FAILED - NON-NUMERICAL ERROR
 
-Your last attempt is CORRECT but has very low performance (speedup: 0.055837x).
-This indicates the code is NOT properly parallelized for GPU execution.
+Your last attempt failed with a compilation or runtime error:
 
-**CRITICAL ISSUE**: Your kernel is likely running sequentially instead of in parallel.
+**Error type**: compilation
+**Error message**:
+```
+            ^
+unsupported AST node type: Continue
+Traceback (most recent call last):
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s277/test_s277_correctness.py", line 75, in test_correctness
+    triton_result = s277_triton(**tr_kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test29/llm_triton/s277/attempt5.py", line 47, in s277_triton
+    s277_kernel[grid](
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 345, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/runtime/jit.py", line 662, in run
+    kernel = self.compile(
+             ^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 276, in compile
+    module = src.make_ir(options, codegen_fns, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/compiler/compiler.py", line 113, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.UnsupportedLanguageConstruct: at 18:12:
+    # Process all elements sequentially
+    for i in range(n_elements - 1):
+        # Load current values
+        a_val = tl.load(a_ptr + i)
+        b_val = tl.load(b_ptr + i)
+        c_val = tl.load(c_ptr + i)
+        d_val = tl.load(d_ptr + i)
+        e_val = tl.load(e_ptr + i)
 
-**Common parallelization mistakes to fix**:
-1. Using a `for` loop inside the kernel to iterate over ALL elements - this is SEQUENTIAL!
-2. NOT using `tl.program_id(0)` to get the block index for parallel execution
-3. Every thread/block processes ALL data instead of just its assigned portion
+        # Check if a[i] >= 0 (goto L20)
+        if a_val >= 0.0:
+            continue  # Skip to L20 (next iteration)
+            ^
+unsupported AST node type: Continue
 
-**CORRECT parallel pattern** (each block handles different elements):
-```python
-@triton.jit
-def kernel(..., BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)                    # Get unique block ID
-    block_start = pid * BLOCK_SIZE            # Each block starts at different offset
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)  # Each block handles BLOCK_SIZE elements
-    mask = offsets < n_elements
-    # Load, compute, store for THIS block only - NO for loop over all elements!
 ```
 
-**WRONG sequential pattern** (every block processes everything):
-```python
-@triton.jit
-def kernel(..., BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
-    for block_start in range(0, n_elements, BLOCK_SIZE):  # WRONG! Sequential loop!
-        current_offsets = block_start + offsets
-        # This makes EVERY block process ALL elements - completely sequential!
-```
+Please fix the error. Make sure to:
+- Follow all Triton compilation rules
+- Use correct Triton API functions
+- Avoid Python constructs not supported in Triton kernels
 
-## LAST ATTEMPT (NEEDS PARALLELIZATION FIX):
+## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
 None
 ```
@@ -93,6 +110,50 @@ L20:
         }
 ```
 
+
+## GOTO-BASED CONDITIONAL PARALLELIZATION
+
+This loop contains goto-based control flow that APPEARS sequential but CAN be parallelized.
+
+### Equivalent if/else structure:
+```c
+for (int i = 0; i < LEN_1D-1; i++) {
+                if (a[i] < (real_t)0.) {
+        if (b[i] < (real_t)0.) {
+            a[i] += c[i] * d[i];
+        }
+        b[i+1] = c[i] + d[i] * e[i];
+    }}
+```
+
+### Key Insight:
+The array `b[i+1]` is written conditionally, and `b[i]` is read in a later condition.
+However, the WRITE CONDITION only depends on other arrays, NOT on previous `b` values.
+
+### Parallelization Strategy:
+1. **Compute effective_b[i]**: For each i, compute what b[i] would be AFTER the previous iteration:
+   - If the write condition was true at i-1: effective_b[i] = computed_value[i-1]
+   - Else: effective_b[i] = original_b[i]
+
+2. **Use effective values for conditions**: Replace b[i] reads in conditions with effective_b[i]
+
+3. **Parallel execution**: Both the effective value computation and final updates can be done in parallel.
+
+### Implementation Pattern:
+```python
+# Step 1: Compute write mask (which iterations write to b)
+write_mask = <condition that triggers b[i+1] write>  # e.g., a < 0
+
+# Step 2: Compute effective b values
+effective_b = b.clone()
+new_values = <expression for b[i+1]>
+effective_b[1:] = tl.where(write_mask[:-1], new_values[:-1], b[1:])
+
+# Step 3: Use effective values for other conditions and updates
+# All updates can now be done in parallel using the precomputed effective values
+```
+
+
 ============================================================
 POINTER ALIASING PATTERN DETECTED
 ============================================================
@@ -144,9 +205,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -213,55 +281,49 @@ Provide ONLY the Python code, no additional explanation.
 ================================================================================
 RESPONSE:
 ================================================================================
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s277_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Sequential processing - no parallelization due to dependencies
+def s277_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n_elements):
+    # Single thread processes all elements sequentially
+    pid = tl.program_id(axis=0)
+    if pid != 0:
+        return
+    
+    # Process all elements sequentially
     for i in range(n_elements - 1):
-        # Load a[i]
+        # Load current values
         a_val = tl.load(a_ptr + i)
-        
-        # Check if a[i] >= 0
-        if a_val >= 0.0:
-            continue  # goto L20 equivalent
-        
-        # Load b[i]
         b_val = tl.load(b_ptr + i)
+        c_val = tl.load(c_ptr + i)
+        d_val = tl.load(d_ptr + i)
+        e_val = tl.load(e_ptr + i)
+
+        # Implement the goto-based control flow using nested if statements
+        skip_a_update = (a_val >= 0.0)
+        skip_b_update = (b_val >= 0.0)
         
-        # Check if b[i] >= 0
-        if b_val >= 0.0:
-            # goto L30 - only update b[i+1]
-            c_val = tl.load(c_ptr + i)
-            d_val = tl.load(d_ptr + i)
-            e_val = tl.load(e_ptr + i)
-            b_new = c_val + d_val * e_val
-            tl.store(b_ptr + i + 1, b_new)
-        else:
-            # Update both a[i] and b[i+1]
-            c_val = tl.load(c_ptr + i)
-            d_val = tl.load(d_ptr + i)
-            e_val = tl.load(e_ptr + i)
-            
-            # Update a[i]
-            a_new = a_val + c_val * d_val
-            tl.store(a_ptr + i, a_new)
-            
-            # Update b[i+1]
-            b_new = c_val + d_val * e_val
-            tl.store(b_ptr + i + 1, b_new)
+        # Update a[i] only if both conditions are false
+        update_a = (a_val < 0.0) & (b_val < 0.0)
+        if update_a:
+            new_a_val = a_val + c_val * d_val
+            tl.store(a_ptr + i, new_a_val)
+        
+        # Update b[i+1] if a[i] < 0 (regardless of b[i] condition)
+        if a_val < 0.0:
+            new_b_val = c_val + d_val * e_val
+            tl.store(b_ptr + i + 1, new_b_val)
 
 def s277_triton(a, b, c, d, e):
     n_elements = a.shape[0]
     
-    # Launch with single block since we need sequential execution
     grid = (1,)
-    BLOCK_SIZE = 1024
     
     s277_kernel[grid](
-        a, b, c, d, e, 
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        a, b, c, d, e,
+        n_elements
     )
+    
+    return a, b

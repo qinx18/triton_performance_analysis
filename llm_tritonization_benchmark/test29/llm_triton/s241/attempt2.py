@@ -3,58 +3,54 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s241_kernel_1(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+def s241_kernel(
+    a_ptr, a_copy_ptr, b_ptr, c_ptr, d_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     indices = block_start + offsets
     
     mask = indices < n_elements
     
+    # Load values for first statement: a[i] = b[i] * c[i] * d[i]
     b_vals = tl.load(b_ptr + indices, mask=mask)
     c_vals = tl.load(c_ptr + indices, mask=mask)
     d_vals = tl.load(d_ptr + indices, mask=mask)
     
-    result = b_vals * c_vals * d_vals
+    # Compute and store a[i] = b[i] * c[i] * d[i]
+    a_vals = b_vals * c_vals * d_vals
+    tl.store(a_ptr + indices, a_vals, mask=mask)
     
-    tl.store(a_ptr + indices, result, mask=mask)
-
-@triton.jit
-def s241_kernel_2(b_ptr, a_copy_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
+    # Load a[i] from the original copy for second statement
+    a_i_vals = tl.load(a_copy_ptr + indices, mask=mask)
     
-    mask = indices < n_elements
+    # Load a[i+1] from the original copy
+    next_indices = indices + 1
+    next_mask = next_indices < (n_elements + 1)
+    a_next_vals = tl.load(a_copy_ptr + next_indices, mask=next_mask)
     
-    a_vals = tl.load(a_copy_ptr + indices, mask=mask)
-    a_next_vals = tl.load(a_copy_ptr + indices + 1, mask=mask)
-    d_vals = tl.load(d_ptr + indices, mask=mask)
+    # Compute b[i] = a[i] * a[i+1] * d[i]
+    # Use the newly computed a[i] values, not from copy
+    b_new_vals = a_vals * a_next_vals * d_vals
     
-    result = a_vals * a_next_vals * d_vals
-    
-    tl.store(b_ptr + indices, result, mask=mask)
+    # Store b[i] only where we have valid a[i+1]
+    valid_mask = mask & next_mask
+    tl.store(b_ptr + indices, b_new_vals, mask=valid_mask)
 
 def s241_triton(a, b, c, d):
     n_elements = a.shape[0] - 1
     
+    # Create read-only copy of array a to handle WAR dependencies
+    a_copy = a.clone()
+    
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # First kernel: a[i] = b[i] * c[i] * d[i]
-    s241_kernel_1[grid](
-        a, b, c, d,
+    s241_kernel[grid](
+        a, a_copy, b, c, d,
         n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    # Create read-only copy for second kernel
-    a_copy = a.clone()
-    
-    # Second kernel: b[i] = a[i] * a[i+1] * d[i]
-    s241_kernel_2[grid](
-        b, a_copy, d,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=BLOCK_SIZE,
     )

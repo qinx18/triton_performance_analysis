@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s421
-# Generated: 2026-02-04 02:07:43
+# Generated: 2026-02-04 12:01:25
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -42,50 +42,6 @@ real_t s421(struct args_t * func_args)
         }
 ```
 
-============================================================
-LOOP DISTRIBUTION OPPORTUNITY DETECTED
-============================================================
-
-LOOP DISTRIBUTION FOR PARALLELIZATION:
-
-This loop can be SPLIT into separate parallel loops!
-
-Original loop has cross-statement dependencies, but when distributed:
-
-  Loop 1 (Statement S0): writes yy, reads xx
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-  Loop 2 (Statement S1): writes xx, reads yy, a
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-
-IMPLEMENTATION STRATEGY:
-Split into separate Triton kernels, each processing in parallel:
-
-```python
-@triton.jit
-def kernel_loop1(...):
-    pid = tl.program_id(0)
-    # Parallel: each thread handles different indices
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    # Process statement S0 for all indices in parallel
-    ...
-
-@triton.jit
-def kernel_loop2(...):
-    # Similar parallel structure for statement S1
-    ...
-
-def wrapper(...):
-    # Run loops sequentially, but each loop is internally parallel
-    kernel_loop1[grid](...)
-    kernel_loop2[grid](...)
-    # etc.
-```
-
-KEY: Each distributed loop processes ALL iterations in parallel,
-     then the next loop runs. This satisfies cross-statement dependencies.
-
-============================================================
-
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -101,9 +57,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -168,38 +131,46 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s421_kernel(xx_ptr, yy_ptr, a_ptr, n):
-    pid = tl.program_id(0)
-    BLOCK_SIZE = 256
+def s421_kernel(a_ptr, xx_ptr, yy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get block of indices to process
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < (n - 1)
-    
-    # Load yy[i+1] and a[i]
+    # Load yy[i+1] values (shift indices by 1)
     yy_offsets = offsets + 1
-    yy_vals = tl.load(yy_ptr + yy_offsets, mask=mask)
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    yy_mask = yy_offsets < (n_elements + 1)  # Allow reading yy[n_elements-1+1]
+    yy_vals = tl.load(yy_ptr + yy_offsets, mask=yy_mask, other=0.0)
+    
+    # Load a[i] values
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
     
     # Compute xx[i] = yy[i+1] + a[i]
     result = yy_vals + a_vals
     
-    # Store result
+    # Store result to xx[i]
     tl.store(xx_ptr + offsets, result, mask=mask)
 
 def s421_triton(a, xx, yy):
-    n = a.shape[0]
-    
-    # Copy xx to yy
+    # Copy xx to yy (equivalent to yy = xx)
     yy.copy_(xx)
     
-    # Launch kernel for parallel computation
-    grid = (triton.cdiv(n - 1, 256),)
-    s421_kernel[grid](xx, yy, a, n)
+    # Process LEN_1D - 1 elements
+    n_elements = a.shape[0] - 1
+    
+    # Choose block size
+    BLOCK_SIZE = 256
+    
+    # Launch kernel
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    s421_kernel[grid](
+        a, xx, yy, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
     
     return xx
 ```

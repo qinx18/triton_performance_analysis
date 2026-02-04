@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s442
-# Generated: 2026-02-04 02:51:00
+# Generated: 2026-02-04 08:42:53
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -89,9 +89,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -156,57 +163,58 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s442_kernel(
     a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, indx_ptr,
-    N,
+    n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
-    indices = block_start + offsets
-    mask = indices < N
+    mask = (block_start + offsets) < n_elements
     
-    # Load index values
-    indx_vals = tl.load(indx_ptr + indices, mask=mask)
+    # Load arrays
+    a_vals = tl.load(a_ptr + block_start + offsets, mask=mask)
+    b_vals = tl.load(b_ptr + block_start + offsets, mask=mask)
+    c_vals = tl.load(c_ptr + block_start + offsets, mask=mask)
+    d_vals = tl.load(d_ptr + block_start + offsets, mask=mask)
+    e_vals = tl.load(e_ptr + block_start + offsets, mask=mask)
+    indx_vals = tl.load(indx_ptr + block_start + offsets, mask=mask)
     
-    # Load input arrays
-    a_vals = tl.load(a_ptr + indices, mask=mask)
-    b_vals = tl.load(b_ptr + indices, mask=mask)
-    c_vals = tl.load(c_ptr + indices, mask=mask)
-    d_vals = tl.load(d_ptr + indices, mask=mask)
-    e_vals = tl.load(e_ptr + indices, mask=mask)
-    
-    # Compute squared values
+    # Compute based on indx values
     b_squared = b_vals * b_vals
     c_squared = c_vals * c_vals
     d_squared = d_vals * d_vals
     e_squared = e_vals * e_vals
     
-    # Apply conditional logic based on index values
+    # Select which squared value to add based on indx
+    case1_mask = indx_vals == 1
+    case2_mask = indx_vals == 2
+    case3_mask = indx_vals == 3
+    case4_mask = indx_vals == 4
+    
     result = a_vals
-    result = tl.where(indx_vals == 1, a_vals + b_squared, result)
-    result = tl.where(indx_vals == 2, a_vals + c_squared, result)
-    result = tl.where(indx_vals == 3, a_vals + d_squared, result)
-    result = tl.where(indx_vals == 4, a_vals + e_squared, result)
+    result = tl.where(case1_mask, result + b_squared, result)
+    result = tl.where(case2_mask, result + c_squared, result)
+    result = tl.where(case3_mask, result + d_squared, result)
+    result = tl.where(case4_mask, result + e_squared, result)
     
     # Store result
-    tl.store(a_ptr + indices, result, mask=mask)
+    tl.store(a_ptr + block_start + offsets, result, mask=mask)
 
 def s442_triton(a, b, c, d, e, indx):
-    N = a.shape[0]
+    n_elements = a.numel()
     BLOCK_SIZE = 256
-    
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
     s442_kernel[grid](
         a, b, c, d, e, indx,
-        N,
+        n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
     

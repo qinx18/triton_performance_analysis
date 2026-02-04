@@ -3,55 +3,51 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def s1213_kernel_loop1(a_ptr, a_copy_ptr, b_ptr, c_ptr, n, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
+def s1213_kernel(a_ptr, b_ptr, c_ptr, d_ptr, a_copy_ptr, n, BLOCK_SIZE: tl.constexpr):
+    # Prologue: handle i=1 case
+    pid = tl.program_id(0)
+    if pid == 0:
+        a_1 = tl.load(a_copy_ptr + 1)
+        b_0 = tl.load(b_ptr + 0)
+        c_1 = tl.load(c_ptr + 1)
+        result = b_0 + c_1
+        tl.store(a_ptr + 1, result)
     
-    for block_start in range(1, n-1, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = (current_offsets >= 1) & (current_offsets < n-1)
-        
-        # Load b[i-1], c[i]
-        b_vals = tl.load(b_ptr + current_offsets - 1, mask=mask)
-        c_vals = tl.load(c_ptr + current_offsets, mask=mask)
-        
-        # Compute a[i] = b[i-1] + c[i]
-        a_vals = b_vals + c_vals
-        
-        # Store a[i]
-        tl.store(a_ptr + current_offsets, a_vals, mask=mask)
-
-@triton.jit
-def s1213_kernel_loop2(a_copy_ptr, b_ptr, d_ptr, n, BLOCK_SIZE: tl.constexpr):
+    # Main parallel loop: i from 1 to n-3 inclusive
     offsets = tl.arange(0, BLOCK_SIZE)
+    block_start = pid * BLOCK_SIZE + 1
+    i_offsets = block_start + offsets
     
-    for block_start in range(1, n-1, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = (current_offsets >= 1) & (current_offsets < n-1)
-        
-        # Load a[i+1], d[i]
-        a_vals = tl.load(a_copy_ptr + current_offsets + 1, mask=mask)
-        d_vals = tl.load(d_ptr + current_offsets, mask=mask)
-        
-        # Compute b[i] = a[i+1] * d[i]
-        b_vals = a_vals * d_vals
-        
-        # Store b[i]
-        tl.store(b_ptr + current_offsets, b_vals, mask=mask)
+    mask = (i_offsets >= 1) & (i_offsets < n - 2)
+    
+    # Step 1: compute b[i] = a_copy[i+1] * d[i]
+    a_vals = tl.load(a_copy_ptr + i_offsets + 1, mask=mask)
+    d_vals = tl.load(d_ptr + i_offsets, mask=mask)
+    b_vals = a_vals * d_vals
+    tl.store(b_ptr + i_offsets, b_vals, mask=mask)
+    
+    # Step 2: compute a[i+1] = b[i] + c[i+1]
+    c_vals = tl.load(c_ptr + i_offsets + 1, mask=mask)
+    a_new_vals = b_vals + c_vals
+    tl.store(a_ptr + i_offsets + 1, a_new_vals, mask=mask)
+    
+    # Epilogue: handle i=n-2 case
+    if pid == 0:
+        i_last = n - 2
+        a_val = tl.load(a_copy_ptr + i_last + 1)
+        d_val = tl.load(d_ptr + i_last)
+        result = a_val * d_val
+        tl.store(b_ptr + i_last, result)
 
 def s1213_triton(a, b, c, d):
     n = a.shape[0]
     
-    # Create read-only copy for WAR race condition handling
+    # Create read-only copy of array a to avoid WAR dependency
     a_copy = a.clone()
     
     BLOCK_SIZE = 256
+    grid_size = triton.cdiv(n - 2, BLOCK_SIZE)
     
-    # Launch first kernel for statement S0: a[i] = b[i-1] + c[i]
-    s1213_kernel_loop1[(1,)](
-        a, a_copy, b, c, n, BLOCK_SIZE
-    )
-    
-    # Launch second kernel for statement S1: b[i] = a[i+1] * d[i]
-    s1213_kernel_loop2[(1,)](
-        a_copy, b, d, n, BLOCK_SIZE
+    s1213_kernel[grid_size,](
+        a, b, c, d, a_copy, n, BLOCK_SIZE
     )

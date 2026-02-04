@@ -3,43 +3,53 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s211_kernel(a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and compute offsets
-    pid = tl.program_id(0)
+def s211_kernel(a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get thread block
+    pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     
-    # Mask for valid indices (1 to N-2)
-    mask = (offsets >= 1) & (offsets < N - 1)
+    # Mask for valid indices (i from 1 to n_elements-3 inclusive)
+    mask = (offsets >= 1) & (offsets < n_elements - 2)
     
-    # Load values for statement 1: a[i] = b[i - 1] + c[i] * d[i]
-    b_prev = tl.load(b_copy_ptr + offsets - 1, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    # Load data for computing b[i]
+    b_copy_vals = tl.load(b_copy_ptr + offsets + 1, mask=mask)
+    e_vals = tl.load(e_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     
-    # Compute and store a[i]
-    a_vals = b_prev + c_vals * d_vals
-    tl.store(a_ptr + offsets, a_vals, mask=mask)
-    
-    # Load values for statement 2: b[i] = b[i + 1] - e[i] * d[i]
-    b_next = tl.load(b_copy_ptr + offsets + 1, mask=mask)
-    e_vals = tl.load(e_ptr + offsets, mask=mask)
-    
-    # Compute and store b[i]
-    b_vals = b_next - e_vals * d_vals
+    # Compute b[i] = b_copy[i + 1] - e[i] * d[i]
+    b_vals = b_copy_vals - e_vals * d_vals
     tl.store(b_ptr + offsets, b_vals, mask=mask)
+    
+    # Load data for computing a[i+1]
+    c_vals_next = tl.load(c_ptr + offsets + 1, mask=mask)
+    d_vals_next = tl.load(d_ptr + offsets + 1, mask=mask)
+    
+    # Compute a[i+1] = b[i] + c[i+1] * d[i+1]
+    a_vals_next = b_vals + c_vals_next * d_vals_next
+    tl.store(a_ptr + offsets + 1, a_vals_next, mask=mask)
 
 def s211_triton(a, b, c, d, e):
-    N = a.shape[0]
+    n_elements = a.shape[0]
     
-    # Create read-only copy of b to handle WAR dependencies
+    # Create read-only copy of b to avoid WAR dependency
     b_copy = b.clone()
     
-    # Set up grid and block size
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    # Prologue: compute a[1]
+    a[1] = b[0] + c[1] * d[1]
     
-    # Launch kernel
-    s211_kernel[grid](
-        a, b, b_copy, c, d, e,
-        N, BLOCK_SIZE
-    )
+    # Main parallel loop range: i from 1 to n_elements-3 inclusive
+    loop_size = n_elements - 2
+    
+    if loop_size > 1:
+        BLOCK_SIZE = 256
+        grid = (triton.cdiv(loop_size, BLOCK_SIZE),)
+        
+        s211_kernel[grid](
+            a, b, b_copy, c, d, e, 
+            n_elements, 
+            BLOCK_SIZE=BLOCK_SIZE
+        )
+    
+    # Epilogue: compute b[n_elements-2]
+    if n_elements >= 3:
+        b[n_elements-2] = b_copy[n_elements-1] - e[n_elements-2] * d[n_elements-2]

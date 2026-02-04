@@ -14,7 +14,7 @@ import numpy as np
 
 try:
     from c_reference.tsvc_all_reference import s2111_c
-    from test29.llm_triton.s2111.attempt6 import s2111_triton
+    from test29.llm_triton.s2111.attempt1 import s2111_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -46,7 +46,7 @@ def benchmark():
     print("="*70)
 
     # Initialize arrays on GPU
-    aa = torch.randn(N + 10, N + 10, device='cuda', dtype=torch.float32)
+    aa = torch.randn(N, N, device='cuda', dtype=torch.float32)
     len_2d = N
 
     # Create numpy arrays for C reference (on CPU)

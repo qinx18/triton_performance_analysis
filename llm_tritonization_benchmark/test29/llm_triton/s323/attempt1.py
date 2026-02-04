@@ -3,61 +3,38 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s323_kernel_loop1(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+def s323_kernel(a_ptr, b_ptr, c_ptr, d_ptr, e_ptr, n):
+    # This kernel must process sequentially due to loop-carried dependency
+    # Use single thread to maintain correctness
+    thread_id = tl.program_id(0)
+    if thread_id != 0:
+        return
     
-    # Start from index 1, so add 1 to offsets
-    offsets = offsets + 1
-    mask = offsets < n_elements
-    
-    # Load data
-    b_prev = tl.load(b_ptr + offsets - 1, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    d_vals = tl.load(d_ptr + offsets, mask=mask)
-    
-    # Compute: a[i] = b[i-1] + c[i] * d[i]
-    result = b_prev + c_vals * d_vals
-    
-    # Store result
-    tl.store(a_ptr + offsets, result, mask=mask)
-
-@triton.jit
-def s323_kernel_loop2(a_ptr, b_ptr, c_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    
-    # Start from index 1, so add 1 to offsets
-    offsets = offsets + 1
-    mask = offsets < n_elements
-    
-    # Load data
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
-    e_vals = tl.load(e_ptr + offsets, mask=mask)
-    
-    # Compute: b[i] = a[i] + c[i] * e[i]
-    result = a_vals + c_vals * e_vals
-    
-    # Store result
-    tl.store(b_ptr + offsets, result, mask=mask)
+    # Process all elements sequentially in a single thread
+    for i in range(1, n):
+        # Load b[i-1]
+        b_prev = tl.load(b_ptr + i - 1)
+        
+        # Load c[i], d[i], e[i]
+        c_i = tl.load(c_ptr + i)
+        d_i = tl.load(d_ptr + i)
+        e_i = tl.load(e_ptr + i)
+        
+        # Compute a[i] = b[i-1] + c[i] * d[i]
+        a_i = b_prev + c_i * d_i
+        
+        # Store a[i]
+        tl.store(a_ptr + i, a_i)
+        
+        # Compute b[i] = a[i] + c[i] * e[i]
+        b_i = a_i + c_i * e_i
+        
+        # Store b[i]
+        tl.store(b_ptr + i, b_i)
 
 def s323_triton(a, b, c, d, e):
-    n_elements = a.shape[0]
-    BLOCK_SIZE = 256
+    n = a.shape[0]
     
-    # Calculate grid size for elements starting from index 1
-    n_work = n_elements - 1
-    grid = (triton.cdiv(n_work, BLOCK_SIZE),)
-    
-    # First loop: a[i] = b[i-1] + c[i] * d[i]
-    s323_kernel_loop1[grid](
-        a, b, c, d, n_elements, BLOCK_SIZE
-    )
-    
-    # Second loop: b[i] = a[i] + c[i] * e[i]
-    s323_kernel_loop2[grid](
-        a, b, c, e, n_elements, BLOCK_SIZE
-    )
+    # Launch with single thread due to sequential dependency
+    grid = (1,)
+    s323_kernel[grid](a, b, c, d, e, n)

@@ -6,45 +6,50 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.117658,
-      "triton_time_ms": 0.124139,
-      "speedup": 0.94779
+      "c_ref_time_ms": 0.117369,
+      "triton_time_ms": 0.105737,
+      "speedup": 1.110015
     }
   },
   "s211": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
-    "benchmark": {
-      "c_ref_time_ms": 0.096394,
-      "triton_time_ms": 0.18545,
-      "speedup": 0.519781
-    }
+    "test_passed": false,
+    "attempts": 10,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 2.56e+01"
+    },
+    "benchmark": null
   },
   "s261": {
     "c_ref_available": true,
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
+    "attempts": 3,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 5.55e-01"
+    },
     "benchmark": {
-      "c_ref_time_ms": 0.121943,
-      "triton_time_ms": 0.098493,
-      "speedup": 1.238084
+      "c_ref_time_ms": 0.124022,
+      "triton_time_ms": 0.126276,
+      "speedup": 0.982151
     }
   },
   "s323": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
+    "test_passed": false,
+    "attempts": 10,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 9.97e-01"
+    },
     "benchmark": {
-      "c_ref_time_ms": 0.166389,
-      "triton_time_ms": 1.571475,
-      "speedup": 0.105881
+      "c_ref_time_ms": 0.167514,
+      "triton_time_ms": 2.776221,
+      "speedup": 0.060339
     }
   },
   "s3112": {
@@ -249,9 +254,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.183921,
-      "triton_time_ms": 0.099072,
-      "speedup": 1.856442
+      "c_ref_time_ms": 0.184511,
+      "triton_time_ms": 0.091705,
+      "speedup": 2.012
     }
   },
   "s118": {
@@ -269,14 +274,13 @@
   "s119": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
-    "benchmark": {
-      "c_ref_time_ms": 0.127219,
-      "triton_time_ms": 0.156492,
-      "speedup": 0.812944
-    }
+    "test_passed": false,
+    "attempts": 10,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.17e+00"
+    },
+    "benchmark": null
   },
   "s121": {
     "c_ref_available": true,
@@ -297,12 +301,15 @@
     "c_ref_available": true,
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
+    "attempts": 4,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.22e+00"
+    },
     "benchmark": {
-      "c_ref_time_ms": 0.075195,
-      "triton_time_ms": 0.100287,
-      "speedup": 0.749802
+      "c_ref_time_ms": 0.075067,
+      "triton_time_ms": 0.131761,
+      "speedup": 0.569723
     }
   },
   "s122": {
@@ -561,9 +568,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.202975,
-      "triton_time_ms": 0.265374,
-      "speedup": 0.764866
+      "c_ref_time_ms": 0.202531,
+      "triton_time_ms": 0.115873,
+      "speedup": 1.747874
     }
   },
   "s162": {
@@ -681,12 +688,15 @@
     "c_ref_available": true,
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
+    "attempts": 6,
+    "final_error": {
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.81e+00"
+    },
     "benchmark": {
-      "c_ref_time_ms": 0.563018,
-      "triton_time_ms": 0.104004,
-      "speedup": 5.413409
+      "c_ref_time_ms": 0.55731,
+      "triton_time_ms": 0.150386,
+      "speedup": 3.705862
     }
   },
   "s212": {
@@ -708,12 +718,15 @@
     "c_ref_available": true,
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
+    "attempts": 4,
+    "final_error": {
+      "type": "compilation",
+      "message": "`tl.load`\")\nValueError: Unsupported ptr type <[128], int64> in `tl.load`\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s221/test_s221_correctness.py\", line 72, in test_correctness\n    triton_result = s221_triton(**tr_kwargs)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analy"
+    },
     "benchmark": {
-      "c_ref_time_ms": 0.153401,
-      "triton_time_ms": 0.140853,
-      "speedup": 1.089088
+      "c_ref_time_ms": 0.152434,
+      "triton_time_ms": 0.14056,
+      "speedup": 1.084474
     }
   },
   "s2233": {
@@ -827,17 +840,13 @@
   "s241": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": true,
-    "attempts": 2,
+    "test_passed": false,
+    "attempts": 10,
     "final_error": {
       "type": "numerical",
-      "message": "Numerical mismatch: max_error = 2.75e+01"
+      "message": "Numerical mismatch: max_error = 6.81e-01"
     },
-    "benchmark": {
-      "c_ref_time_ms": 0.081161,
-      "triton_time_ms": 0.120883,
-      "speedup": 0.671399
-    }
+    "benchmark": null
   },
   "s242": {
     "c_ref_available": true,
@@ -1091,16 +1100,16 @@
   "s277": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": true,
-    "attempts": 7,
+    "test_passed": false,
+    "attempts": 10,
     "final_error": {
-      "type": "compilation",
-      "message": "            ^\nunsupported AST node type: Continue\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s277/test_s277_correctness.py\", line 75, in test_correctness\n    triton_result = s277_triton(**tr_kwargs)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/test29/llm_triton/s277/attempt5.py\", line 47, in s277_triton\n "
+      "type": "numerical",
+      "message": "Numerical mismatch: max_error = 1.75e-01"
     },
     "benchmark": {
-      "c_ref_time_ms": 0.229178,
-      "triton_time_ms": 0.111925,
-      "speedup": 2.047605
+      "c_ref_time_ms": 0.22947,
+      "triton_time_ms": 4.022554,
+      "speedup": 0.057046
     }
   },
   "s278": {
@@ -1110,9 +1119,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.182642,
-      "triton_time_ms": 0.109347,
-      "speedup": 1.670305
+      "c_ref_time_ms": 0.180095,
+      "triton_time_ms": 0.093747,
+      "speedup": 1.921074
     }
   },
   "s279": {
@@ -1122,9 +1131,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.151195,
-      "triton_time_ms": 0.109767,
-      "speedup": 1.377416
+      "c_ref_time_ms": 0.152398,
+      "triton_time_ms": 0.11274,
+      "speedup": 1.351763
     }
   },
   "s281": {
@@ -1317,12 +1326,12 @@
     "c_ref_available": true,
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
+    "attempts": 2,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.019008,
-      "triton_time_ms": 0.086647,
-      "speedup": 0.21937
+      "c_ref_time_ms": 0.018269,
+      "triton_time_ms": 0.176529,
+      "speedup": 0.103487
     }
   },
   "s319": {
@@ -1392,9 +1401,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.016775,
-      "triton_time_ms": 0.138512,
-      "speedup": 0.12111
+      "c_ref_time_ms": 0.0172,
+      "triton_time_ms": 0.110566,
+      "speedup": 0.155565
     }
   },
   "s341": {
@@ -1556,17 +1565,13 @@
   "s421": {
     "c_ref_available": true,
     "triton_generated": true,
-    "test_passed": true,
-    "attempts": 6,
+    "test_passed": false,
+    "attempts": 10,
     "final_error": {
-      "type": "numerical",
-      "message": "Numerical mismatch: max_error = 4.64e-01"
+      "type": "compilation",
+      "message": "e \"/home/qinxiao/anaconda3/lib/python3.12/site-packages/triton/language/semantic.py\", line 503, in arange\n    raise ValueError(\"arange's arguments must be of type tl.constexpr\")\nValueError: arange's arguments must be of type tl.constexpr\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/qinxiao/workspace/triton_performance_analysis/llm_tritonization_benchmark/my_triton_implementations/s421/test_s421_correctness.py\", line 69, i"
     },
-    "benchmark": {
-      "c_ref_time_ms": 0.048118,
-      "triton_time_ms": 0.086461,
-      "speedup": 0.556531
-    }
+    "benchmark": null
   },
   "s422": {
     "c_ref_available": true,
@@ -1638,9 +1643,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.262335,
-      "triton_time_ms": 0.108157,
-      "speedup": 2.4255
+      "c_ref_time_ms": 0.261589,
+      "triton_time_ms": 0.145901,
+      "speedup": 1.792921
     }
   },
   "s443": {
@@ -1650,9 +1655,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.168399,
-      "triton_time_ms": 0.087891,
-      "speedup": 1.916
+      "c_ref_time_ms": 0.168975,
+      "triton_time_ms": 0.087804,
+      "speedup": 1.924448
     }
   },
   "s451": {

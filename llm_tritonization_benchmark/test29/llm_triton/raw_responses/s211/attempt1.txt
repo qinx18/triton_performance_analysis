@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s211
-# Generated: 2026-02-04 01:26:07
+# Generated: 2026-02-04 07:43:31
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -41,51 +41,6 @@ real_t s211(struct args_t * func_args)
 ```
 
 ============================================================
-LOOP DISTRIBUTION OPPORTUNITY DETECTED
-============================================================
-
-LOOP DISTRIBUTION FOR PARALLELIZATION:
-
-This loop can be SPLIT into separate parallel loops!
-
-Original loop has cross-statement dependencies, but when distributed:
-
-  Loop 1 (Statement S0): writes a, reads c, b, d
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-  Loop 2 (Statement S1): writes b, reads e, b, d
-    ✓ b: read offset 1 >= write offset 0 (no RAW)
-    -> VERIFIED PARALLELIZABLE (no same-array loop-carried RAW)
-
-IMPLEMENTATION STRATEGY:
-Split into separate Triton kernels, each processing in parallel:
-
-```python
-@triton.jit
-def kernel_loop1(...):
-    pid = tl.program_id(0)
-    # Parallel: each thread handles different indices
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    # Process statement S0 for all indices in parallel
-    ...
-
-@triton.jit
-def kernel_loop2(...):
-    # Similar parallel structure for statement S1
-    ...
-
-def wrapper(...):
-    # Run loops sequentially, but each loop is internally parallel
-    kernel_loop1[grid](...)
-    kernel_loop2[grid](...)
-    # etc.
-```
-
-KEY: Each distributed loop processes ALL iterations in parallel,
-     then the next loop runs. This satisfies cross-statement dependencies.
-
-============================================================
-
-============================================================
 STATEMENT REORDERING OPPORTUNITY DETECTED
 ============================================================
 
@@ -100,60 +55,39 @@ This creates a loop-carried dependency: iteration i needs b[i-1] from iteration 
 TRANSFORMATION: Reorder statements and shift consumer index by 1.
 After transformation, each iteration computes b[i] first, then uses it immediately.
 
-EXACT TRANSFORMED FUNCTION:
-```python
-def func_triton(a, b, c, d, e):
-    N = a.shape[0]
-    b_copy = b.clone()
+ORIGINAL C STATEMENTS (after scalar inlining):
+    a[i] = b[i - 1] + c[i] * d[i];  // consumer (reads b[i-1])
+    b[i] = b[i + 1] - e[i] * d[i];  // producer (writes b[i])
 
-    # PROLOGUE: First consumer uses original b[0]
-    a[1] = f(b[0], c[1], d[1])
+TRANSFORMED C CODE (with statement reordering):
+```c
+real_t b_copy[N];  // clone b before parallel loop
+memcpy(b_copy, b, N * sizeof(real_t));
 
-    # MAIN PARALLEL LOOP (i from 1 to N-2):
-    # Each iteration is independent - can be parallelized in Triton
-    for i in range(1, N-2):  # This becomes parallel in Triton
-        # Step 1: Compute b[i] (producer)
-        b[i] = f(b_copy[i+1], e[i], d[i])
-        # Step 2: Compute a[i+1] using b[i] just computed
-        a[i+1] = g(b[i], c[i+1], d[i+1])
+// PROLOGUE (i=1):
+a[1] = b[0] + c[1] * d[1];
 
-    # EPILOGUE: Last producer (no corresponding consumer)
-    b[N-2] = f(b_copy[N-1], e[N-2], d[N-2])
+// MAIN PARALLEL LOOP (i from 1 to N-3 inclusive):
+// Each iteration is independent - can be parallelized
+for (int i = 1; i < N-2; i++) {  // Triton mask: (i >= 1) & (i < N-2)
+    b[i] = b_copy[i + 1] - e[i] * d[i];  // Step 1: compute b[i]
+    a[i+1] = b[i] + c[i+1] * d[i+1];  // Step 2: compute a[i+1] using b[i]
+}
+
+// EPILOGUE (i=N-2):
+b[N-2] = b_copy[N-1] - e[N-2] * d[N-2];
 ```
 
 For Triton: Convert the main loop to a parallel kernel where each thread
 handles one value of i, computing both b[i] and a[i+1].
+
+CRITICAL: The main loop mask should be (i >= 1) & (i < N-2). The loop runs i from 1 to N-3 inclusive.
 
 WAR RACE CONDITION WARNING:
 Arrays needing read-only copy: ['b']
 Clone these arrays BEFORE the parallel loop to preserve original values.
 
 ============================================================
-
-## CRITICAL: WAR Race Condition Handling Required
-
-This kernel has WAR (Write-After-Read) anti-dependencies that cause race conditions in parallel execution.
-**Arrays requiring read-only copy**: ['b']
-
-### Required Solution: Read-Only Copy Pattern
-Pass a **read-only copy** of the array to the kernel. All threads load from the copy (immutable)
-and store results to the original array.
-
-### Implementation Template
-```python
-# In wrapper function - create read-only copy BEFORE launching kernel:
-def s211_triton(...):
-    b_copy = b.clone()  # Read-only copy
-
-    # Pass BOTH original (for writes) AND copy (for reads) to kernel
-    s211_kernel[grid](
-        b,        # Write destination (original)
-        b_copy,   # Read source (immutable copy)
-        ...other_args...
-    )
-```
-
-**CRITICAL: Use forward iteration** - ALWAYS use forward iteration with ascending offsets.
 
 
 ## Array Information:
@@ -170,9 +104,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -242,44 +183,54 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def s211_kernel(a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr, N, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and compute offsets
-    pid = tl.program_id(0)
+def s211_kernel(a_ptr, b_ptr, b_copy_ptr, c_ptr, d_ptr, e_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get thread block
+    pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     
-    # Mask for valid indices (1 to N-2)
-    mask = (offsets >= 1) & (offsets < N - 1)
+    # Mask for valid indices (i from 1 to n_elements-3 inclusive)
+    mask = (offsets >= 1) & (offsets < n_elements - 2)
     
-    # Load values for statement 1: a[i] = b[i - 1] + c[i] * d[i]
-    b_prev = tl.load(b_copy_ptr + offsets - 1, mask=mask)
-    c_vals = tl.load(c_ptr + offsets, mask=mask)
+    # Load data for computing b[i]
+    b_copy_vals = tl.load(b_copy_ptr + offsets + 1, mask=mask)
+    e_vals = tl.load(e_ptr + offsets, mask=mask)
     d_vals = tl.load(d_ptr + offsets, mask=mask)
     
-    # Compute and store a[i]
-    a_vals = b_prev + c_vals * d_vals
-    tl.store(a_ptr + offsets, a_vals, mask=mask)
-    
-    # Load values for statement 2: b[i] = b[i + 1] - e[i] * d[i]
-    b_next = tl.load(b_copy_ptr + offsets + 1, mask=mask)
-    e_vals = tl.load(e_ptr + offsets, mask=mask)
-    
-    # Compute and store b[i]
-    b_vals = b_next - e_vals * d_vals
+    # Compute b[i] = b_copy[i + 1] - e[i] * d[i]
+    b_vals = b_copy_vals - e_vals * d_vals
     tl.store(b_ptr + offsets, b_vals, mask=mask)
+    
+    # Load data for computing a[i+1]
+    c_vals_next = tl.load(c_ptr + offsets + 1, mask=mask)
+    d_vals_next = tl.load(d_ptr + offsets + 1, mask=mask)
+    
+    # Compute a[i+1] = b[i] + c[i+1] * d[i+1]
+    a_vals_next = b_vals + c_vals_next * d_vals_next
+    tl.store(a_ptr + offsets + 1, a_vals_next, mask=mask)
 
 def s211_triton(a, b, c, d, e):
-    N = a.shape[0]
+    n_elements = a.shape[0]
     
-    # Create read-only copy of b to handle WAR dependencies
+    # Create read-only copy of b to avoid WAR dependency
     b_copy = b.clone()
     
-    # Set up grid and block size
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    # Prologue: compute a[1]
+    a[1] = b[0] + c[1] * d[1]
     
-    # Launch kernel
-    s211_kernel[grid](
-        a, b, b_copy, c, d, e,
-        N, BLOCK_SIZE
-    )
+    # Main parallel loop range: i from 1 to n_elements-3 inclusive
+    loop_size = n_elements - 2
+    
+    if loop_size > 1:
+        BLOCK_SIZE = 256
+        grid = (triton.cdiv(loop_size, BLOCK_SIZE),)
+        
+        s211_kernel[grid](
+            a, b, b_copy, c, d, e, 
+            n_elements, 
+            BLOCK_SIZE=BLOCK_SIZE
+        )
+    
+    # Epilogue: compute b[n_elements-2]
+    if n_elements >= 3:
+        b[n_elements-2] = b_copy[n_elements-1] - e[n_elements-2] * d[n_elements-2]
 ```

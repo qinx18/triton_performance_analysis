@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s221
-# Generated: 2026-02-04 01:30:07
+# Generated: 2026-02-04 08:12:56
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -99,9 +99,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -166,60 +173,50 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s221_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    # Get program ID
+    # Compute a[i] += c[i] * d[i] in parallel
     pid = tl.program_id(0)
-    
-    # Calculate block start
     block_start = pid * BLOCK_SIZE
-    
-    # Create offsets
     offsets = tl.arange(0, BLOCK_SIZE)
+    indices = block_start + offsets
+    mask = indices < n_elements
     
-    # Process elements in this block
-    for i in range(BLOCK_SIZE):
-        idx = block_start + i
-        
-        # Check bounds
-        if idx >= n_elements:
-            break
-        if idx < 1:  # Loop starts at i=1
-            continue
-            
-        # Load values
-        c_val = tl.load(c_ptr + idx)
-        d_val = tl.load(d_ptr + idx)
-        a_val = tl.load(a_ptr + idx)
-        
-        # First statement: a[i] += c[i] * d[i]
-        new_a_val = a_val + c_val * d_val
-        tl.store(a_ptr + idx, new_a_val)
-        
-        # Second statement: b[i] = b[i-1] + a[i] + d[i]
-        b_prev = tl.load(b_ptr + idx - 1)
-        new_b_val = b_prev + new_a_val + d_val
-        tl.store(b_ptr + idx, new_b_val)
+    # Load values
+    a_vals = tl.load(a_ptr + indices, mask=mask)
+    c_vals = tl.load(c_ptr + indices, mask=mask)
+    d_vals = tl.load(d_ptr + indices, mask=mask)
+    
+    # Compute a[i] += c[i] * d[i]
+    a_vals = a_vals + c_vals * d_vals
+    
+    # Store updated a values
+    tl.store(a_ptr + indices, a_vals, mask=mask)
 
 def s221_triton(a, b, c, d):
     n_elements = a.shape[0]
     
-    # Choose block size
-    BLOCK_SIZE = 128
+    # First compute a[i] += c[i] * d[i] in parallel
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Calculate grid size
-    grid_size = triton.cdiv(n_elements, BLOCK_SIZE)
-    
-    # Launch kernel
-    s221_kernel[(grid_size,)](
-        a, b, c, d,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
+    s221_kernel[grid](
+        a, b, c, d, n_elements, BLOCK_SIZE
     )
     
-    return a, b
+    # Then compute b[i] = b[i-1] + a[i] + d[i] sequentially using prefix sum
+    # This is a sequential dependency that needs special handling
+    
+    # Extract the addends: a[1:] + d[1:]
+    addends = a[1:] + d[1:]
+    
+    # Compute prefix sum of addends
+    prefix_sums = torch.cumsum(addends, dim=0)
+    
+    # Update b[1:] = b[0] + prefix_sums
+    b[1:] = b[0] + prefix_sums
 ```

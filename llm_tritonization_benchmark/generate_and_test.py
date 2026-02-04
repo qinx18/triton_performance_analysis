@@ -149,6 +149,14 @@ except ImportError:
     analyze_kernel_loop_distribution = None
     format_loop_distribution_for_prompt = None
 
+try:
+    from compute_goto_conversion import analyze_kernel_goto, format_goto_analysis_for_prompt
+    HAS_GOTO_ANALYSIS = True
+except ImportError:
+    HAS_GOTO_ANALYSIS = False
+    analyze_kernel_goto = None
+    format_goto_analysis_for_prompt = None
+
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 
@@ -1020,6 +1028,30 @@ def build_loop_distribution_instructions(kernel_name: str, distribution_result: 
     return ""
 
 
+def load_goto_analysis(kernel_name: str) -> Optional[dict]:
+    """Load goto conversion and parallelization analysis for a kernel."""
+    if not HAS_GOTO_ANALYSIS or analyze_kernel_goto is None:
+        return None
+
+    try:
+        return analyze_kernel_goto(kernel_name)
+    except Exception:
+        return None
+
+
+def build_goto_instructions(kernel_name: str, goto_result: dict) -> str:
+    """Build specific instructions for handling goto-based control flow."""
+    if not goto_result or not goto_result.get('applicable'):
+        return ""
+
+    if format_goto_analysis_for_prompt:
+        formatted = format_goto_analysis_for_prompt(goto_result)
+        if formatted:
+            return f"\n{formatted}\n"
+
+    return ""
+
+
 def detect_identity_matrix_pattern(c_code: str, seq_dim: str, par_dim: str) -> bool:
     """
     Detect identity matrix initialization pattern:
@@ -1132,8 +1164,11 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
         lines.append("")
         lines.append("**CRITICAL: Use a SINGLE kernel launch with an in-kernel loop over diagonals.**")
         lines.append("DO NOT launch a separate kernel per diagonal — the launch overhead will dominate.")
-        lines.append("For LEN_2D=256, each diagonal fits in one block, so all threads synchronize")
-        lines.append("at each loop iteration boundary automatically.")
+        lines.append("")
+        lines.append("**CRITICAL: Memory synchronization between diagonals**")
+        lines.append("Add `tl.debug_barrier()` after each store to ensure writes from all warps are visible")
+        lines.append("before reading in the next diagonal iteration. Without this, cross-warp memory")
+        lines.append("visibility is NOT guaranteed and will cause incorrect results!")
         lines.append("```python")
         lines.append("@triton.jit")
         lines.append(f"def kernel(aa_ptr, bb_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):")
@@ -1141,11 +1176,16 @@ def build_parallelization_instructions(kernel_name: str, analysis: Optional[dict
         lines.append(f"    for diag in range(2, 2 * N):  # anti-diagonal loop INSIDE kernel")
         lines.append(f"        {dims[0]} = diag - {dims[1]}_idx")
         lines.append(f"        mask = ({dims[0]} >= 1) & ({dims[0]} < N) & ({dims[1]}_idx >= 1) & ({dims[1]}_idx < N)")
-        lines.append(f"        # Load, compute, store with mask")
+        lines.append(f"        # Use N for stride (2D arrays are exactly N x N)")
+        lines.append(f"        aa_idx = {dims[0]} * N + {dims[1]}_idx")
+        lines.append(f"        aa_prev_idx = ({dims[0]} - 1) * N + ({dims[1]}_idx - 1)")
+        lines.append(f"        # Load, compute, store with mask using aa_idx, aa_prev_idx")
         lines.append("        ...")
+        lines.append("        tl.debug_barrier()  # CRITICAL: sync all warps before next diagonal")
         lines.append("")
         lines.append("# Wrapper: SINGLE kernel launch!")
         lines.append("grid = (1,)  # one block covers all 256 elements")
+        lines.append("N = len_2d  # Arrays are exactly N x N")
         lines.append("kernel[grid](aa, bb, N, BLOCK_SIZE=256)")
         lines.append("```")
         lines.append("")
@@ -1355,7 +1395,8 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
                       early_exit_section: str = "", statement_reordering_section: str = "",
                       scalar_expansion_section: str = "", reduction_section: str = "",
                       convolution_section: str = "", interchange_section: str = "",
-                      indirect_section: str = "", loop_distribution_section: str = "") -> str:
+                      indirect_section: str = "", loop_distribution_section: str = "",
+                      goto_section: str = "") -> str:
     """Build the base prompt for Triton generation."""
     c_code_section = tsvc_func['kernel_loop']
     if tsvc_func['local_vars']:
@@ -1388,7 +1429,7 @@ def build_base_prompt(kernel_name: str, tsvc_func: dict, exact_sig: str,
 ```c
 {c_code_section}
 ```
-{helper_section}{loop_distribution_section}{loop_unrolling_section}{statement_reordering_section}{scalar_expansion_section}{war_section}{par_section}{reduction_section}{convolution_section}{interchange_section}{indirect_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
+{helper_section}{goto_section}{loop_distribution_section}{loop_unrolling_section}{scalar_expansion_section}{statement_reordering_section}{war_section}{par_section}{reduction_section}{convolution_section}{interchange_section}{indirect_section}{overwrite_section}{compaction_section}{aliasing_section}{crossing_threshold_section}{early_exit_section}
 
 ## Array Information:
 - Arrays `a`, `b`, `c`, `d`, `e` are 1D float arrays of size LEN_1D (typically 32000)
@@ -1404,9 +1445,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -1599,17 +1647,26 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     par_section = build_parallelization_instructions(kernel_name, par_analysis)
     overwrite_result = load_overwrite_analysis(kernel_name)
     overwrite_section = build_overwrite_instructions(kernel_name, overwrite_result)
-    # Build WAR instructions after overwrite analysis (so we can check if overwrite eliminates WAR)
-    war_section = build_war_instructions(kernel_name, war_result, overwrite_result)
     compaction_result = load_stream_compaction_analysis(kernel_name)
     compaction_section = build_stream_compaction_instructions(kernel_name, compaction_result)
-    # Load statement reordering BEFORE aliasing so we can pass eliminated deps
+    # Load statement reordering BEFORE WAR instructions - statement reordering handles WAR internally
     statement_reordering_result = load_statement_reordering_analysis(kernel_name)
     statement_reordering_section = build_statement_reordering_instructions(kernel_name, statement_reordering_result)
+    # Build WAR instructions - skip if statement reordering is applicable (it handles WAR internally)
+    if statement_reordering_result and statement_reordering_result.get('applicable'):
+        war_section = ""  # Statement reordering already includes WAR handling
+    else:
+        war_section = build_war_instructions(kernel_name, war_result, overwrite_result)
     # Load loop distribution BEFORE aliasing - if it fully transforms a pattern,
     # aliasing analysis should skip those arrays
-    loop_distribution_result = load_loop_distribution_analysis(kernel_name)
-    loop_distribution_section = build_loop_distribution_instructions(kernel_name, loop_distribution_result)
+    # BUT: Skip loop distribution if statement reordering is applicable - they can conflict
+    # and statement reordering is the more precise transformation
+    if statement_reordering_result and statement_reordering_result.get('applicable'):
+        loop_distribution_result = None
+        loop_distribution_section = ""
+    else:
+        loop_distribution_result = load_loop_distribution_analysis(kernel_name)
+        loop_distribution_section = build_loop_distribution_instructions(kernel_name, loop_distribution_result)
     # Aliasing analysis should consider dependencies eliminated by statement reordering and loop distribution
     aliasing_result = load_pointer_aliasing_analysis(kernel_name, reordering_result=statement_reordering_result, distribution_result=loop_distribution_result)
     aliasing_section = build_pointer_aliasing_instructions(kernel_name, aliasing_result)
@@ -1629,8 +1686,15 @@ def generate_triton_initial(kernel_name: str) -> Tuple[str, str, str]:
     interchange_section = build_loop_interchange_instructions(kernel_name, interchange_result)
     indirect_result = load_indirect_addressing_analysis(kernel_name)
     indirect_section = build_indirect_addressing_prompt(kernel_name, indirect_result)
+    # Load goto analysis - applies when code has goto statements that PET can't analyze
+    # Only use if no other transformation is applicable
+    if not statement_reordering_result and not loop_distribution_result:
+        goto_result = load_goto_analysis(kernel_name)
+        goto_section = build_goto_instructions(kernel_name, goto_result)
+    else:
+        goto_section = ""
 
-    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section, interchange_section, indirect_section, loop_distribution_section)
+    prompt = build_base_prompt(kernel_name, tsvc_func, exact_sig, war_section, par_section, overwrite_section, compaction_section, aliasing_section, crossing_threshold_section, loop_unrolling_section, early_exit_section, statement_reordering_section, scalar_expansion_section, reduction_section, convolution_section, interchange_section, indirect_section, loop_distribution_section, goto_section)
 
     print(f"  Generating Triton code (attempt 1/{MAX_ATTEMPTS})...")
 
@@ -1841,6 +1905,10 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
     else:
         size_expr = "N"
 
+    # For 2D arrays with len_2d parameter, use exact N size (C reference uses len_2d as stride)
+    has_len_2d_param = 'len_2d' in scalar_params
+    size_2d_expr = "N" if has_len_2d_param else size_expr
+
     array_inits = []
     for arr, mode in sorted(arrays.items()):
         if mode in ['r', 'rw', 'w']:
@@ -1851,7 +1919,8 @@ def generate_correctness_test(func_name: str, func_spec: dict, attempt: int = 1)
                 # TSVC s442/s443 use indx as switch case index (1-4)
                 array_inits.append(f"            {arr} = torch.randint(1, 5, ({size_expr},), device='cuda', dtype=torch.int32)")
             elif has_2d and len(arr) == 2 and arr[0] == arr[1]:
-                array_inits.append(f"            {arr} = torch.randn({size_expr}, {size_expr}, device='cuda', dtype=torch.float32)")
+                # For 2D arrays with len_2d parameter, use exact N size for correct C reference stride
+                array_inits.append(f"            {arr} = torch.randn({size_2d_expr}, {size_2d_expr}, device='cuda', dtype=torch.float32)")
             elif arr == 'flat_2d_array':
                 if has_offset:
                     array_inits.append(f"            {arr} = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)")
@@ -2198,6 +2267,10 @@ def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -
     else:
         size_expr = "N"
 
+    # For 2D arrays with len_2d parameter, use exact N size (C reference uses len_2d as stride)
+    has_len_2d_param = 'len_2d' in scalar_params
+    size_2d_expr = "N" if has_len_2d_param else size_expr
+
     array_inits = []
     for arr, mode in sorted(arrays.items()):
         if mode in ['r', 'rw', 'w']:
@@ -2207,7 +2280,8 @@ def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -
                 # TSVC s442/s443 use indx as switch case index (1-4)
                 array_inits.append(f"    {arr} = torch.randint(1, 5, ({size_expr},), device='cuda', dtype=torch.int32)")
             elif has_2d and len(arr) == 2 and arr[0] == arr[1]:
-                array_inits.append(f"    {arr} = torch.randn({size_expr}, {size_expr}, device='cuda', dtype=torch.float32)")
+                # For 2D arrays with len_2d parameter, use exact N size for correct C reference stride
+                array_inits.append(f"    {arr} = torch.randn({size_2d_expr}, {size_2d_expr}, device='cuda', dtype=torch.float32)")
             elif arr == 'flat_2d_array':
                 if has_offset:
                     array_inits.append(f"    {arr} = torch.randn((N + 10) * (N + 10), device='cuda', dtype=torch.float32)")
@@ -2506,6 +2580,11 @@ def process_function(func_name: str, func_spec: dict) -> dict:
     error_info = None  # Initialize error_info before the loop
     reset_after = 5  # Reset context after this many failures
 
+    # Track the best passing result across all attempts
+    best_result = None
+    best_speedup = -float('inf')
+    best_attempt = 0
+
     for attempt in range(1, MAX_ATTEMPTS + 1):
         results["attempts"] = attempt
 
@@ -2572,6 +2651,22 @@ def process_function(func_name: str, func_spec: dict) -> dict:
                     speedup = benchmark_results.get('speedup', 0)
                     print(f"  Benchmark complete: {speedup:.2f}x speedup")
 
+                    # Track the best passing result
+                    if speedup > best_speedup:
+                        best_speedup = speedup
+                        best_attempt = attempt
+                        best_result = {
+                            "c_ref_available": True,
+                            "triton_generated": True,
+                            "test_generated": True,
+                            "test_passed": True,
+                            "attempts": attempt,
+                            "final_attempt": attempt,
+                            "benchmark": benchmark_results.copy(),
+                            "final_error": None
+                        }
+                        print(f"  New best result: {speedup:.2f}x speedup (attempt {attempt})")
+
                     # Check if speedup is too low - retry with parallelization feedback
                     if speedup < 0.1 and attempt < MAX_ATTEMPTS:
                         print(f"  Speedup too low ({speedup:.2f}x < 0.1x). Retrying for better parallelization...")
@@ -2587,6 +2682,8 @@ def process_function(func_name: str, func_spec: dict) -> dict:
                     print(f"  Benchmark failed or timed out")
                     results["benchmark"] = None
 
+                # Return immediately if speedup is good enough
+                results["final_attempt"] = attempt
                 return results
             else:
                 error_type = error_info.get('type', 'unknown')
@@ -2609,6 +2706,12 @@ def process_function(func_name: str, func_spec: dict) -> dict:
             results["final_error"] = {'type': 'generation_error', 'message': str(e)}
             if attempt >= MAX_ATTEMPTS:
                 break
+
+    # Return the best passing result if we have one, otherwise return the last result
+    if best_result is not None:
+        print(f"  Returning best result from attempt {best_attempt} with {best_speedup:.2f}x speedup")
+        best_result["attempts"] = attempt  # Total attempts made
+        return best_result
 
     return results
 

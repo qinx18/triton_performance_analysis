@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for s443
-# Generated: 2026-02-04 02:51:14
+# Generated: 2026-02-04 08:43:08
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -75,9 +75,16 @@ Please generate a complete Triton implementation that:
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
 6. Is functionally equivalent to the C code (same computation, same results)
-7. **CRITICAL: DO NOT hardcode array lengths like LEN_1D or LEN_2D.** Instead, derive dimensions from input tensor shapes using `.shape[0]`, `.shape[1]`, etc. For example:
-   - Use `N = a.shape[0]` instead of `LEN_1D = 32000`
-   - Use `N = aa.shape[0]` instead of `LEN_2D = 256`
+7. **CRITICAL: For 2D arrays with `len_2d` parameter:**
+   - Use `len_2d` for BOTH loop bounds AND stride (arrays are exactly len_2d x len_2d)
+   ```python
+   # For 2D arrays with len_2d parameter:
+   N = len_2d  # Use for both bounds and stride
+
+   for i in range(1, N):
+       for j in range(1, N):
+           linear_idx = i * N + j  # Stride is N (same as len_2d)
+   ```
 
 ## CRITICAL: Function Signature Requirements
 **DO NOT include** the `iterations` parameter or the outer `for (int nl = ...)` timing loop.
@@ -142,9 +149,9 @@ Provide ONLY the Python code, no additional explanation.
 RESPONSE:
 ================================================================================
 ```python
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
 def s443_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -152,34 +159,35 @@ def s443_kernel(a_ptr, b_ptr, c_ptr, d_ptr, n_elements, BLOCK_SIZE: tl.constexpr
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets
+    
     mask = idx < n_elements
     
     # Load values
-    d_vals = tl.load(d_ptr + idx, mask=mask)
     a_vals = tl.load(a_ptr + idx, mask=mask)
     b_vals = tl.load(b_ptr + idx, mask=mask)
     c_vals = tl.load(c_ptr + idx, mask=mask)
+    d_vals = tl.load(d_ptr + idx, mask=mask)
     
-    # Conditional computation: if d[i] <= 0, use b[i] * c[i], else use b[i] * b[i]
+    # Condition: d[i] <= 0
     condition = d_vals <= 0.0
-    result = tl.where(condition, b_vals * c_vals, b_vals * b_vals)
+    
+    # Calculate both possible values
+    val_l20 = b_vals * c_vals  # b[i] * c[i] for L20 path
+    val_l30 = b_vals * b_vals  # b[i] * b[i] for L30 path
+    
+    # Select based on condition
+    update_val = tl.where(condition, val_l20, val_l30)
     
     # Update a[i]
-    a_vals = a_vals + result
+    result = a_vals + update_val
     
     # Store result
-    tl.store(a_ptr + idx, a_vals, mask=mask)
+    tl.store(a_ptr + idx, result, mask=mask)
 
 def s443_triton(a, b, c, d):
-    n_elements = a.shape[0]
-    
-    # Launch kernel
+    n_elements = a.numel()
     BLOCK_SIZE = 256
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    s443_kernel[grid](
-        a, b, c, d,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
+    s443_kernel[grid](a, b, c, d, n_elements, BLOCK_SIZE)
 ```

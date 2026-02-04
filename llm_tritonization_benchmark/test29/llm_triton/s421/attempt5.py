@@ -1,34 +1,42 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def s421_kernel(xx_ptr, yy_ptr, a_ptr, n):
-    pid = tl.program_id(0)
-    BLOCK_SIZE = 256
+def s421_kernel(a_ptr, xx_ptr, yy_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Get block of indices to process
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
     
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < (n - 1)
+    # Load a[i] values
+    a_vals = tl.load(a_ptr + offsets, mask=mask, other=0.0)
     
-    # Load yy[i+1] and a[i]
+    # Load yy[i+1] values (shift indices by 1)
     yy_offsets = offsets + 1
-    yy_vals = tl.load(yy_ptr + yy_offsets, mask=mask)
-    a_vals = tl.load(a_ptr + offsets, mask=mask)
+    yy_mask = offsets < n_elements
+    yy_vals = tl.load(yy_ptr + yy_offsets, mask=yy_mask, other=0.0)
     
     # Compute xx[i] = yy[i+1] + a[i]
     result = yy_vals + a_vals
     
-    # Store result
+    # Store result to xx[i]
     tl.store(xx_ptr + offsets, result, mask=mask)
 
 def s421_triton(a, xx, yy):
-    n = a.shape[0]
-    
-    # Copy xx to yy
+    # First copy xx to yy (yy = xx)
     yy.copy_(xx)
     
-    # Launch kernel for parallel computation
-    grid = (triton.cdiv(n - 1, 256),)
-    s421_kernel[grid](xx, yy, a, n)
+    # Process LEN_1D - 1 elements (i goes from 0 to LEN_1D-2)
+    n_elements = a.shape[0] - 1
+    
+    # Choose block size
+    BLOCK_SIZE = 256
+    
+    # Launch kernel
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    s421_kernel[grid](
+        a, xx, yy, n_elements,
+        BLOCK_SIZE=BLOCK_SIZE
+    )
     
     return xx
