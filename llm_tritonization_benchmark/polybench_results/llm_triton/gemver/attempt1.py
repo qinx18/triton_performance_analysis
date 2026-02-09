@@ -3,123 +3,131 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def gemver_kernel(A, u1, u2, v1, v2, w, x, y, z, alpha, beta, N, BLOCK_SIZE: tl.constexpr):
+def gemver_kernel(A_ptr, u1_ptr, u2_ptr, v1_ptr, v2_ptr, w_ptr, x_ptr, y_ptr, z_ptr, 
+                  alpha, beta, N, BLOCK_SIZE: tl.constexpr):
     # Get program ID
     pid = tl.program_id(0)
     
-    # Calculate block start for i dimension
-    block_start_i = pid * BLOCK_SIZE
+    # Calculate offsets
+    offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Create offset vectors
-    offsets_i = tl.arange(0, BLOCK_SIZE)
-    offsets_j = tl.arange(0, BLOCK_SIZE)
-    
-    # Current i offsets for this block
-    current_i = block_start_i + offsets_i
-    mask_i = current_i < N
-    
-    # Load u1, u2 for current i block
-    u1_vals = tl.load(u1 + current_i, mask=mask_i, other=0.0)
-    u2_vals = tl.load(u2 + current_i, mask=mask_i, other=0.0)
-    
-    # Loop 1: Update A matrix
-    for j_start in range(0, N, BLOCK_SIZE):
-        current_j = j_start + offsets_j
-        mask_j = current_j < N
+    # First loop: Update A matrix
+    for i in range(0, N, BLOCK_SIZE):
+        i_offsets = i + offsets
+        i_mask = i_offsets < N
         
-        # Load v1, v2 for current j block
-        v1_vals = tl.load(v1 + current_j, mask=mask_j, other=0.0)
-        v2_vals = tl.load(v2 + current_j, mask=mask_j, other=0.0)
+        # Load u1[i], u2[i]
+        u1_vals = tl.load(u1_ptr + i_offsets, mask=i_mask, other=0.0)
+        u2_vals = tl.load(u2_ptr + i_offsets, mask=i_mask, other=0.0)
         
-        # Update A[i][j] for all combinations in this block
-        for i_idx in range(BLOCK_SIZE):
-            if block_start_i + i_idx < N:
-                i_val = block_start_i + i_idx
-                a_offsets = i_val * N + current_j
-                mask_a = (current_j < N)
-                
-                # Load current A values
-                a_vals = tl.load(A + a_offsets, mask=mask_a, other=0.0)
-                
-                # Compute updates
-                u1_broadcast = u1_vals[i_idx]
-                u2_broadcast = u2_vals[i_idx]
-                update = u1_broadcast * v1_vals + u2_broadcast * v2_vals
-                
-                # Update A
-                new_a_vals = a_vals + update
-                tl.store(A + a_offsets, new_a_vals, mask=mask_a)
+        for j in range(0, N, BLOCK_SIZE):
+            j_offsets = j + offsets
+            j_mask = j_offsets < N
+            
+            # Load v1[j], v2[j]
+            v1_vals = tl.load(v1_ptr + j_offsets, mask=j_mask, other=0.0)
+            v2_vals = tl.load(v2_ptr + j_offsets, mask=j_mask, other=0.0)
+            
+            # Update A[i][j] for all combinations
+            for ii in range(BLOCK_SIZE):
+                if i + ii < N:
+                    row_idx = i + ii
+                    A_row_ptr = A_ptr + row_idx * N
+                    
+                    # Load A[i][j] values
+                    A_vals = tl.load(A_row_ptr + j_offsets, mask=j_mask, other=0.0)
+                    
+                    # Update: A[i][j] = A[i][j] + u1[i] * v1[j] + u2[i] * v2[j]
+                    u1_i = tl.load(u1_ptr + row_idx)
+                    u2_i = tl.load(u2_ptr + row_idx)
+                    
+                    A_vals = A_vals + u1_i * v1_vals + u2_i * v2_vals
+                    
+                    # Store back
+                    tl.store(A_row_ptr + j_offsets, A_vals, mask=j_mask)
     
-    # Synchronize before next loop
-    tl.debug_barrier()
-    
-    # Loop 2: Update x using A^T * y (A[j][i] means transpose)
-    x_vals = tl.load(x + current_i, mask=mask_i, other=0.0)
-    
-    for j_start in range(0, N, BLOCK_SIZE):
-        current_j = j_start + offsets_j
-        mask_j = current_j < N
+    # Second loop: Update x with beta * A^T * y
+    for i in range(0, N, BLOCK_SIZE):
+        i_offsets = i + offsets
+        i_mask = i_offsets < N
         
-        # Load y values for current j block
-        y_vals = tl.load(y + current_j, mask=mask_j, other=0.0)
+        # Load x[i]
+        x_vals = tl.load(x_ptr + i_offsets, mask=i_mask, other=0.0)
         
-        # Accumulate x[i] += beta * A[j][i] * y[j]
-        for j_idx in range(BLOCK_SIZE):
-            if j_start + j_idx < N:
-                j_val = j_start + j_idx
-                y_broadcast = y_vals[j_idx]
-                
-                # Load A[j_val][i] for all i in current block (transpose access)
-                a_offsets = j_val * N + current_i
-                mask_a = mask_i
-                a_vals = tl.load(A + a_offsets, mask=mask_a, other=0.0)
-                
-                # Accumulate
-                x_vals = x_vals + beta * a_vals * y_broadcast
-    
-    # Loop 3: Add z to x
-    z_vals = tl.load(z + current_i, mask=mask_i, other=0.0)
-    x_vals = x_vals + z_vals
-    
-    # Store updated x
-    tl.store(x + current_i, x_vals, mask=mask_i)
-    
-    # Synchronize before final loop
-    tl.debug_barrier()
-    
-    # Loop 4: Update w using A * x
-    w_vals = tl.load(w + current_i, mask=mask_i, other=0.0)
-    
-    for j_start in range(0, N, BLOCK_SIZE):
-        current_j = j_start + offsets_j
-        mask_j = current_j < N
+        for j in range(0, N, BLOCK_SIZE):
+            j_offsets = j + offsets
+            j_mask = j_offsets < N
+            
+            # Load y[j]
+            y_vals = tl.load(y_ptr + j_offsets, mask=j_mask, other=0.0)
+            
+            # Update x[i] += beta * A[j][i] * y[j]
+            for jj in range(BLOCK_SIZE):
+                if j + jj < N:
+                    j_idx = j + jj
+                    y_j = tl.load(y_ptr + j_idx)
+                    
+                    # Load A[j][i] - transpose access
+                    A_ji_ptr = A_ptr + j_idx * N
+                    A_ji_vals = tl.load(A_ji_ptr + i_offsets, mask=i_mask, other=0.0)
+                    
+                    x_vals = x_vals + beta * A_ji_vals * y_j
         
-        # Load x values for current j block (updated x from previous steps)
-        x_j_vals = tl.load(x + current_j, mask=mask_j, other=0.0)
-        
-        # Accumulate w[i] += alpha * A[i][j] * x[j]
-        for j_idx in range(BLOCK_SIZE):
-            if j_start + j_idx < N:
-                j_val = j_start + j_idx
-                x_broadcast = x_j_vals[j_idx]
-                
-                # Load A[i][j_val] for all i in current block
-                for i_idx in range(BLOCK_SIZE):
-                    if block_start_i + i_idx < N:
-                        i_val = block_start_i + i_idx
-                        a_offset = i_val * N + j_val
-                        a_val = tl.load(A + a_offset)
-                        
-                        # Accumulate w[i]
-                        w_vals = tl.where(offsets_i == i_idx, 
-                                        w_vals + alpha * a_val * x_broadcast, 
-                                        w_vals)
+        # Store x[i]
+        tl.store(x_ptr + i_offsets, x_vals, mask=i_mask)
     
-    # Store final w
-    tl.store(w + current_i, w_vals, mask=mask_i)
+    # Third loop: x[i] += z[i]
+    for i in range(0, N, BLOCK_SIZE):
+        i_offsets = i + offsets
+        i_mask = i_offsets < N
+        
+        x_vals = tl.load(x_ptr + i_offsets, mask=i_mask, other=0.0)
+        z_vals = tl.load(z_ptr + i_offsets, mask=i_mask, other=0.0)
+        
+        x_vals = x_vals + z_vals
+        
+        tl.store(x_ptr + i_offsets, x_vals, mask=i_mask)
+    
+    # Fourth loop: Update w with alpha * A * x
+    for i in range(0, N, BLOCK_SIZE):
+        i_offsets = i + offsets
+        i_mask = i_offsets < N
+        
+        # Load w[i]
+        w_vals = tl.load(w_ptr + i_offsets, mask=i_mask, other=0.0)
+        
+        for j in range(0, N, BLOCK_SIZE):
+            j_offsets = j + offsets
+            j_mask = j_offsets < N
+            
+            # Load x[j]
+            x_vals = tl.load(x_ptr + j_offsets, mask=j_mask, other=0.0)
+            
+            # Update w[i] += alpha * A[i][j] * x[j]
+            for ii in range(BLOCK_SIZE):
+                if i + ii < N:
+                    row_idx = i + ii
+                    A_row_ptr = A_ptr + row_idx * N
+                    
+                    # Load A[i][j]
+                    A_vals = tl.load(A_row_ptr + j_offsets, mask=j_mask, other=0.0)
+                    
+                    # Compute contribution to w[i]
+                    contrib = tl.sum(alpha * A_vals * x_vals)
+                    
+                    # Load current w[i] and update
+                    w_i = tl.load(w_ptr + row_idx)
+                    w_i = w_i + contrib
+                    tl.store(w_ptr + row_idx, w_i)
 
 def gemver_triton(A, u1, u2, v1, v2, w, x, y, z, alpha, beta, N):
     BLOCK_SIZE = 32
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    gemver_kernel[grid](A, u1, u2, v1, v2, w, x, y, z, alpha, beta, N, BLOCK_SIZE)
+    # Launch kernel with single program
+    grid = (1,)
+    
+    gemver_kernel[grid](
+        A, u1, u2, v1, v2, w, x, y, z,
+        alpha, beta, N,
+        BLOCK_SIZE=BLOCK_SIZE
+    )

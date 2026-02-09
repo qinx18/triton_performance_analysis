@@ -3,108 +3,94 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def heat_3d_kernel(A_ptr, B_ptr, N, TSTEPS, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for parallelizing over time steps
-    t_id = tl.program_id(0)
-    t = t_id + 1
+def heat_3d_kernel(A, B, N, TSTEPS, BLOCK_SIZE: tl.constexpr):
+    # Get program ID for 3D blocking
+    pid = tl.program_id(0)
     
-    if t > TSTEPS:
-        return
+    # Calculate 3D coordinates from linear program ID
+    total_elements = (N - 2) * (N - 2) * (N - 2)
+    elements_per_block = BLOCK_SIZE
+    total_blocks = triton.cdiv(total_elements, elements_per_block)
     
-    # Process all spatial points in blocks
-    total_points = (N - 2) * (N - 2) * (N - 2)
-    
-    # Define offsets once
+    # Calculate base offset for this block
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    element_offsets = block_start + offsets
     
-    for block_start in range(0, total_points, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < total_points
-        
-        # Convert linear index to 3D coordinates
-        remaining = current_offsets
-        i = remaining // ((N - 2) * (N - 2)) + 1
-        remaining = remaining % ((N - 2) * (N - 2))
-        j = remaining // (N - 2) + 1
-        k = remaining % (N - 2) + 1
-        
+    # Time stepping loop
+    for t in range(1, TSTEPS + 1):
         # First phase: A -> B
-        # Calculate 3D indices for A accesses
-        center_idx = i * (N * N) + j * N + k
-        i_plus_idx = (i + 1) * (N * N) + j * N + k
-        i_minus_idx = (i - 1) * (N * N) + j * N + k
-        j_plus_idx = i * (N * N) + (j + 1) * N + k
-        j_minus_idx = i * (N * N) + (j - 1) * N + k
-        k_plus_idx = i * (N * N) + j * N + (k + 1)
-        k_minus_idx = i * (N * N) + j * N + (k - 1)
+        # Convert linear indices to 3D coordinates (offset by 1 for interior points)
+        valid_mask = element_offsets < total_elements
         
-        # Load values from A
-        A_center = tl.load(A_ptr + center_idx, mask=mask)
-        A_i_plus = tl.load(A_ptr + i_plus_idx, mask=mask)
-        A_i_minus = tl.load(A_ptr + i_minus_idx, mask=mask)
-        A_j_plus = tl.load(A_ptr + j_plus_idx, mask=mask)
-        A_j_minus = tl.load(A_ptr + j_minus_idx, mask=mask)
-        A_k_plus = tl.load(A_ptr + k_plus_idx, mask=mask)
-        A_k_minus = tl.load(A_ptr + k_minus_idx, mask=mask)
+        k_coords = element_offsets % (N - 2) + 1
+        temp_coords = element_offsets // (N - 2)
+        j_coords = temp_coords % (N - 2) + 1
+        i_coords = temp_coords // (N - 2) + 1
         
-        # Compute B values
-        B_val = (0.125 * (A_i_plus - 2.0 * A_center + A_i_minus) +
+        # Calculate memory offsets for 3D array access
+        center_idx = i_coords * N * N + j_coords * N + k_coords
+        
+        # Load center points and neighbors
+        A_center = tl.load(A + center_idx, mask=valid_mask, other=0.0)
+        
+        # i-direction neighbors
+        A_i_plus = tl.load(A + (i_coords + 1) * N * N + j_coords * N + k_coords, mask=valid_mask, other=0.0)
+        A_i_minus = tl.load(A + (i_coords - 1) * N * N + j_coords * N + k_coords, mask=valid_mask, other=0.0)
+        
+        # j-direction neighbors
+        A_j_plus = tl.load(A + i_coords * N * N + (j_coords + 1) * N + k_coords, mask=valid_mask, other=0.0)
+        A_j_minus = tl.load(A + i_coords * N * N + (j_coords - 1) * N + k_coords, mask=valid_mask, other=0.0)
+        
+        # k-direction neighbors
+        A_k_plus = tl.load(A + i_coords * N * N + j_coords * N + (k_coords + 1), mask=valid_mask, other=0.0)
+        A_k_minus = tl.load(A + i_coords * N * N + j_coords * N + (k_coords - 1), mask=valid_mask, other=0.0)
+        
+        # Compute heat equation
+        B_new = (0.125 * (A_i_plus - 2.0 * A_center + A_i_minus) +
                  0.125 * (A_j_plus - 2.0 * A_center + A_j_minus) +
                  0.125 * (A_k_plus - 2.0 * A_center + A_k_minus) +
                  A_center)
         
         # Store to B
-        tl.store(B_ptr + center_idx, B_val, mask=mask)
-    
-    # Synchronization point - need to ensure all B values are written
-    # before proceeding to second phase
-    
-    # Process all spatial points in blocks for second phase
-    for block_start in range(0, total_points, BLOCK_SIZE):
-        current_offsets = block_start + offsets
-        mask = current_offsets < total_points
-        
-        # Convert linear index to 3D coordinates
-        remaining = current_offsets
-        i = remaining // ((N - 2) * (N - 2)) + 1
-        remaining = remaining % ((N - 2) * (N - 2))
-        j = remaining // (N - 2) + 1
-        k = remaining % (N - 2) + 1
+        tl.store(B + center_idx, B_new, mask=valid_mask)
         
         # Second phase: B -> A
-        # Calculate 3D indices for B accesses
-        center_idx = i * (N * N) + j * N + k
-        i_plus_idx = (i + 1) * (N * N) + j * N + k
-        i_minus_idx = (i - 1) * (N * N) + j * N + k
-        j_plus_idx = i * (N * N) + (j + 1) * N + k
-        j_minus_idx = i * (N * N) + (j - 1) * N + k
-        k_plus_idx = i * (N * N) + j * N + (k + 1)
-        k_minus_idx = i * (N * N) + j * N + (k - 1)
+        # Load center points and neighbors from B
+        B_center = tl.load(B + center_idx, mask=valid_mask, other=0.0)
         
-        # Load values from B
-        B_center = tl.load(B_ptr + center_idx, mask=mask)
-        B_i_plus = tl.load(B_ptr + i_plus_idx, mask=mask)
-        B_i_minus = tl.load(B_ptr + i_minus_idx, mask=mask)
-        B_j_plus = tl.load(B_ptr + j_plus_idx, mask=mask)
-        B_j_minus = tl.load(B_ptr + j_minus_idx, mask=mask)
-        B_k_plus = tl.load(B_ptr + k_plus_idx, mask=mask)
-        B_k_minus = tl.load(B_ptr + k_minus_idx, mask=mask)
+        # i-direction neighbors
+        B_i_plus = tl.load(B + (i_coords + 1) * N * N + j_coords * N + k_coords, mask=valid_mask, other=0.0)
+        B_i_minus = tl.load(B + (i_coords - 1) * N * N + j_coords * N + k_coords, mask=valid_mask, other=0.0)
         
-        # Compute A values
-        A_val = (0.125 * (B_i_plus - 2.0 * B_center + B_i_minus) +
+        # j-direction neighbors
+        B_j_plus = tl.load(B + i_coords * N * N + (j_coords + 1) * N + k_coords, mask=valid_mask, other=0.0)
+        B_j_minus = tl.load(B + i_coords * N * N + (j_coords - 1) * N + k_coords, mask=valid_mask, other=0.0)
+        
+        # k-direction neighbors
+        B_k_plus = tl.load(B + i_coords * N * N + j_coords * N + (k_coords + 1), mask=valid_mask, other=0.0)
+        B_k_minus = tl.load(B + i_coords * N * N + j_coords * N + (k_coords - 1), mask=valid_mask, other=0.0)
+        
+        # Compute heat equation
+        A_new = (0.125 * (B_i_plus - 2.0 * B_center + B_i_minus) +
                  0.125 * (B_j_plus - 2.0 * B_center + B_j_minus) +
                  0.125 * (B_k_plus - 2.0 * B_center + B_k_minus) +
                  B_center)
         
         # Store to A
-        tl.store(A_ptr + center_idx, A_val, mask=mask)
+        tl.store(A + center_idx, A_new, mask=valid_mask)
 
 def heat_3d_triton(A, B, N, TSTEPS):
+    # Calculate interior elements
+    interior_elements = (N - 2) * (N - 2) * (N - 2)
+    
+    # Choose block size
     BLOCK_SIZE = 256
     
-    # Launch kernel for each time step sequentially
-    for t in range(1, TSTEPS + 1):
-        grid = (1,)
-        heat_3d_kernel[grid](
-            A, B, N, t, BLOCK_SIZE=BLOCK_SIZE
-        )
+    # Calculate grid size
+    grid_size = triton.cdiv(interior_elements, BLOCK_SIZE)
+    
+    # Launch kernel
+    heat_3d_kernel[(grid_size,)](
+        A, B, N, TSTEPS, BLOCK_SIZE
+    )

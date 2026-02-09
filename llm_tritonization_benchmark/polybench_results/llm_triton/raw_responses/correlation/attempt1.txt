@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for correlation (Polybench)
-# Generated: 2026-02-09 11:26:25
+# Generated: 2026-02-09 18:46:52
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -120,16 +120,6 @@ for (j = 0; j < M; j++)
   corr[M-1][M-1] = 1.0;
 ```
 
-## Parallelization Analysis
-
-**Loop dimensions**: ['j', 'i']
-
-- Parallelize `j`, sequential `i`: VALID
-  - Data dependencies detected - verify j is safe to parallelize
-
-- Parallelize `i`, sequential `j`: VALID
-  - Data dependencies detected - verify i is safe to parallelize
-
 
 ## Array Information:
 - `corr`: read-write
@@ -202,161 +192,135 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def correlation_kernel(
-    data_ptr, mean_ptr, stddev_ptr, corr_ptr,
-    M, N, float_n, eps,
-    BLOCK_SIZE: tl.constexpr
-):
-    # Get program ID
-    pid = tl.program_id(axis=0)
+def correlation_kernel(data_ptr, mean_ptr, stddev_ptr, corr_ptr, 
+                      eps, float_n, M, N, 
+                      data_stride0, data_stride1,
+                      corr_stride0, corr_stride1):
     
-    # Calculate which column we're processing
-    j = pid
+    # Compute means
+    j_offsets = tl.arange(0, 128)
+    i_offsets = tl.arange(0, 128)
     
-    if j >= M:
-        return
-    
-    # Step 1: Calculate mean for column j
-    mean_sum = 0.0
-    i_offsets = tl.arange(0, BLOCK_SIZE)
-    
-    for i_start in range(0, N, BLOCK_SIZE):
-        i_indices = i_start + i_offsets
-        i_mask = i_indices < N
-        
-        # Load data[i][j] values
-        data_indices = i_indices * M + j
-        data_vals = tl.load(data_ptr + data_indices, mask=i_mask, other=0.0)
-        mean_sum += tl.sum(data_vals)
-    
-    mean_val = mean_sum / float_n
-    tl.store(mean_ptr + j, mean_val)
-    
-    # Step 2: Calculate stddev for column j
-    stddev_sum = 0.0
-    
-    for i_start in range(0, N, BLOCK_SIZE):
-        i_indices = i_start + i_offsets
-        i_mask = i_indices < N
-        
-        # Load data[i][j] values
-        data_indices = i_indices * M + j
-        data_vals = tl.load(data_ptr + data_indices, mask=i_mask, other=0.0)
-        diff = data_vals - mean_val
-        stddev_sum += tl.sum(diff * diff, axis=0)
-    
-    stddev_val = stddev_sum / float_n
-    stddev_val = tl.sqrt(stddev_val)
-    stddev_val = tl.where(stddev_val <= eps, 1.0, stddev_val)
-    tl.store(stddev_ptr + j, stddev_val)
-
-@triton.jit 
-def normalize_kernel(
-    data_ptr, mean_ptr, stddev_ptr,
-    M, N, float_n,
-    BLOCK_SIZE: tl.constexpr
-):
-    pid = tl.program_id(axis=0)
-    i = pid
-    
-    if i >= N:
-        return
-    
-    j_offsets = tl.arange(0, BLOCK_SIZE)
-    sqrt_float_n = tl.sqrt(float_n)
-    
-    for j_start in range(0, M, BLOCK_SIZE):
-        j_indices = j_start + j_offsets
+    for j_block in range(0, M, 128):
+        j_indices = j_block + j_offsets
         j_mask = j_indices < M
         
-        # Load data[i][j], mean[j], stddev[j]
-        data_indices = i * M + j_indices
-        data_vals = tl.load(data_ptr + data_indices, mask=j_mask)
-        mean_vals = tl.load(mean_ptr + j_indices, mask=j_mask)
-        stddev_vals = tl.load(stddev_ptr + j_indices, mask=j_mask)
+        means = tl.zeros((128,), dtype=tl.float32)
         
-        # Normalize: data[i][j] = (data[i][j] - mean[j]) / (sqrt(float_n) * stddev[j])
-        normalized_vals = (data_vals - mean_vals) / (sqrt_float_n * stddev_vals)
-        tl.store(data_ptr + data_indices, normalized_vals, mask=j_mask)
-
-@triton.jit
-def correlation_matrix_kernel(
-    data_ptr, corr_ptr,
-    M, N,
-    BLOCK_SIZE: tl.constexpr
-):
-    pid_i = tl.program_id(axis=0)
-    pid_j = tl.program_id(axis=1)
-    
-    i = pid_i
-    j = pid_j + i + 1  # Only compute upper triangle where j > i
-    
-    if i >= M - 1 or j >= M:
-        return
-    
-    # Calculate correlation coefficient corr[i][j]
-    corr_sum = 0.0
-    k_offsets = tl.arange(0, BLOCK_SIZE)
-    
-    for k_start in range(0, N, BLOCK_SIZE):
-        k_indices = k_start + k_offsets
-        k_mask = k_indices < N
+        for i_block in range(0, N, 128):
+            i_indices = i_block + i_offsets
+            i_mask = i_indices < N
+            
+            # Load data block for mean computation
+            for j_idx in range(128):
+                if j_block + j_idx < M:
+                    sum_val = 0.0
+                    for i_idx in range(128):
+                        if i_block + i_idx < N:
+                            data_idx = (i_block + i_idx) * data_stride0 + (j_block + j_idx) * data_stride1
+                            val = tl.load(data_ptr + data_idx)
+                            sum_val += val
+                    means = tl.where(j_offsets == j_idx, means + sum_val, means)
         
-        # Load data[k][i] and data[k][j]
-        data_i_indices = k_indices * M + i
-        data_j_indices = k_indices * M + j
+        # Finalize means and store
+        means = means / float_n
+        tl.store(mean_ptr + j_indices, means, mask=j_mask)
+    
+    # Compute standard deviations
+    for j_block in range(0, M, 128):
+        j_indices = j_block + j_offsets
+        j_mask = j_indices < M
         
-        data_i_vals = tl.load(data_ptr + data_i_indices, mask=k_mask, other=0.0)
-        data_j_vals = tl.load(data_ptr + data_j_indices, mask=k_mask, other=0.0)
+        # Load means for this block
+        means = tl.load(mean_ptr + j_indices, mask=j_mask)
+        stddevs = tl.zeros((128,), dtype=tl.float32)
         
-        corr_sum += tl.sum(data_i_vals * data_j_vals)
+        for i_block in range(0, N, 128):
+            i_indices = i_block + i_offsets
+            i_mask = i_indices < N
+            
+            # Compute variance contributions
+            for j_idx in range(128):
+                if j_block + j_idx < M:
+                    mean_val = tl.load(mean_ptr + j_block + j_idx)
+                    sum_sq = 0.0
+                    for i_idx in range(128):
+                        if i_block + i_idx < N:
+                            data_idx = (i_block + i_idx) * data_stride0 + (j_block + j_idx) * data_stride1
+                            val = tl.load(data_ptr + data_idx)
+                            diff = val - mean_val
+                            sum_sq += diff * diff
+                    stddevs = tl.where(j_offsets == j_idx, stddevs + sum_sq, stddevs)
+        
+        # Finalize stddevs
+        stddevs = stddevs / float_n
+        stddevs = tl.sqrt(stddevs)
+        stddevs = tl.where(stddevs <= eps, 1.0, stddevs)
+        tl.store(stddev_ptr + j_indices, stddevs, mask=j_mask)
     
-    # Store symmetric values
-    corr_ij_idx = i * M + j
-    corr_ji_idx = j * M + i
-    tl.store(corr_ptr + corr_ij_idx, corr_sum)
-    tl.store(corr_ptr + corr_ji_idx, corr_sum)
-
-@triton.jit
-def set_diagonal_kernel(corr_ptr, M):
-    pid = tl.program_id(axis=0)
-    i = pid
+    # Center and reduce data
+    sqrt_float_n = tl.sqrt(float_n)
+    for i_block in range(0, N, 64):
+        i_indices = i_block + tl.arange(0, 64)
+        i_mask = i_indices < N
+        
+        for j_block in range(0, M, 64):
+            j_indices = j_block + tl.arange(0, 64)
+            j_mask = j_indices < M
+            
+            # Load means and stddevs
+            for i_idx in range(64):
+                if i_block + i_idx < N:
+                    for j_idx in range(64):
+                        if j_block + j_idx < M:
+                            data_idx = (i_block + i_idx) * data_stride0 + (j_block + j_idx) * data_stride1
+                            val = tl.load(data_ptr + data_idx)
+                            mean_val = tl.load(mean_ptr + j_block + j_idx)
+                            stddev_val = tl.load(stddev_ptr + j_block + j_idx)
+                            
+                            centered = val - mean_val
+                            normalized = centered / (sqrt_float_n * stddev_val)
+                            tl.store(data_ptr + data_idx, normalized)
     
-    if i >= M:
-        return
+    # Compute correlation matrix
+    for i in range(M - 1):
+        # Set diagonal element
+        diag_idx = i * corr_stride0 + i * corr_stride1
+        tl.store(corr_ptr + diag_idx, 1.0)
+        
+        for j in range(i + 1, M):
+            corr_val = 0.0
+            
+            # Compute correlation between columns i and j
+            for k_block in range(0, N, 128):
+                k_indices = k_block + tl.arange(0, 128)
+                k_mask = k_indices < N
+                
+                for k_idx in range(128):
+                    if k_block + k_idx < N:
+                        data_i_idx = (k_block + k_idx) * data_stride0 + i * data_stride1
+                        data_j_idx = (k_block + k_idx) * data_stride0 + j * data_stride1
+                        val_i = tl.load(data_ptr + data_i_idx)
+                        val_j = tl.load(data_ptr + data_j_idx)
+                        corr_val += val_i * val_j
+            
+            # Store symmetric values
+            corr_ij_idx = i * corr_stride0 + j * corr_stride1
+            corr_ji_idx = j * corr_stride0 + i * corr_stride1
+            tl.store(corr_ptr + corr_ij_idx, corr_val)
+            tl.store(corr_ptr + corr_ji_idx, corr_val)
     
-    # Set diagonal elements to 1.0
-    diag_idx = i * M + i
-    tl.store(corr_ptr + diag_idx, 1.0)
+    # Set final diagonal element
+    final_diag_idx = (M - 1) * corr_stride0 + (M - 1) * corr_stride1
+    tl.store(corr_ptr + final_diag_idx, 1.0)
 
 def correlation_triton(corr, data, mean, stddev, eps, float_n, M, N):
-    BLOCK_SIZE = 128
+    grid = (1,)
     
-    # Step 1: Calculate mean and stddev for each column
-    grid = (triton.cdiv(M, 1),)
     correlation_kernel[grid](
         data, mean, stddev, corr,
-        M, N, float_n, eps,
-        BLOCK_SIZE=BLOCK_SIZE
+        eps, float_n, M, N,
+        data.stride(0), data.stride(1),
+        corr.stride(0), corr.stride(1)
     )
-    
-    # Step 2: Normalize data
-    grid = (triton.cdiv(N, 1),)
-    normalize_kernel[grid](
-        data, mean, stddev,
-        M, N, float_n,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    # Step 3: Calculate correlation matrix (upper triangle)
-    grid = (M - 1, triton.cdiv(M, 1))
-    correlation_matrix_kernel[grid](
-        data, corr,
-        M, N,
-        BLOCK_SIZE=BLOCK_SIZE
-    )
-    
-    # Step 4: Set diagonal elements to 1.0
-    grid = (triton.cdiv(M, 1),)
-    set_diagonal_kernel[grid](corr, M)
 ```

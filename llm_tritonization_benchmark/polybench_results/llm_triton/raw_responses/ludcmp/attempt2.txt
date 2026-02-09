@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 1.382849e+01
+**Max error observed**: 2.462361e+04
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -19,44 +19,54 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def ludcmp_kernel(A_ptr, b_ptr, x_ptr, y_ptr, N, A_stride_0, A_stride_1):
-    # LU decomposition
+def ludcmp_kernel(A_ptr, b_ptr, x_ptr, y_ptr, N, stride_A):
+    # LU decomposition - first part (sequential)
     for i in range(N):
         # Lower triangular part
         for j in range(i):
-            w = tl.load(A_ptr + i * A_stride_0 + j * A_stride_1)
+            w = tl.load(A_ptr + i * stride_A + j)
             for k in range(j):
-                w -= tl.load(A_ptr + i * A_stride_0 + k * A_stride_1) * tl.load(A_ptr + k * A_stride_0 + j * A_stride_1)
-            diagonal_val = tl.load(A_ptr + j * A_stride_0 + j * A_stride_1)
-            tl.store(A_ptr + i * A_stride_0 + j * A_stride_1, w / diagonal_val)
+                a_ik = tl.load(A_ptr + i * stride_A + k)
+                a_kj = tl.load(A_ptr + k * stride_A + j)
+                w = w - a_ik * a_kj
+            a_jj = tl.load(A_ptr + j * stride_A + j)
+            result = w / a_jj
+            tl.store(A_ptr + i * stride_A + j, result)
         
         # Upper triangular part
         for j in range(i, N):
-            w = tl.load(A_ptr + i * A_stride_0 + j * A_stride_1)
+            w = tl.load(A_ptr + i * stride_A + j)
             for k in range(i):
-                w -= tl.load(A_ptr + i * A_stride_0 + k * A_stride_1) * tl.load(A_ptr + k * A_stride_0 + j * A_stride_1)
-            tl.store(A_ptr + i * A_stride_0 + j * A_stride_1, w)
+                a_ik = tl.load(A_ptr + i * stride_A + k)
+                a_kj = tl.load(A_ptr + k * stride_A + j)
+                w = w - a_ik * a_kj
+            tl.store(A_ptr + i * stride_A + j, w)
     
     # Forward substitution
     for i in range(N):
         w = tl.load(b_ptr + i)
         for j in range(i):
-            w -= tl.load(A_ptr + i * A_stride_0 + j * A_stride_1) * tl.load(y_ptr + j)
+            a_ij = tl.load(A_ptr + i * stride_A + j)
+            y_j = tl.load(y_ptr + j)
+            w = w - a_ij * y_j
         tl.store(y_ptr + i, w)
     
     # Back substitution
     for i in range(N-1, -1, -1):
         w = tl.load(y_ptr + i)
         for j in range(i+1, N):
-            w -= tl.load(A_ptr + i * A_stride_0 + j * A_stride_1) * tl.load(x_ptr + j)
-        diagonal_val = tl.load(A_ptr + i * A_stride_0 + i * A_stride_1)
-        tl.store(x_ptr + i, w / diagonal_val)
+            a_ij = tl.load(A_ptr + i * stride_A + j)
+            x_j = tl.load(x_ptr + j)
+            w = w - a_ij * x_j
+        a_ii = tl.load(A_ptr + i * stride_A + i)
+        result = w / a_ii
+        tl.store(x_ptr + i, result)
 
 def ludcmp_triton(A, b, x, y, N):
-    ludcmp_kernel[(1,)](
-        A, b, x, y, N,
-        A.stride(0), A.stride(1)
-    )
+    stride_A = A.stride(0)
+    
+    grid = (1,)
+    ludcmp_kernel[grid](A, b, x, y, N, stride_A)
 ```
 
 
@@ -148,15 +158,6 @@ for (i = 0; i < N; i++) {
      x[i] = w / A[i][i];
   }
 ```
-
-## Parallelization Analysis
-
-**Loop dimensions**: ['i', 'j']
-**Triangular bounds**: j < i
-
-- Parallelize `j`, sequential `i`: VALID
-
-- Parallelize `i`, sequential `j`: VALID
 
 
 ## Array Information:

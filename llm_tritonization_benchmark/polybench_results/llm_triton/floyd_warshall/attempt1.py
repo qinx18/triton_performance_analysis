@@ -3,54 +3,57 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def floyd_warshall_kernel(path_ptr, path_copy_ptr, N, k, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for i dimension
-    i_block = tl.program_id(0)
+def floyd_warshall_kernel(path_ptr, N, BLOCK_SIZE: tl.constexpr):
+    # Get block indices
+    block_i = tl.program_id(0)
+    block_j = tl.program_id(1)
     
-    # Compute i indices for this block
+    # Compute base offsets once
     i_offsets = tl.arange(0, BLOCK_SIZE)
-    i = i_block * BLOCK_SIZE + i_offsets
-    i_mask = i < N
+    j_offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Process all j values for valid i values
-    for j_block_start in range(0, N, BLOCK_SIZE):
-        j_offsets = tl.arange(0, BLOCK_SIZE)
-        j = j_block_start + j_offsets
-        j_mask = j < N
+    # Compute actual indices
+    i_indices = block_i * BLOCK_SIZE + i_offsets
+    j_indices = block_j * BLOCK_SIZE + j_offsets
+    
+    # Create masks
+    i_mask = i_indices < N
+    j_mask = j_indices < N
+    
+    # Sequential k loop (cannot be parallelized due to dependencies)
+    for k in range(N):
+        # Load path[i][j] values
+        ij_offsets = i_indices[:, None] * N + j_indices[None, :]
+        ij_mask = i_mask[:, None] & j_mask[None, :]
+        path_ij = tl.load(path_ptr + ij_offsets, mask=ij_mask)
         
-        # Create combined mask
-        mask = i_mask[:, None] & j_mask[None, :]
+        # Load path[i][k] values
+        ik_offsets = i_indices * N + k
+        ik_mask = i_mask & (k < N)
+        path_ik = tl.load(path_ptr + ik_offsets, mask=ik_mask)
         
-        # Compute linear indices
-        path_ij_idx = i[:, None] * N + j[None, :]
-        path_ik_idx = i[:, None] * N + k
-        path_kj_idx = k * N + j[None, :]
+        # Load path[k][j] values
+        kj_offsets = k * N + j_indices
+        kj_mask = j_mask & (k < N)
+        path_kj = tl.load(path_ptr + kj_offsets, mask=kj_mask)
         
-        # Load values
-        path_ij = tl.load(path_copy_ptr + path_ij_idx, mask=mask, other=0.0)
-        path_ik = tl.load(path_copy_ptr + path_ik_idx, mask=i_mask[:, None], other=0.0)
-        path_kj = tl.load(path_copy_ptr + path_kj_idx, mask=j_mask[None, :], other=0.0)
+        # Compute new distances
+        new_dist = path_ik[:, None] + path_kj[None, :]
         
-        # Compute new path
-        new_path = path_ik + path_kj
-        result = tl.where(path_ij < new_path, path_ij, new_path)
+        # Update path[i][j] with minimum
+        updated_path = tl.minimum(path_ij, new_dist)
         
-        # Store result
-        tl.store(path_ptr + path_ij_idx, result, mask=mask)
+        # Store back
+        tl.store(path_ptr + ij_offsets, updated_path, mask=ij_mask)
 
 def floyd_warshall_triton(path, N):
-    # Block size for parallelization
     BLOCK_SIZE = 16
     
-    # Number of blocks for i dimension
-    num_i_blocks = triton.cdiv(N, BLOCK_SIZE)
+    # Calculate grid dimensions
+    grid_dim = triton.cdiv(N, BLOCK_SIZE)
+    grid = (grid_dim, grid_dim)
     
-    # Sequential loop over k
-    for k in range(N):
-        # Create read-only copy to handle WAR dependencies
-        path_copy = path.clone()
-        
-        # Launch kernel
-        floyd_warshall_kernel[(num_i_blocks,)](
-            path, path_copy, N, k, BLOCK_SIZE
-        )
+    # Launch kernel
+    floyd_warshall_kernel[grid](
+        path, N, BLOCK_SIZE
+    )

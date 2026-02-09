@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for adi (Polybench)
-# Generated: 2026-02-09 11:23:46
+# Generated: 2026-02-09 18:45:02
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -129,36 +129,6 @@ DX = 1.0/(DATA_TYPE)N;
   }
 ```
 
-## WAR (Write-After-Read) Dependencies
-
-**WARNING**: This kernel has WAR dependencies that require careful handling.
-
-**Arrays needing read-only copies before parallel loop**: v, q, p, u
-- Read p[(i), (-1 + j)] may conflict with Write p[(i), (j)] from different iteration
-- Read q[(i), (-1 + j)] may conflict with Write q[(i), (j)] from different iteration
-- Read v[(1 + j), (i)] may conflict with Write v[(j), (i)] from different iteration
-- Read p[(i), (-1 + j)] may conflict with Write p[(i), (j)] from different iteration
-- Read q[(i), (-1 + j)] may conflict with Write q[(i), (j)] from different iteration
-
-**Pattern**: Create a read-only copy of these arrays before the parallel region:
-```python
-v_copy = v.clone()  # Read from copy, write to original
-q_copy = q.clone()  # Read from copy, write to original
-p_copy = p.clone()  # Read from copy, write to original
-u_copy = u.clone()  # Read from copy, write to original
-```
-
-
-## Parallelization Analysis
-
-**Loop dimensions**: ['t', 'i']
-
-- Parallelize `t`, sequential `i`: VALID
-  - Data dependencies detected - verify t is safe to parallelize
-
-- Parallelize `i`, sequential `t`: VALID
-  - Data dependencies detected - verify i is safe to parallelize
-
 
 ## Array Information:
 - `p`: read-write
@@ -231,7 +201,8 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def adi_kernel(p_ptr, q_ptr, u_ptr, v_ptr, p_copy_ptr, q_copy_ptr, u_copy_ptr, v_copy_ptr, N, TSTEPS, BLOCK_SIZE: tl.constexpr):
+def adi_kernel(p_ptr, q_ptr, u_ptr, v_ptr, N, TSTEPS):
+    # Compute coefficients
     DX = 1.0 / N
     DY = 1.0 / N
     DT = 1.0 / TSTEPS
@@ -239,117 +210,126 @@ def adi_kernel(p_ptr, q_ptr, u_ptr, v_ptr, p_copy_ptr, q_copy_ptr, u_copy_ptr, v
     B2 = 1.0
     mul1 = B1 * DT / (DX * DX)
     mul2 = B2 * DT / (DY * DY)
-
+    
     a = -mul1 / 2.0
     b = 1.0 + mul1
     c = a
     d = -mul2 / 2.0
     e = 1.0 + mul2
     f = d
-
+    
+    # Time loop
     for t in range(1, TSTEPS + 1):
         # Column Sweep
         for i in range(1, N - 1):
-            # v[0][i] = 1.0
-            tl.store(v_ptr + 0 * N + i, 1.0)
-            # p[i][0] = 0.0
-            tl.store(p_ptr + i * N + 0, 0.0)
-            # q[i][0] = v[0][i]
-            v_0_i = tl.load(v_ptr + 0 * N + i)
-            tl.store(q_ptr + i * N + 0, v_0_i)
+            # Set boundary values
+            v_idx = 0 * N + i
+            tl.store(v_ptr + v_idx, 1.0)
             
+            p_idx = i * N + 0
+            tl.store(p_ptr + p_idx, 0.0)
+            
+            q_idx = i * N + 0
+            v_val = tl.load(v_ptr + v_idx)
+            tl.store(q_ptr + q_idx, v_val)
+            
+            # Forward sweep
             for j in range(1, N - 1):
-                # p[i][j] = -c / (a*p[i][j-1]+b)
-                p_i_j_minus_1 = tl.load(p_copy_ptr + i * N + (j - 1))
-                p_i_j = -c / (a * p_i_j_minus_1 + b)
-                tl.store(p_ptr + i * N + j, p_i_j)
+                p_curr_idx = i * N + j
+                p_prev_idx = i * N + (j - 1)
+                q_curr_idx = i * N + j
+                q_prev_idx = i * N + (j - 1)
                 
-                # q[i][j] = (-d*u[j][i-1]+(1.0+2.0*d)*u[j][i] - f*u[j][i+1]-a*q[i][j-1])/(a*p[i][j-1]+b)
-                u_j_i_minus_1 = tl.load(u_copy_ptr + j * N + (i - 1))
-                u_j_i = tl.load(u_copy_ptr + j * N + i)
-                u_j_i_plus_1 = tl.load(u_copy_ptr + j * N + (i + 1))
-                q_i_j_minus_1 = tl.load(q_copy_ptr + i * N + (j - 1))
+                p_prev = tl.load(p_ptr + p_prev_idx)
+                q_prev = tl.load(q_ptr + q_prev_idx)
                 
-                numerator = -d * u_j_i_minus_1 + (1.0 + 2.0 * d) * u_j_i - f * u_j_i_plus_1 - a * q_i_j_minus_1
-                q_i_j = numerator / (a * p_i_j_minus_1 + b)
-                tl.store(q_ptr + i * N + j, q_i_j)
+                u_idx1 = j * N + (i - 1)
+                u_idx2 = j * N + i
+                u_idx3 = j * N + (i + 1)
+                
+                u_val1 = tl.load(u_ptr + u_idx1)
+                u_val2 = tl.load(u_ptr + u_idx2)
+                u_val3 = tl.load(u_ptr + u_idx3)
+                
+                p_new = -c / (a * p_prev + b)
+                q_new = (-d * u_val1 + (1.0 + 2.0 * d) * u_val2 - f * u_val3 - a * q_prev) / (a * p_prev + b)
+                
+                tl.store(p_ptr + p_curr_idx, p_new)
+                tl.store(q_ptr + q_curr_idx, q_new)
             
-            # v[N-1][i] = 1.0
-            tl.store(v_ptr + (N - 1) * N + i, 1.0)
+            # Set boundary
+            v_end_idx = (N - 1) * N + i
+            tl.store(v_ptr + v_end_idx, 1.0)
             
+            # Backward sweep
             for j in range(N - 2, 0, -1):
-                # v[j][i] = p[i][j] * v[j+1][i] + q[i][j]
-                p_i_j = tl.load(p_ptr + i * N + j)
-                v_j_plus_1_i = tl.load(v_copy_ptr + (j + 1) * N + i)
-                q_i_j = tl.load(q_ptr + i * N + j)
-                v_j_i = p_i_j * v_j_plus_1_i + q_i_j
-                tl.store(v_ptr + j * N + i, v_j_i)
-        
-        # Update copy arrays after column sweep
-        for idx in range(N * N):
-            tl.store(p_copy_ptr + idx, tl.load(p_ptr + idx))
-            tl.store(q_copy_ptr + idx, tl.load(q_ptr + idx))
-            tl.store(v_copy_ptr + idx, tl.load(v_ptr + idx))
+                v_curr_idx = j * N + i
+                v_next_idx = (j + 1) * N + i
+                p_idx = i * N + j
+                q_idx = i * N + j
+                
+                v_next = tl.load(v_ptr + v_next_idx)
+                p_val = tl.load(p_ptr + p_idx)
+                q_val = tl.load(q_ptr + q_idx)
+                
+                v_new = p_val * v_next + q_val
+                tl.store(v_ptr + v_curr_idx, v_new)
         
         # Row Sweep
         for i in range(1, N - 1):
-            # u[i][0] = 1.0
-            tl.store(u_ptr + i * N + 0, 1.0)
-            # p[i][0] = 0.0
-            tl.store(p_ptr + i * N + 0, 0.0)
-            # q[i][0] = u[i][0]
-            u_i_0 = tl.load(u_ptr + i * N + 0)
-            tl.store(q_ptr + i * N + 0, u_i_0)
+            # Set boundary values
+            u_idx = i * N + 0
+            tl.store(u_ptr + u_idx, 1.0)
             
+            p_idx = i * N + 0
+            tl.store(p_ptr + p_idx, 0.0)
+            
+            q_idx = i * N + 0
+            u_val = tl.load(u_ptr + u_idx)
+            tl.store(q_ptr + q_idx, u_val)
+            
+            # Forward sweep
             for j in range(1, N - 1):
-                # p[i][j] = -f / (d*p[i][j-1]+e)
-                p_i_j_minus_1 = tl.load(p_copy_ptr + i * N + (j - 1))
-                p_i_j = -f / (d * p_i_j_minus_1 + e)
-                tl.store(p_ptr + i * N + j, p_i_j)
+                p_curr_idx = i * N + j
+                p_prev_idx = i * N + (j - 1)
+                q_curr_idx = i * N + j
+                q_prev_idx = i * N + (j - 1)
                 
-                # q[i][j] = (-a*v[i-1][j]+(1.0+2.0*a)*v[i][j] - c*v[i+1][j]-d*q[i][j-1])/(d*p[i][j-1]+e)
-                v_i_minus_1_j = tl.load(v_copy_ptr + (i - 1) * N + j)
-                v_i_j = tl.load(v_copy_ptr + i * N + j)
-                v_i_plus_1_j = tl.load(v_copy_ptr + (i + 1) * N + j)
-                q_i_j_minus_1 = tl.load(q_copy_ptr + i * N + (j - 1))
+                p_prev = tl.load(p_ptr + p_prev_idx)
+                q_prev = tl.load(q_ptr + q_prev_idx)
                 
-                numerator = -a * v_i_minus_1_j + (1.0 + 2.0 * a) * v_i_j - c * v_i_plus_1_j - d * q_i_j_minus_1
-                q_i_j = numerator / (d * p_i_j_minus_1 + e)
-                tl.store(q_ptr + i * N + j, q_i_j)
+                v_idx1 = (i - 1) * N + j
+                v_idx2 = i * N + j
+                v_idx3 = (i + 1) * N + j
+                
+                v_val1 = tl.load(v_ptr + v_idx1)
+                v_val2 = tl.load(v_ptr + v_idx2)
+                v_val3 = tl.load(v_ptr + v_idx3)
+                
+                p_new = -f / (d * p_prev + e)
+                q_new = (-a * v_val1 + (1.0 + 2.0 * a) * v_val2 - c * v_val3 - d * q_prev) / (d * p_prev + e)
+                
+                tl.store(p_ptr + p_curr_idx, p_new)
+                tl.store(q_ptr + q_curr_idx, q_new)
             
-            # u[i][N-1] = 1.0
-            tl.store(u_ptr + i * N + (N - 1), 1.0)
+            # Set boundary
+            u_end_idx = i * N + (N - 1)
+            tl.store(u_ptr + u_end_idx, 1.0)
             
+            # Backward sweep
             for j in range(N - 2, 0, -1):
-                # u[i][j] = p[i][j] * u[i][j+1] + q[i][j]
-                p_i_j = tl.load(p_ptr + i * N + j)
-                u_i_j_plus_1 = tl.load(u_copy_ptr + i * N + (j + 1))
-                q_i_j = tl.load(q_ptr + i * N + j)
-                u_i_j = p_i_j * u_i_j_plus_1 + q_i_j
-                tl.store(u_ptr + i * N + j, u_i_j)
-        
-        # Update copy arrays after row sweep
-        for idx in range(N * N):
-            tl.store(p_copy_ptr + idx, tl.load(p_ptr + idx))
-            tl.store(q_copy_ptr + idx, tl.load(q_ptr + idx))
-            tl.store(u_copy_ptr + idx, tl.load(u_ptr + idx))
-
+                u_curr_idx = i * N + j
+                u_next_idx = i * N + (j + 1)
+                p_idx = i * N + j
+                q_idx = i * N + j
+                
+                u_next = tl.load(u_ptr + u_next_idx)
+                p_val = tl.load(p_ptr + p_idx)
+                q_val = tl.load(q_ptr + q_idx)
+                
+                u_new = p_val * u_next + q_val
+                tl.store(u_ptr + u_curr_idx, u_new)
 
 def adi_triton(p, q, u, v, N, TSTEPS):
-    # Create read-only copies to handle WAR dependencies
-    p_copy = p.clone()
-    q_copy = q.clone()
-    u_copy = u.clone()
-    v_copy = v.clone()
-    
-    BLOCK_SIZE = 128
-    
-    # Launch kernel with single thread since this is inherently sequential
-    grid = (1,)
-    adi_kernel[grid](
-        p, q, u, v,
-        p_copy, q_copy, u_copy, v_copy,
-        N, TSTEPS,
-        BLOCK_SIZE
-    )
+    adi_kernel[(1,)](p, q, u, v, N, TSTEPS)
 ```

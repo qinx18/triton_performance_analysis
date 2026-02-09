@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 5.324841e-03
+**Max error observed**: 2.807140e-03
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -19,68 +19,46 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def durbin_kernel(r_ptr, y_ptr, z_ptr, N, BLOCK_SIZE: tl.constexpr):
+def durbin_kernel(r_ptr, y_ptr, z_ptr, N):
     # Initialize
-    alpha = -tl.load(r_ptr)
-    tl.store(y_ptr, alpha)
+    tl.store(y_ptr, -tl.load(r_ptr))
     beta = 1.0
+    alpha = -tl.load(r_ptr)
     
-    offsets = tl.arange(0, BLOCK_SIZE)
-    
-    # Sequential loop over k
+    # Main loop over k
     for k in range(1, N):
         # Update beta
-        beta = (1.0 - alpha * alpha) * beta
+        beta = (1 - alpha * alpha) * beta
         
-        # Compute sum = sum(r[k-i-1]*y[i] for i in range(k))
+        # Compute sum
         sum_val = 0.0
-        for block_start in range(0, k, BLOCK_SIZE):
-            i_offsets = block_start + offsets
-            mask = i_offsets < k
-            
-            r_indices = k - i_offsets - 1
-            y_indices = i_offsets
-            
-            r_vals = tl.load(r_ptr + r_indices, mask=mask, other=0.0)
-            y_vals = tl.load(y_ptr + y_indices, mask=mask, other=0.0)
-            
-            products = tl.where(mask, r_vals * y_vals, 0.0)
-            sum_val += tl.sum(products)
+        for i in range(k):
+            r_val = tl.load(r_ptr + k - i - 1)
+            y_val = tl.load(y_ptr + i)
+            sum_val += r_val * y_val
         
         # Update alpha
         r_k = tl.load(r_ptr + k)
         alpha = -(r_k + sum_val) / beta
         
-        # Compute z[i] = y[i] + alpha*y[k-i-1] for i in range(k)
-        for block_start in range(0, k, BLOCK_SIZE):
-            i_offsets = block_start + offsets
-            mask = i_offsets < k
-            
-            y_forward_indices = i_offsets
-            y_backward_indices = k - i_offsets - 1
-            
-            y_forward = tl.load(y_ptr + y_forward_indices, mask=mask, other=0.0)
-            y_backward = tl.load(y_ptr + y_backward_indices, mask=mask, other=0.0)
-            
-            z_vals = y_forward + alpha * y_backward
-            tl.store(z_ptr + i_offsets, z_vals, mask=mask)
+        # Update z array
+        for i in range(k):
+            y_i = tl.load(y_ptr + i)
+            y_k_minus_i_minus_1 = tl.load(y_ptr + k - i - 1)
+            z_val = y_i + alpha * y_k_minus_i_minus_1
+            tl.store(z_ptr + i, z_val)
         
-        # Copy z to y: y[i] = z[i] for i in range(k)
-        for block_start in range(0, k, BLOCK_SIZE):
-            i_offsets = block_start + offsets
-            mask = i_offsets < k
-            
-            z_vals = tl.load(z_ptr + i_offsets, mask=mask, other=0.0)
-            tl.store(y_ptr + i_offsets, z_vals, mask=mask)
+        # Copy z to y
+        for i in range(k):
+            z_val = tl.load(z_ptr + i)
+            tl.store(y_ptr + i, z_val)
         
         # Set y[k] = alpha
         tl.store(y_ptr + k, alpha)
 
 def durbin_triton(r, y, z, N):
-    BLOCK_SIZE = 32
-    
     grid = (1,)
-    durbin_kernel[grid](r, y, z, N, BLOCK_SIZE)
+    durbin_kernel[grid](r, y, z, N)
 ```
 
 
@@ -153,15 +131,6 @@ y[0] = -r[0];
    y[k] = alpha;
  }
 ```
-
-## Parallelization Analysis
-
-**Loop dimensions**: ['k', 'i']
-**Triangular bounds**: i < k
-
-- Parallelize `i`, sequential `k`: VALID
-
-- Parallelize `k`, sequential `i`: VALID
 
 
 ## Array Information:

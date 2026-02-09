@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Correctness test for covariance (Polybench) - attempt 2"""
+"""Correctness test for covariance (Polybench) - attempt 1"""
 import sys
 import ctypes
 import numpy as np
@@ -10,7 +10,7 @@ import torch
 
 # Import Triton implementation
 try:
-    from polybench_results.llm_triton.covariance.attempt2 import covariance_triton
+    from polybench_results.llm_triton.covariance.attempt1 import covariance_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)

@@ -4,7 +4,7 @@
 Your last attempt produced incorrect numerical results.
 
 **Error type**: Numerical error (values don't match)
-**Max error observed**: 3.828056e-01
+**Max error observed**: 1.286105e+00
 
 Please fix the numerical computation. Common causes:
 - Incorrect loop bounds or indices
@@ -20,79 +20,67 @@ import torch
 
 @triton.jit
 def jacobi_2d_kernel(A_ptr, B_ptr, N, TSTEPS, BLOCK_SIZE: tl.constexpr):
+    # Get program ID
     pid = tl.program_id(0)
     
+    # Calculate total interior elements
+    interior_size = (N - 2) * (N - 2)
+    
+    # Calculate block start
+    block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
+    element_ids = block_start + offsets
+    
+    # Mask for valid elements
+    mask = element_ids < interior_size
+    
+    # Convert 1D element_ids to 2D coordinates (i, j) in interior region
+    interior_i = element_ids // (N - 2) + 1
+    interior_j = element_ids % (N - 2) + 1
     
     for t in range(TSTEPS):
-        # First loop: compute B from A
-        for block_start in range(1, (N-1)*(N-1), BLOCK_SIZE):
-            current_offsets = block_start + offsets
-            mask = current_offsets < (N-1)*(N-1)
-            
-            # Convert linear index to 2D coordinates (1-based interior)
-            linear_idx = current_offsets
-            i = (linear_idx // (N-2)) + 1
-            j = (linear_idx % (N-2)) + 1
-            
-            # Check bounds
-            valid_mask = mask & (i >= 1) & (i < N-1) & (j >= 1) & (j < N-1)
-            
-            # Load A values with 5-point stencil
-            center_idx = i * N + j
-            left_idx = i * N + (j - 1)
-            right_idx = i * N + (j + 1)
-            up_idx = (i - 1) * N + j
-            down_idx = (i + 1) * N + j
-            
-            a_center = tl.load(A_ptr + center_idx, mask=valid_mask, other=0.0)
-            a_left = tl.load(A_ptr + left_idx, mask=valid_mask, other=0.0)
-            a_right = tl.load(A_ptr + right_idx, mask=valid_mask, other=0.0)
-            a_up = tl.load(A_ptr + up_idx, mask=valid_mask, other=0.0)
-            a_down = tl.load(A_ptr + down_idx, mask=valid_mask, other=0.0)
-            
-            # Compute B[i][j]
-            b_val = 0.2 * (a_center + a_left + a_right + a_up + a_down)
-            
-            # Store to B
-            tl.store(B_ptr + center_idx, b_val, mask=valid_mask)
+        # First loop: B[i][j] = 0.2 * (A[i][j] + A[i][j-1] + A[i][j+1] + A[i+1][j] + A[i-1][j])
         
-        # Second loop: compute A from B
-        for block_start in range(1, (N-1)*(N-1), BLOCK_SIZE):
-            current_offsets = block_start + offsets
-            mask = current_offsets < (N-1)*(N-1)
-            
-            # Convert linear index to 2D coordinates (1-based interior)
-            linear_idx = current_offsets
-            i = (linear_idx // (N-2)) + 1
-            j = (linear_idx % (N-2)) + 1
-            
-            # Check bounds
-            valid_mask = mask & (i >= 1) & (i < N-1) & (j >= 1) & (j < N-1)
-            
-            # Load B values with 5-point stencil
-            center_idx = i * N + j
-            left_idx = i * N + (j - 1)
-            right_idx = i * N + (j + 1)
-            up_idx = (i - 1) * N + j
-            down_idx = (i + 1) * N + j
-            
-            b_center = tl.load(B_ptr + center_idx, mask=valid_mask, other=0.0)
-            b_left = tl.load(B_ptr + left_idx, mask=valid_mask, other=0.0)
-            b_right = tl.load(B_ptr + right_idx, mask=valid_mask, other=0.0)
-            b_up = tl.load(B_ptr + up_idx, mask=valid_mask, other=0.0)
-            b_down = tl.load(B_ptr + down_idx, mask=valid_mask, other=0.0)
-            
-            # Compute A[i][j]
-            a_val = 0.2 * (b_center + b_left + b_right + b_up + b_down)
-            
-            # Store to A
-            tl.store(A_ptr + center_idx, a_val, mask=valid_mask)
+        # Load A values
+        a_center = tl.load(A_ptr + interior_i * N + interior_j, mask=mask)
+        a_left = tl.load(A_ptr + interior_i * N + (interior_j - 1), mask=mask)
+        a_right = tl.load(A_ptr + interior_i * N + (interior_j + 1), mask=mask)
+        a_down = tl.load(A_ptr + (interior_i + 1) * N + interior_j, mask=mask)
+        a_up = tl.load(A_ptr + (interior_i - 1) * N + interior_j, mask=mask)
+        
+        # Compute B values
+        b_new = 0.2 * (a_center + a_left + a_right + a_down + a_up)
+        
+        # Store B values
+        tl.store(B_ptr + interior_i * N + interior_j, b_new, mask=mask)
+        
+        # Second loop: A[i][j] = 0.2 * (B[i][j] + B[i][j-1] + B[i][j+1] + B[i+1][j] + B[i-1][j])
+        
+        # Load B values
+        b_center = tl.load(B_ptr + interior_i * N + interior_j, mask=mask)
+        b_left = tl.load(B_ptr + interior_i * N + (interior_j - 1), mask=mask)
+        b_right = tl.load(B_ptr + interior_i * N + (interior_j + 1), mask=mask)
+        b_down = tl.load(B_ptr + (interior_i + 1) * N + interior_j, mask=mask)
+        b_up = tl.load(B_ptr + (interior_i - 1) * N + interior_j, mask=mask)
+        
+        # Compute A values
+        a_new = 0.2 * (b_center + b_left + b_right + b_down + b_up)
+        
+        # Store A values
+        tl.store(A_ptr + interior_i * N + interior_j, a_new, mask=mask)
 
 def jacobi_2d_triton(A, B, N, TSTEPS):
+    # Calculate total interior elements
+    interior_size = (N - 2) * (N - 2)
+    
+    # Block size
     BLOCK_SIZE = 256
     
-    jacobi_2d_kernel[(1,)](
+    # Number of blocks needed
+    num_blocks = triton.cdiv(interior_size, BLOCK_SIZE)
+    
+    # Launch kernel
+    jacobi_2d_kernel[(num_blocks,)](
         A, B, N, TSTEPS, BLOCK_SIZE
     )
 ```
@@ -140,16 +128,6 @@ for (t = 0; t < TSTEPS; t++)
 	  A[i][j] = 0.2 * (B[i][j] + B[i][j-1] + B[i][1+j] + B[1+i][j] + B[i-1][j]);
     }
 ```
-
-## Parallelization Analysis
-
-**Loop dimensions**: ['t', 'i']
-
-- Parallelize `t`, sequential `i`: VALID
-  - Data dependencies detected - verify t is safe to parallelize
-
-- Parallelize `i`, sequential `t`: VALID
-  - Data dependencies detected - verify i is safe to parallelize
 
 
 ## Array Information:

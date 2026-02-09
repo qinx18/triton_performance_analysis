@@ -3,135 +3,47 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def seidel_2d_kernel(A_ptr, A_copy_ptr, N, stride_0, BLOCK_SIZE: tl.constexpr):
-    # Get program IDs for parallelizing over linearized (i,j) space
-    pid = tl.program_id(0)
-    
-    # Calculate block start in linearized space
-    block_start = pid * BLOCK_SIZE
+def seidel_2d_kernel(A, N, TSTEPS, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
-    linear_indices = block_start + offsets
     
-    # Convert linear indices back to (i,j) coordinates
-    # Linear index = (i-1) * (N-2) + (j-1) for interior points
-    interior_size = N - 2
-    i_interior = linear_indices // interior_size
-    j_interior = linear_indices % interior_size
-    
-    # Actual i,j coordinates (offset by 1 since we process from 1 to N-2)
-    i = i_interior + 1
-    j = j_interior + 1
-    
-    # Mask for valid indices
-    valid_mask = linear_indices < interior_size * interior_size
-    
-    # Calculate linear indices for 9-point stencil
-    # A[i-1][j-1], A[i-1][j], A[i-1][j+1]
-    idx_im1_jm1 = (i - 1) * stride_0 + (j - 1)
-    idx_im1_j = (i - 1) * stride_0 + j
-    idx_im1_jp1 = (i - 1) * stride_0 + (j + 1)
-    
-    # A[i][j-1], A[i][j], A[i][j+1]  
-    idx_i_jm1 = i * stride_0 + (j - 1)
-    idx_i_j = i * stride_0 + j
-    idx_i_jp1 = i * stride_0 + (j + 1)
-    
-    # A[i+1][j-1], A[i+1][j], A[i+1][j+1]
-    idx_ip1_jm1 = (i + 1) * stride_0 + (j - 1)
-    idx_ip1_j = (i + 1) * stride_0 + j
-    idx_ip1_jp1 = (i + 1) * stride_0 + (j + 1)
-    
-    # Load values from 9-point stencil (read from copy)
-    val_im1_jm1 = tl.load(A_copy_ptr + idx_im1_jm1, mask=valid_mask)
-    val_im1_j = tl.load(A_copy_ptr + idx_im1_j, mask=valid_mask)
-    val_im1_jp1 = tl.load(A_copy_ptr + idx_im1_jp1, mask=valid_mask)
-    
-    val_i_jm1 = tl.load(A_copy_ptr + idx_i_jm1, mask=valid_mask)
-    val_i_j = tl.load(A_copy_ptr + idx_i_j, mask=valid_mask)
-    val_i_jp1 = tl.load(A_copy_ptr + idx_i_jp1, mask=valid_mask)
-    
-    val_ip1_jm1 = tl.load(A_copy_ptr + idx_ip1_jm1, mask=valid_mask)
-    val_ip1_j = tl.load(A_copy_ptr + idx_ip1_j, mask=valid_mask)
-    val_ip1_jp1 = tl.load(A_copy_ptr + idx_ip1_jp1, mask=valid_mask)
-    
-    # Compute average
-    result = (val_im1_jm1 + val_im1_j + val_im1_jp1 +
-             val_i_jm1 + val_i_j + val_i_jp1 +
-             val_ip1_jm1 + val_ip1_j + val_ip1_jp1) / 9.0
-    
-    # Store result (write to original)
-    tl.store(A_ptr + idx_i_j, result, mask=valid_mask)
+    for t in range(TSTEPS):
+        for i in range(1, N - 1):
+            for block_start in range(1, N - 1, BLOCK_SIZE):
+                j_indices = block_start + offsets
+                mask = (j_indices >= 1) & (j_indices < N - 1)
+                
+                # Calculate linear indices for 9-point stencil
+                idx_center = i * N + j_indices
+                idx_top_left = (i - 1) * N + (j_indices - 1)
+                idx_top = (i - 1) * N + j_indices
+                idx_top_right = (i - 1) * N + (j_indices + 1)
+                idx_left = i * N + (j_indices - 1)
+                idx_right = i * N + (j_indices + 1)
+                idx_bottom_left = (i + 1) * N + (j_indices - 1)
+                idx_bottom = (i + 1) * N + j_indices
+                idx_bottom_right = (i + 1) * N + (j_indices + 1)
+                
+                # Load values
+                val_top_left = tl.load(A + idx_top_left, mask=mask)
+                val_top = tl.load(A + idx_top, mask=mask)
+                val_top_right = tl.load(A + idx_top_right, mask=mask)
+                val_left = tl.load(A + idx_left, mask=mask)
+                val_center = tl.load(A + idx_center, mask=mask)
+                val_right = tl.load(A + idx_right, mask=mask)
+                val_bottom_left = tl.load(A + idx_bottom_left, mask=mask)
+                val_bottom = tl.load(A + idx_bottom, mask=mask)
+                val_bottom_right = tl.load(A + idx_bottom_right, mask=mask)
+                
+                # Compute 9-point average
+                new_val = (val_top_left + val_top + val_top_right +
+                          val_left + val_center + val_right +
+                          val_bottom_left + val_bottom + val_bottom_right) / 9.0
+                
+                # Store result
+                tl.store(A + idx_center, new_val, mask=mask)
 
 def seidel_2d_triton(A, N, TSTEPS):
     BLOCK_SIZE = 256
+    grid = (1,)
     
-    # Sequential time steps to maintain dependencies
-    for t in range(TSTEPS):
-        # For sequential processing within a timestep
-        for i_start in range(1, N - 1):
-            # Create read-only copy for this row
-            A_copy = A.clone()
-            
-            # Process one row at a time
-            interior_width = N - 2
-            
-            # Grid size for j dimension only
-            grid = (triton.cdiv(interior_width, BLOCK_SIZE),)
-            
-            # Launch kernel for this row
-            seidel_2d_row_kernel[grid](
-                A, A_copy, N, i_start,
-                A.stride(0), BLOCK_SIZE
-            )
-
-@triton.jit
-def seidel_2d_row_kernel(A_ptr, A_copy_ptr, N, row_i, stride_0, BLOCK_SIZE: tl.constexpr):
-    # Get program IDs for parallelizing over j dimension
-    pid = tl.program_id(0)
-    
-    # Calculate block start in j dimension
-    block_start = pid * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE)
-    j = block_start + offsets + 1  # j starts from 1
-    
-    # Mask for valid j indices
-    valid_mask = j < N - 1
-    
-    i = row_i
-    
-    # Calculate linear indices for 9-point stencil
-    # A[i-1][j-1], A[i-1][j], A[i-1][j+1]
-    idx_im1_jm1 = (i - 1) * stride_0 + (j - 1)
-    idx_im1_j = (i - 1) * stride_0 + j
-    idx_im1_jp1 = (i - 1) * stride_0 + (j + 1)
-    
-    # A[i][j-1], A[i][j], A[i][j+1]  
-    idx_i_jm1 = i * stride_0 + (j - 1)
-    idx_i_j = i * stride_0 + j
-    idx_i_jp1 = i * stride_0 + (j + 1)
-    
-    # A[i+1][j-1], A[i+1][j], A[i+1][j+1]
-    idx_ip1_jm1 = (i + 1) * stride_0 + (j - 1)
-    idx_ip1_j = (i + 1) * stride_0 + j
-    idx_ip1_jp1 = (i + 1) * stride_0 + (j + 1)
-    
-    # Load values from 9-point stencil (read from copy)
-    val_im1_jm1 = tl.load(A_copy_ptr + idx_im1_jm1, mask=valid_mask)
-    val_im1_j = tl.load(A_copy_ptr + idx_im1_j, mask=valid_mask)
-    val_im1_jp1 = tl.load(A_copy_ptr + idx_im1_jp1, mask=valid_mask)
-    
-    val_i_jm1 = tl.load(A_copy_ptr + idx_i_jm1, mask=valid_mask)
-    val_i_j = tl.load(A_copy_ptr + idx_i_j, mask=valid_mask)
-    val_i_jp1 = tl.load(A_copy_ptr + idx_i_jp1, mask=valid_mask)
-    
-    val_ip1_jm1 = tl.load(A_copy_ptr + idx_ip1_jm1, mask=valid_mask)
-    val_ip1_j = tl.load(A_copy_ptr + idx_ip1_j, mask=valid_mask)
-    val_ip1_jp1 = tl.load(A_copy_ptr + idx_ip1_jp1, mask=valid_mask)
-    
-    # Compute average
-    result = (val_im1_jm1 + val_im1_j + val_im1_jp1 +
-             val_i_jm1 + val_i_j + val_i_jp1 +
-             val_ip1_jm1 + val_ip1_j + val_ip1_jp1) / 9.0
-    
-    # Store result (write to original)
-    tl.store(A_ptr + idx_i_j, result, mask=valid_mask)
+    seidel_2d_kernel[grid](A, N, TSTEPS, BLOCK_SIZE)

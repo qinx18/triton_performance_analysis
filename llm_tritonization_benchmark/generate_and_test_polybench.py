@@ -91,6 +91,7 @@ client = anthropic.Anthropic(api_key=API_KEY) if API_KEY else None
 POLYBENCH_KERNELS_DIR = "/home/qinxiao/workspace/pet/isl_analysis/kernels_polybench"
 MAX_ATTEMPTS = 5
 OUTPUT_DIR = "polybench_results"
+ENABLE_ANALYSIS = True
 
 
 # ============================================================================
@@ -234,62 +235,62 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
     if func_id[0].isdigit():
         func_id = "k" + func_id
 
-    # Load analysis results
-    war_result = load_war_analysis(kernel_name)
-    par_result = load_parallelization_analysis(kernel_name)
-    scalar_exp_result = load_scalar_expansion_analysis(kernel_name)
-    reduction_result = load_reduction_analysis(kernel_name)
-
-    # Build analysis sections
+    # Load analysis results (skip if analysis disabled)
     analysis_sections = []
 
-    if war_result and not war_result.get('parallelization_safe', True):
-        copies = war_result.get('arrays_needing_copy', [])
-        deps = war_result.get('war_dependencies', [])
-        section = "\n## WAR (Write-After-Read) Dependencies\n\n"
-        section += "**WARNING**: This kernel has WAR dependencies that require careful handling.\n"
-        if copies:
-            section += f"\n**Arrays needing read-only copies before parallel loop**: {', '.join(copies)}\n"
-        for dep in deps[:5]:
-            section += f"- {dep.get('description', '')}\n"
-        if copies:
-            section += "\n**Pattern**: Create a read-only copy of these arrays before the parallel region:\n"
-            section += "```python\n"
-            for arr in copies:
-                section += f"{arr}_copy = {arr}.clone()  # Read from copy, write to original\n"
-            section += "```\n"
-        analysis_sections.append(section)
+    if ENABLE_ANALYSIS:
+        war_result = load_war_analysis(kernel_name)
+        par_result = load_parallelization_analysis(kernel_name)
+        scalar_exp_result = load_scalar_expansion_analysis(kernel_name)
+        reduction_result = load_reduction_analysis(kernel_name)
 
-    if par_result and par_result.get('options'):
-        section = "\n## Parallelization Analysis\n\n"
-        section += f"**Loop dimensions**: {par_result.get('dims', [])}\n"
-        if par_result.get('is_triangular'):
-            tri = par_result['triangular_info']
-            section += f"**Triangular bounds**: {tri.get('smaller', '?')} < {tri.get('larger', '?')}\n"
-        for opt in par_result['options']:
-            valid = "VALID" if opt['valid'] else "INVALID"
-            section += f"\n- Parallelize `{opt['parallel_dim']}`, sequential `{opt['sequential_dim']}`: {valid}\n"
-            for issue in opt.get('issues', []):
-                section += f"  - {issue}\n"
-        analysis_sections.append(section)
+        if war_result and not war_result.get('parallelization_safe', True):
+            copies = war_result.get('arrays_needing_copy', [])
+            deps = war_result.get('war_dependencies', [])
+            section = "\n## WAR (Write-After-Read) Dependencies\n\n"
+            section += "**WARNING**: This kernel has WAR dependencies that require careful handling.\n"
+            if copies:
+                section += f"\n**Arrays needing read-only copies before parallel loop**: {', '.join(copies)}\n"
+            for dep in deps[:5]:
+                section += f"- {dep.get('description', '')}\n"
+            if copies:
+                section += "\n**Pattern**: Create a read-only copy of these arrays before the parallel region:\n"
+                section += "```python\n"
+                for arr in copies:
+                    section += f"{arr}_copy = {arr}.clone()  # Read from copy, write to original\n"
+                section += "```\n"
+            analysis_sections.append(section)
 
-    if scalar_exp_result and scalar_exp_result.get('has_scalar_expansion'):
-        if HAS_SCALAR_EXPANSION and format_scalar_expansion_for_prompt:
-            try:
-                formatted = format_scalar_expansion_for_prompt(scalar_exp_result)
-                if formatted:
-                    analysis_sections.append(f"\n{formatted}\n")
-            except Exception:
-                pass
+        if par_result and par_result.get('options'):
+            section = "\n## Parallelization Analysis\n\n"
+            section += f"**Loop dimensions**: {par_result.get('dims', [])}\n"
+            if par_result.get('is_triangular'):
+                tri = par_result['triangular_info']
+                section += f"**Triangular bounds**: {tri.get('smaller', '?')} < {tri.get('larger', '?')}\n"
+            for opt in par_result['options']:
+                valid = "VALID" if opt['valid'] else "INVALID"
+                section += f"\n- Parallelize `{opt['parallel_dim']}`, sequential `{opt['sequential_dim']}`: {valid}\n"
+                for issue in opt.get('issues', []):
+                    section += f"  - {issue}\n"
+            analysis_sections.append(section)
 
-    if reduction_result and reduction_result.get('is_reduction'):
-        if HAS_REDUCTION and build_reduction_instructions:
-            try:
-                formatted = build_reduction_instructions(kernel_name, reduction_result)
-                if formatted:
-                    analysis_sections.append(f"\n{formatted}\n")
-            except Exception:
-                pass
+        if scalar_exp_result and scalar_exp_result.get('has_scalar_expansion'):
+            if HAS_SCALAR_EXPANSION and format_scalar_expansion_for_prompt:
+                try:
+                    formatted = format_scalar_expansion_for_prompt(scalar_exp_result)
+                    if formatted:
+                        analysis_sections.append(f"\n{formatted}\n")
+                except Exception:
+                    pass
+
+        if reduction_result and reduction_result.get('is_reduction'):
+            if HAS_REDUCTION and build_reduction_instructions:
+                try:
+                    formatted = build_reduction_instructions(kernel_name, reduction_result)
+                    if formatted:
+                        analysis_sections.append(f"\n{formatted}\n")
+                except Exception:
+                    pass
 
     analysis_text = "\n".join(analysis_sections)
 
@@ -1151,6 +1152,12 @@ def benchmark_passed_kernels(kernel_names: list = None):
 
 def main():
     """Main Polybench pipeline."""
+    global ENABLE_ANALYSIS
+
+    # Check for --no-analysis flag
+    if '--no-analysis' in sys.argv:
+        sys.argv.remove('--no-analysis')
+        ENABLE_ANALYSIS = False
 
     # Check for --benchmark flag
     if '--benchmark' in sys.argv:
@@ -1159,8 +1166,10 @@ def main():
         benchmark_passed_kernels(kernel_names)
         return
 
+    analysis_mode = "WITH analysis" if ENABLE_ANALYSIS else "WITHOUT analysis (ablation)"
     print("=" * 70)
     print("Polybench/C Generation and Testing Pipeline")
+    print(f"Mode: {analysis_mode}")
     print(f"Total kernels available: {len(POLYBENCH_FUNCTIONS)}")
     print(f"Max attempts per kernel: {MAX_ATTEMPTS}")
     print("=" * 70)
@@ -1222,7 +1231,8 @@ def main():
 
     # Save results to JSON
     import json
-    results_file = Path(OUTPUT_DIR) / "results.json"
+    results_filename = "results_no_analysis.json" if not ENABLE_ANALYSIS else "results.json"
+    results_file = Path(OUTPUT_DIR) / results_filename
     Path(OUTPUT_DIR).mkdir(exist_ok=True)
     with open(results_file, 'w') as f:
         json.dump({k: {kk: vv for kk, vv in v.items() if kk != 'final_error' or vv is None or isinstance(vv, (str, dict))}

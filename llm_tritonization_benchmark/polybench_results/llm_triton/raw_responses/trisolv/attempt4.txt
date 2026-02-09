@@ -1,16 +1,56 @@
 
-## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED
 
-Your last attempt produced incorrect numerical results.
+**Error type**: unknown
+**Error message**:
+```
+  Test 1: ERROR - at 14:24:
+    i = tl.program_id(0)
 
-**Error type**: Numerical error (values don't match)
-**Max error observed**: 1.683598e+29
+    if i < N:
+        # Load b[i] into x[i]
+        b_val = tl.load(b_ptr + i)
+        x_val = b_val
 
-Please fix the numerical computation. Common causes:
-- Incorrect loop bounds or indices
-- Wrong array access patterns (row-major vs column-major)
-- Missing or incorrect operations
-- Off-by-one errors
+        # Compute the dot product for j < i
+        if i > 0:
+            # Process in chunks of BLOCK_SIZE
+            BLOCK_SIZE = 32
+            j_offsets = tl.arange(0, BLOCK_SIZE)
+                        ^
+  Test 2: ERROR - at 14:24:
+    i = tl.program_id(0)
+
+    if i < N:
+        # Load b[i] into x[i]
+        b_val = tl.load(b_ptr + i)
+        x_val = b_val
+
+        # Compute the dot product for j < i
+        if i > 0:
+            # Process in chunks of BLOCK_SIZE
+            BLOCK_SIZE = 32
+            j_offsets = tl.arange(0, BLOCK_SIZE)
+                        ^
+  Test 3: ERROR - at 14:24:
+    i = tl.program_id(0)
+
+    if i < N:
+        # Load b[i] into x[i]
+        b_val = tl.load(b_ptr + i)
+        x_val = b_val
+
+        # Compute the dot product for j < i
+        if i > 0:
+            # Process in chunks of BLOCK_SIZE
+            BLOCK_SIZE = 32
+            j_offsets = tl.arange(0, BLOCK_SIZE)
+                        ^
+Some tests FAILED!
+
+```
+
+Please fix the error.
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -19,40 +59,51 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def trisolv_kernel(L_ptr, b_ptr, x_ptr, x_copy_ptr, N, i):
-    # Initialize x[i] = b[i]
-    x_i = tl.load(b_ptr + i)
+def trisolv_kernel(L_ptr, b_ptr, x_ptr, N, L_stride0):
+    # Get program ID to identify which iteration this handles
+    i = tl.program_id(0)
     
-    # Sequential processing for j < i
-    for j in range(i):
-        # Load L[i][j] and x[j]
-        L_ij = tl.load(L_ptr + i * N + j)
-        x_j = tl.load(x_copy_ptr + j)
+    if i < N:
+        # Load b[i] into x[i]
+        b_val = tl.load(b_ptr + i)
+        x_val = b_val
         
-        # Subtract L[i][j] * x[j]
-        x_i = x_i - L_ij * x_j
-    
-    # Divide by L[i][i]
-    L_diag = tl.load(L_ptr + i * N + i)
-    x_i = x_i / L_diag
-    
-    # Store result
-    tl.store(x_ptr + i, x_i)
+        # Compute the dot product for j < i
+        if i > 0:
+            # Process in chunks of BLOCK_SIZE
+            BLOCK_SIZE = 32
+            j_offsets = tl.arange(0, BLOCK_SIZE)
+            
+            for j_start in range(0, i, BLOCK_SIZE):
+                current_j = j_start + j_offsets
+                j_mask = current_j < i
+                
+                # Load L[i][j] values
+                L_indices = i * L_stride0 + current_j
+                L_vals = tl.load(L_ptr + L_indices, mask=j_mask, other=0.0)
+                
+                # Load x[j] values
+                x_vals = tl.load(x_ptr + current_j, mask=j_mask, other=0.0)
+                
+                # Compute partial dot product
+                products = L_vals * x_vals
+                partial_sum = tl.sum(products)
+                x_val = x_val - partial_sum
+        
+        # Divide by diagonal element L[i][i]
+        diag_val = tl.load(L_ptr + i * L_stride0 + i)
+        result = x_val / diag_val
+        tl.store(x_ptr + i, result)
 
 def trisolv_triton(L, b, x, N):
-    # Create read-only copy of x to handle WAR dependencies
-    x_copy = x.clone()
+    # Copy b to x initially
+    x.copy_(b)
     
-    # Process each row sequentially due to data dependencies
+    # Launch one thread per row, but process sequentially
     for i in range(N):
-        # Update x_copy with the latest computed values
-        if i > 0:
-            x_copy[i-1] = x[i-1]
-        
-        # Launch kernel for this row
         grid = (1,)
         trisolv_kernel[grid](
-            L, b, x, x_copy, N, i
+            L, b, x, i + 1, L.stride(0)
         )
 ```
 
@@ -95,30 +146,6 @@ for (i = 0; i < N; i++)
       x[i] = x[i] / L[i][i];
     }
 ```
-
-## WAR (Write-After-Read) Dependencies
-
-**WARNING**: This kernel has WAR dependencies that require careful handling.
-
-**Arrays needing read-only copies before parallel loop**: x
-- Read x[(j)] may conflict with Write x[(i)] from different iteration
-
-**Pattern**: Create a read-only copy of these arrays before the parallel region:
-```python
-x_copy = x.clone()  # Read from copy, write to original
-```
-
-
-## Parallelization Analysis
-
-**Loop dimensions**: ['i', 'j']
-**Triangular bounds**: j < i
-
-- Parallelize `i`, sequential `j`: VALID
-  - Data dependencies detected - verify i is safe to parallelize
-
-- Parallelize `j`, sequential `i`: VALID
-  - Data dependencies detected - verify j is safe to parallelize
 
 
 ## Array Information:

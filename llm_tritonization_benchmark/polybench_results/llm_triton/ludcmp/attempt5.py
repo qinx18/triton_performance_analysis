@@ -3,50 +3,52 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def ludcmp_kernel(A_ptr, b_ptr, x_ptr, y_ptr, N, A_stride_0, A_stride_1):
+def ludcmp_kernel(A, b, x, y, N, stride_A):
     # LU decomposition
     for i in range(N):
-        # Lower triangular part (j < i)
+        # Lower triangular part
         for j in range(i):
-            w = tl.load(A_ptr + i * A_stride_0 + j * A_stride_1)
+            w = tl.load(A + i * stride_A + j)
             for k in range(j):
-                a_ik = tl.load(A_ptr + i * A_stride_0 + k * A_stride_1)
-                a_kj = tl.load(A_ptr + k * A_stride_0 + j * A_stride_1)
+                a_ik = tl.load(A + i * stride_A + k)
+                a_kj = tl.load(A + k * stride_A + j)
                 w = w - a_ik * a_kj
-            a_jj = tl.load(A_ptr + j * A_stride_0 + j * A_stride_1)
-            tl.store(A_ptr + i * A_stride_0 + j * A_stride_1, w / a_jj)
+            a_jj = tl.load(A + j * stride_A + j)
+            result = w / a_jj
+            tl.store(A + i * stride_A + j, result)
         
-        # Upper triangular part (j >= i)
+        # Upper triangular part  
         for j in range(i, N):
-            w = tl.load(A_ptr + i * A_stride_0 + j * A_stride_1)
+            w = tl.load(A + i * stride_A + j)
             for k in range(i):
-                a_ik = tl.load(A_ptr + i * A_stride_0 + k * A_stride_1)
-                a_kj = tl.load(A_ptr + k * A_stride_0 + j * A_stride_1)
+                a_ik = tl.load(A + i * stride_A + k)
+                a_kj = tl.load(A + k * stride_A + j)
                 w = w - a_ik * a_kj
-            tl.store(A_ptr + i * A_stride_0 + j * A_stride_1, w)
+            tl.store(A + i * stride_A + j, w)
     
     # Forward substitution
     for i in range(N):
-        w = tl.load(b_ptr + i)
+        w = tl.load(b + i)
         for j in range(i):
-            a_ij = tl.load(A_ptr + i * A_stride_0 + j * A_stride_1)
-            y_j = tl.load(y_ptr + j)
+            a_ij = tl.load(A + i * stride_A + j)
+            y_j = tl.load(y + j)
             w = w - a_ij * y_j
-        tl.store(y_ptr + i, w)
+        tl.store(y + i, w)
     
     # Back substitution
-    for i in range(N):
-        idx = N - 1 - i
-        w = tl.load(y_ptr + idx)
-        for j in range(idx + 1, N):
-            a_ij = tl.load(A_ptr + idx * A_stride_0 + j * A_stride_1)
-            x_j = tl.load(x_ptr + j)
+    for idx in range(N):
+        i = N - 1 - idx
+        w = tl.load(y + i)
+        for j in range(i + 1, N):
+            a_ij = tl.load(A + i * stride_A + j)
+            x_j = tl.load(x + j)
             w = w - a_ij * x_j
-        a_ii = tl.load(A_ptr + idx * A_stride_0 + idx * A_stride_1)
-        tl.store(x_ptr + idx, w / a_ii)
+        a_ii = tl.load(A + i * stride_A + i)
+        result = w / a_ii
+        tl.store(x + i, result)
 
 def ludcmp_triton(A, b, x, y, N):
-    ludcmp_kernel[(1,)](
-        A, b, x, y, N,
-        A.stride(0), A.stride(1)
-    )
+    stride_A = A.stride(0)
+    
+    grid = (1,)
+    ludcmp_kernel[grid](A, b, x, y, N, stride_A)

@@ -1,72 +1,75 @@
+import torch
 import triton
 import triton.language as tl
 
 @triton.jit
-def atax_kernel(A_ptr, tmp_ptr, x_ptr, y_ptr, M, N, A_stride0, A_stride1, BLOCK_SIZE: tl.constexpr):
+def atax_kernel(A_ptr, tmp_ptr, x_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     
-    # Initialize y to zero (done by first program)
+    # Phase 1: Initialize y to zero (done by first program)
     if pid == 0:
-        y_offsets = tl.arange(0, BLOCK_SIZE)
-        for block_start in range(0, N, BLOCK_SIZE):
-            current_y_offsets = block_start + y_offsets
-            y_mask = current_y_offsets < N
-            tl.store(y_ptr + current_y_offsets, 0.0, mask=y_mask)
+        offsets = tl.arange(0, BLOCK_SIZE)
+        for start in range(0, N, BLOCK_SIZE):
+            current_offsets = start + offsets
+            mask = current_offsets < N
+            tl.store(y_ptr + current_offsets, 0.0, mask=mask)
     
-    tl.debug_barrier()
-    
-    # Each program handles one row of A
-    i = pid - 1  # Subtract 1 because pid=0 is for initialization
-    if i < 0:
-        return
+    # Phase 2: Each program processes one row i
+    i = pid
     if i >= M:
         return
     
-    # Initialize tmp[i] to 0
+    # Initialize tmp[i] = 0.0
     tmp_val = 0.0
     
-    # Compute tmp[i] = sum(A[i][j] * x[j]) for j in range(N)
-    x_offsets = tl.arange(0, BLOCK_SIZE)
-    for block_start in range(0, N, BLOCK_SIZE):
-        current_x_offsets = block_start + x_offsets
-        x_mask = current_x_offsets < N
+    # Compute tmp[i] = sum(A[i][j] * x[j]) for all j
+    offsets = tl.arange(0, BLOCK_SIZE)
+    for j_start in range(0, N, BLOCK_SIZE):
+        j_offsets = j_start + offsets
+        j_mask = j_offsets < N
         
-        # Load x values
-        x_vals = tl.load(x_ptr + current_x_offsets, mask=x_mask, other=0.0)
-        
-        # Load A[i] values
-        a_ptrs = A_ptr + i * A_stride0 + current_x_offsets * A_stride1
-        a_vals = tl.load(a_ptrs, mask=x_mask, other=0.0)
+        # Load A[i][j] and x[j]
+        a_indices = i * N + j_offsets
+        a_vals = tl.load(A_ptr + a_indices, mask=j_mask, other=0.0)
+        x_vals = tl.load(x_ptr + j_offsets, mask=j_mask, other=0.0)
         
         # Accumulate tmp[i]
         tmp_val += tl.sum(a_vals * x_vals)
     
     # Store tmp[i]
     tl.store(tmp_ptr + i, tmp_val)
+
+@triton.jit
+def atax_kernel_phase2(A_ptr, tmp_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    i = pid
     
-    tl.debug_barrier()
+    if i >= M:
+        return
     
-    # Update y[j] += A[i][j] * tmp[i] for j in range(N)
-    y_offsets = tl.arange(0, BLOCK_SIZE)
-    for block_start in range(0, N, BLOCK_SIZE):
-        current_y_offsets = block_start + y_offsets
-        y_mask = current_y_offsets < N
+    # Load tmp[i]
+    tmp_i = tl.load(tmp_ptr + i)
+    
+    # Update y[j] += A[i][j] * tmp[i] for all j
+    offsets = tl.arange(0, BLOCK_SIZE)
+    for j_start in range(0, N, BLOCK_SIZE):
+        j_offsets = j_start + offsets
+        j_mask = j_offsets < N
         
-        # Load A[i] values
-        a_ptrs = A_ptr + i * A_stride0 + current_y_offsets * A_stride1
-        a_vals = tl.load(a_ptrs, mask=y_mask, other=0.0)
+        # Load A[i][j]
+        a_indices = i * N + j_offsets
+        a_vals = tl.load(A_ptr + a_indices, mask=j_mask, other=0.0)
         
-        # Atomically update y values
-        update_vals = a_vals * tmp_val
-        tl.atomic_add(y_ptr + current_y_offsets, update_vals, mask=y_mask)
+        # Atomically update y[j]
+        updates = a_vals * tmp_i
+        tl.atomic_add(y_ptr + j_offsets, updates, mask=j_mask)
 
 def atax_triton(A, tmp, x, y, M, N):
     BLOCK_SIZE = 64
-    grid = (M + 1,)  # +1 for initialization
+    grid = (M,)
     
-    atax_kernel[grid](
-        A, tmp, x, y,
-        M, N,
-        A.stride(0), A.stride(1),
-        BLOCK_SIZE
-    )
+    # Phase 1: Compute tmp values
+    atax_kernel[grid](A, tmp, x, y, M, N, BLOCK_SIZE)
+    
+    # Phase 2: Update y values
+    atax_kernel_phase2[grid](A, tmp, y, M, N, BLOCK_SIZE)
