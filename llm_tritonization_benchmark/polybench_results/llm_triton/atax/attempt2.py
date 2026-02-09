@@ -1,71 +1,72 @@
-import torch
 import triton
 import triton.language as tl
 
 @triton.jit
-def atax_kernel(A_ptr, tmp_ptr, x_ptr, y_ptr, M, N):
+def atax_kernel(A_ptr, tmp_ptr, x_ptr, y_ptr, M, N, A_stride0, A_stride1, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     
-    BLOCK_SIZE = 64
-    
+    # Initialize y to zero (done by first program)
     if pid == 0:
-        # Initialize y to zero
         y_offsets = tl.arange(0, BLOCK_SIZE)
-        y_start = 0
-        while y_start < N:
-            current_y_offsets = y_start + y_offsets
+        for block_start in range(0, N, BLOCK_SIZE):
+            current_y_offsets = block_start + y_offsets
             y_mask = current_y_offsets < N
             tl.store(y_ptr + current_y_offsets, 0.0, mask=y_mask)
-            y_start += BLOCK_SIZE
     
-    # Each program handles one row i
-    i = pid
+    tl.debug_barrier()
+    
+    # Each program handles one row of A
+    i = pid - 1  # Subtract 1 because pid=0 is for initialization
+    if i < 0:
+        return
     if i >= M:
         return
     
-    # Initialize tmp[i] = 0.0
+    # Initialize tmp[i] to 0
     tmp_val = 0.0
     
-    # First loop: tmp[i] += A[i][j] * x[j] for all j
+    # Compute tmp[i] = sum(A[i][j] * x[j]) for j in range(N)
     x_offsets = tl.arange(0, BLOCK_SIZE)
-    j_start = 0
-    while j_start < N:
-        current_x_offsets = j_start + x_offsets
+    for block_start in range(0, N, BLOCK_SIZE):
+        current_x_offsets = block_start + x_offsets
         x_mask = current_x_offsets < N
         
-        # Load x[j]
+        # Load x values
         x_vals = tl.load(x_ptr + current_x_offsets, mask=x_mask, other=0.0)
         
-        # Load A[i][j]
-        a_offsets = i * N + current_x_offsets
-        a_vals = tl.load(A_ptr + a_offsets, mask=x_mask, other=0.0)
+        # Load A[i] values
+        a_ptrs = A_ptr + i * A_stride0 + current_x_offsets * A_stride1
+        a_vals = tl.load(a_ptrs, mask=x_mask, other=0.0)
         
         # Accumulate tmp[i]
         tmp_val += tl.sum(a_vals * x_vals)
-        j_start += BLOCK_SIZE
     
     # Store tmp[i]
     tl.store(tmp_ptr + i, tmp_val)
     
-    # Second loop: y[j] += A[i][j] * tmp[i] for all j
+    tl.debug_barrier()
+    
+    # Update y[j] += A[i][j] * tmp[i] for j in range(N)
     y_offsets = tl.arange(0, BLOCK_SIZE)
-    j_start = 0
-    while j_start < N:
-        current_y_offsets = j_start + y_offsets
+    for block_start in range(0, N, BLOCK_SIZE):
+        current_y_offsets = block_start + y_offsets
         y_mask = current_y_offsets < N
         
-        # Load current y[j]
-        y_vals = tl.load(y_ptr + current_y_offsets, mask=y_mask, other=0.0)
+        # Load A[i] values
+        a_ptrs = A_ptr + i * A_stride0 + current_y_offsets * A_stride1
+        a_vals = tl.load(a_ptrs, mask=y_mask, other=0.0)
         
-        # Load A[i][j]
-        a_offsets = i * N + current_y_offsets
-        a_vals = tl.load(A_ptr + a_offsets, mask=y_mask, other=0.0)
-        
-        # Update y[j]
-        y_vals += a_vals * tmp_val
-        tl.store(y_ptr + current_y_offsets, y_vals, mask=y_mask)
-        j_start += BLOCK_SIZE
+        # Atomically update y values
+        update_vals = a_vals * tmp_val
+        tl.atomic_add(y_ptr + current_y_offsets, update_vals, mask=y_mask)
 
 def atax_triton(A, tmp, x, y, M, N):
-    grid = (M,)
-    atax_kernel[grid](A, tmp, x, y, M, N)
+    BLOCK_SIZE = 64
+    grid = (M + 1,)  # +1 for initialization
+    
+    atax_kernel[grid](
+        A, tmp, x, y,
+        M, N,
+        A.stride(0), A.stride(1),
+        BLOCK_SIZE
+    )

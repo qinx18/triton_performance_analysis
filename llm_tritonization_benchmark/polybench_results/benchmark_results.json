@@ -1,0 +1,127 @@
+{
+  "2mm": {
+    "c_ref_time_ms": 0.391638,
+    "triton_time_ms": 0.09886,
+    "speedup": 3.961552
+  },
+  "3mm": {
+    "c_ref_time_ms": 0.607869,
+    "triton_time_ms": 8.611847,
+    "speedup": 0.070585
+  },
+  "adi": {
+    "c_ref_time_ms": 2.799245,
+    "triton_time_ms": 36.921257,
+    "speedup": 0.075817
+  },
+  "atax": {
+    "c_ref_time_ms": 0.1368,
+    "triton_time_ms": 0.089322,
+    "speedup": 1.53153
+  },
+  "bicg": {
+    "c_ref_time_ms": 0.148706,
+    "triton_time_ms": 0.084556,
+    "speedup": 1.758661
+  },
+  "cholesky": {
+    "c_ref_time_ms": 0.313696,
+    "triton_time_ms": 0.188614,
+    "speedup": 1.663164
+  },
+  "correlation": {
+    "c_ref_time_ms": 0.421595,
+    "triton_time_ms": 0.45888,
+    "speedup": 0.918748
+  },
+  "covariance": {
+    "c_ref_time_ms": 0.418223,
+    "triton_time_ms": 0.077471,
+    "speedup": 5.398429
+  },
+  "deriche": {
+    "c_ref_time_ms": 0.64759,
+    "triton_time_ms": 0.122754,
+    "speedup": 5.275498
+  },
+  "fdtd_2d": {
+    "c_ref_time_ms": 0.340356,
+    "triton_time_ms": 0.137287,
+    "speedup": 2.479148
+  },
+  "floyd_warshall": {
+    "c_ref_time_ms": 1.027489,
+    "triton_time_ms": 2.868886,
+    "speedup": 0.358149
+  },
+  "gemm": {
+    "c_ref_time_ms": 0.174261,
+    "triton_time_ms": 0.058129,
+    "speedup": 2.997847
+  },
+  "gemver": {
+    "c_ref_time_ms": 0.265085,
+    "triton_time_ms": 0.129509,
+    "speedup": 2.046852
+  },
+  "gesummv": {
+    "c_ref_time_ms": 0.170819,
+    "triton_time_ms": 0.092344,
+    "speedup": 1.849806
+  },
+  "heat_3d": {
+    "c_ref_time_ms": 4.975887,
+    "triton_time_ms": 2.870596,
+    "speedup": 1.733398
+  },
+  "jacobi_1d": {
+    "c_ref_time_ms": 0.076,
+    "triton_time_ms": 0.043,
+    "speedup": 1.76
+  },
+  "jacobi_2d": {
+    "c_ref_time_ms": 0.560706,
+    "triton_time_ms": 0.599581,
+    "speedup": 0.935164
+  },
+  "lu": {
+    "c_ref_time_ms": 0.511885,
+    "triton_time_ms": 0.16428,
+    "speedup": 3.115922
+  },
+  "mvt": {
+    "c_ref_time_ms": 0.193706,
+    "triton_time_ms": 0.128052,
+    "speedup": 1.512705
+  },
+  "nussinov": {
+    "c_ref_time_ms": 0.742506,
+    "triton_time_ms": 17.034807,
+    "speedup": 0.043588
+  },
+  "symm": {
+    "c_ref_time_ms": 0.249782,
+    "triton_time_ms": 0.107695,
+    "speedup": 2.319339
+  },
+  "syr2k": {
+    "c_ref_time_ms": 0.255911,
+    "triton_time_ms": 0.086149,
+    "speedup": 2.970571
+  },
+  "syrk": {
+    "c_ref_time_ms": 0.185842,
+    "triton_time_ms": 0.060346,
+    "speedup": 3.079592
+  },
+  "trisolv": {
+    "c_ref_time_ms": 0.133143,
+    "triton_time_ms": 3.713383,
+    "speedup": 0.035855
+  },
+  "trmm": {
+    "c_ref_time_ms": 0.23116,
+    "triton_time_ms": 0.070838,
+    "speedup": 3.2632
+  }
+}

@@ -4,65 +4,78 @@ import torch
 
 @triton.jit
 def jacobi_2d_kernel(A_ptr, B_ptr, N, TSTEPS, BLOCK_SIZE: tl.constexpr):
-    # Get program ID and calculate offsets
     pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
+    
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Time step loop (sequential)
     for t in range(TSTEPS):
-        # First phase: compute B from A for all valid (i,j) pairs
-        for i in range(1, N - 1):
-            j_offsets = block_start + offsets
-            mask = j_offsets < N - 1
-            mask = mask & (j_offsets >= 1)
+        # First loop: compute B from A
+        for block_start in range(0, (N-2)*(N-2), BLOCK_SIZE):
+            current_offsets = block_start + offsets
+            mask = current_offsets < (N-2)*(N-2)
             
-            # Current position indices
-            center_idx = i * N + j_offsets
-            left_idx = i * N + (j_offsets - 1)
-            right_idx = i * N + (j_offsets + 1)
-            up_idx = (i - 1) * N + j_offsets
-            down_idx = (i + 1) * N + j_offsets
+            # Convert linear index to 2D coordinates for interior points
+            linear_idx = current_offsets
+            i = (linear_idx // (N-2)) + 1
+            j = (linear_idx % (N-2)) + 1
             
-            # Load values
-            center = tl.load(A_ptr + center_idx, mask=mask, other=0.0)
-            left = tl.load(A_ptr + left_idx, mask=mask, other=0.0)
-            right = tl.load(A_ptr + right_idx, mask=mask, other=0.0)
-            up = tl.load(A_ptr + up_idx, mask=mask, other=0.0)
-            down = tl.load(A_ptr + down_idx, mask=mask, other=0.0)
+            # Check bounds
+            valid_mask = mask & (i >= 1) & (i < N-1) & (j >= 1) & (j < N-1)
             
-            # Compute and store
-            result = 0.2 * (center + left + right + up + down)
-            tl.store(B_ptr + center_idx, result, mask=mask)
+            # Load A values with 5-point stencil
+            center_idx = i * N + j
+            left_idx = i * N + (j - 1)
+            right_idx = i * N + (j + 1)
+            up_idx = (i - 1) * N + j
+            down_idx = (i + 1) * N + j
+            
+            a_center = tl.load(A_ptr + center_idx, mask=valid_mask, other=0.0)
+            a_left = tl.load(A_ptr + left_idx, mask=valid_mask, other=0.0)
+            a_right = tl.load(A_ptr + right_idx, mask=valid_mask, other=0.0)
+            a_up = tl.load(A_ptr + up_idx, mask=valid_mask, other=0.0)
+            a_down = tl.load(A_ptr + down_idx, mask=valid_mask, other=0.0)
+            
+            # Compute B[i][j]
+            b_val = 0.2 * (a_center + a_left + a_right + a_up + a_down)
+            
+            # Store to B
+            tl.store(B_ptr + center_idx, b_val, mask=valid_mask)
         
-        # Second phase: compute A from B for all valid (i,j) pairs
-        for i in range(1, N - 1):
-            j_offsets = block_start + offsets
-            mask = j_offsets < N - 1
-            mask = mask & (j_offsets >= 1)
+        # Second loop: compute A from B
+        for block_start in range(0, (N-2)*(N-2), BLOCK_SIZE):
+            current_offsets = block_start + offsets
+            mask = current_offsets < (N-2)*(N-2)
             
-            # Current position indices
-            center_idx = i * N + j_offsets
-            left_idx = i * N + (j_offsets - 1)
-            right_idx = i * N + (j_offsets + 1)
-            up_idx = (i - 1) * N + j_offsets
-            down_idx = (i + 1) * N + j_offsets
+            # Convert linear index to 2D coordinates for interior points
+            linear_idx = current_offsets
+            i = (linear_idx // (N-2)) + 1
+            j = (linear_idx % (N-2)) + 1
             
-            # Load values
-            center = tl.load(B_ptr + center_idx, mask=mask, other=0.0)
-            left = tl.load(B_ptr + left_idx, mask=mask, other=0.0)
-            right = tl.load(B_ptr + right_idx, mask=mask, other=0.0)
-            up = tl.load(B_ptr + up_idx, mask=mask, other=0.0)
-            down = tl.load(B_ptr + down_idx, mask=mask, other=0.0)
+            # Check bounds
+            valid_mask = mask & (i >= 1) & (i < N-1) & (j >= 1) & (j < N-1)
             
-            # Compute and store
-            result = 0.2 * (center + left + right + up + down)
-            tl.store(A_ptr + center_idx, result, mask=mask)
+            # Load B values with 5-point stencil
+            center_idx = i * N + j
+            left_idx = i * N + (j - 1)
+            right_idx = i * N + (j + 1)
+            up_idx = (i - 1) * N + j
+            down_idx = (i + 1) * N + j
+            
+            b_center = tl.load(B_ptr + center_idx, mask=valid_mask, other=0.0)
+            b_left = tl.load(B_ptr + left_idx, mask=valid_mask, other=0.0)
+            b_right = tl.load(B_ptr + right_idx, mask=valid_mask, other=0.0)
+            b_up = tl.load(B_ptr + up_idx, mask=valid_mask, other=0.0)
+            b_down = tl.load(B_ptr + down_idx, mask=valid_mask, other=0.0)
+            
+            # Compute A[i][j]
+            a_val = 0.2 * (b_center + b_left + b_right + b_up + b_down)
+            
+            # Store to A
+            tl.store(A_ptr + center_idx, a_val, mask=valid_mask)
 
 def jacobi_2d_triton(A, B, N, TSTEPS):
-    BLOCK_SIZE = 32
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    BLOCK_SIZE = 256
     
-    jacobi_2d_kernel[grid](
-        A, B, N, TSTEPS, BLOCK_SIZE=BLOCK_SIZE
+    jacobi_2d_kernel[(1,)](
+        A, B, N, TSTEPS, BLOCK_SIZE
     )

@@ -8,30 +8,20 @@
   "3mm": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 2,
-    "final_error": {
-      "type": "unknown",
-      "message": "  Test 1: ERROR - at 11:24:\ndef k3mm_kernel(\n    A_ptr, B_ptr, C_ptr, D_ptr, E_ptr, F_ptr, G_ptr,\n    NI, NJ, NK, NL, NM,\n    BLOCK_SIZE: tl.constexpr\n):\n    # E := A*B\n    for i in range(NI):\n        for j in range(NJ):\n            accumulator = 0.0\n            for k in range(NK):\n                a_val = tl.load(A_ptr + i * NK + k)\n                        ^\n  Test 2: ERROR - at 11:24:\ndef k3mm_kernel(\n    A_ptr, B_ptr, C_ptr, D_ptr, E_ptr, F_ptr, G_ptr,\n    NI, NJ, NK, NL, NM,\n    BLOCK_SIZE: tl.constexpr\n):\n    # E := A*B\n    for i in range(NI):\n        for j in range(NJ):\n            accumulator = 0.0\n            for k in range(NK):\n                a_val = tl.load(A_ptr + i * NK + k)\n                        ^\n  Test 3: ERROR - at 11:24:\ndef k3mm_kernel(\n    A_ptr, B_ptr, C_ptr, D_ptr, E_ptr, F_ptr, G_ptr,\n    NI, NJ, NK, NL, NM,\n    BLOCK_SIZE: tl.constexpr\n):\n    # E := A*B\n    for i in range(NI):\n        for j in range(NJ):\n            accumulator = 0.0\n            for k in range(NK):\n                a_val = tl.load(A_ptr + i * NK + k)\n                        ^\nSome tests FAILED!\n"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "adi": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 2,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 1.494688e-02",
-      "max_error": "1.494688e-02"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "atax": {
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 5,
-    "final_error": {
-      "type": "unknown",
-      "message": "  Test 1: ERROR - at 6:24:\ndef init_y_kernel(y_ptr, N):\n    pid = tl.program_id(0)\n    BLOCK_SIZE = 64\n\n    y_start = pid * BLOCK_SIZE\n    offsets = y_start + tl.arange(0, BLOCK_SIZE)\n                        ^\n  Test 2: ERROR - at 6:24:\ndef init_y_kernel(y_ptr, N):\n    pid = tl.program_id(0)\n    BLOCK_SIZE = 64\n\n    y_start = pid * BLOCK_SIZE\n    offsets = y_start + tl.arange(0, BLOCK_SIZE)\n                        ^\n  Test 3: ERROR - at 6:24:\ndef init_y_kernel(y_ptr, N):\n    pid = tl.program_id(0)\n    BLOCK_SIZE = 64\n\n    y_start = pid * BLOCK_SIZE\n    offsets = y_start + tl.arange(0, BLOCK_SIZE)\n                        ^\nSome tests FAILED!\n"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "bicg": {
     "triton_generated": true,
@@ -48,31 +38,20 @@
   "correlation": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 4,
-    "final_error": {
-      "type": "unknown",
-      "message": "  Test 1: ERROR - at 18:12:\n    pid_j = tl.program_id(axis=1)\n\n    i_start = pid_i * BLOCK_SIZE\n    j_start = pid_j * BLOCK_SIZE\n\n    i_offsets = tl.arange(0, BLOCK_SIZE)\n    j_offsets = tl.arange(0, BLOCK_SIZE)\n\n    for ii in range(BLOCK_SIZE):\n        i_idx = i_start + ii\n        if i_idx >= M:\n            break\n            ^\nunsupported AST node type: Break\n  Test 2: ERROR - at 18:12:\n    pid_j = tl.program_id(axis=1)\n\n    i_start = pid_i * BLOCK_SIZE\n    j_start = pid_j * BLOCK_SIZE\n\n    i_offsets = tl.arange(0, BLOCK_SIZE)\n    j_offsets = tl.arange(0, BLOCK_SIZE)\n\n    for ii in range(BLOCK_SIZE):\n        i_idx = i_start + ii\n        if i_idx >= M:\n            break\n            ^\nunsupported AST node type: Break\n  Test 3: ERROR - at 18:12:\n    pid_j = tl.program_id(axis=1)\n\n    i_start = pid_i * BLOCK_SIZE\n    j_start = pid_j * BLOCK_SIZE\n\n    i_offsets = tl.arange(0, BLOCK_SIZE)\n    j_offsets = tl.arange(0, BLOCK_SIZE)\n\n    for ii in range(BLOCK_SIZE):\n        i_idx = i_start + ii\n        if i_idx >= M:\n            break\n            ^\nunsupported AST node type: Break\nSome tests FAILED!\n"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "covariance": {
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 5,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 3.340769e+00",
-      "max_error": "3.340769e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "deriche": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 3,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 1.615190e-01",
-      "max_error": "1.615190e-01"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "doitgen": {
     "triton_generated": true,
@@ -80,8 +59,8 @@
     "attempts": 5,
     "final_error": {
       "type": "numerical",
-      "message": "max_error = 1.512557e+05",
-      "max_error": "1.512557e+05"
+      "message": "abs_error=5.401676e+05 rel_error=2.118023e+04",
+      "max_error": "5.401676e+05"
     }
   },
   "durbin": {
@@ -90,29 +69,21 @@
     "attempts": 5,
     "final_error": {
       "type": "numerical",
-      "message": "max_error = 4.462755e-01",
-      "max_error": "4.462755e-01"
+      "message": "abs_error=1.124741e-02 rel_error=2.116323e-03",
+      "max_error": "1.124741e-02"
     }
   },
   "fdtd_2d": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 2,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 2.766777e+02",
-      "max_error": "2.766777e+02"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "floyd_warshall": {
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 5,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = unknown",
-      "max_error": "unknown"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "gemm": {
     "triton_generated": true,
@@ -122,13 +93,9 @@
   },
   "gemver": {
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 5,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 4.882812e-04",
-      "max_error": "4.882812e-04"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "gesummv": {
     "triton_generated": true,
@@ -142,8 +109,8 @@
     "attempts": 5,
     "final_error": {
       "type": "numerical",
-      "message": "max_error = 6.293507e-01",
-      "max_error": "6.293507e-01"
+      "message": "abs_error=3.399412e+00 rel_error=1.384647e+00",
+      "max_error": "3.399412e+00"
     }
   },
   "heat_3d": {
@@ -154,23 +121,15 @@
   },
   "jacobi_1d": {
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 5,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 2.750456e-04",
-      "max_error": "2.750456e-04"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "jacobi_2d": {
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 5,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 1.611739e+00",
-      "max_error": "1.611739e+00"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "lu": {
     "triton_generated": true,
@@ -184,27 +143,21 @@
     "attempts": 5,
     "final_error": {
       "type": "numerical",
-      "message": "max_error = 6.859375e+02",
-      "max_error": "6.859375e+02"
+      "message": "abs_error=9.857227e+02 rel_error=2.840305e-02",
+      "max_error": "9.857227e+02"
     }
   },
   "mvt": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 3,
-    "final_error": {
-      "type": "unknown",
-      "message": " # Compute dot product contribution\n                contribution = tl.sum(A_vals * y_1_vals)\n                x1_acc = tl.where(offsets == i_idx, contribution, 0.0) + tl.where(offsets == i_idx, 0.0, x1_acc)\n                x1_acc = tl.where(offsets == i_idx, x1_acc[0] + contribution, x1_acc)\n                                                    ^\nValueError('unsupported tensor index: constexpr[0]')\n  Test 2: ERROR - at 38:52:\n        # For each i in this block, process all j values\n        for i_idx in range(BLOCK_SIZE):\n            i_val = block_start + i_idx\n            if i_val < N:\n                # Load A[i][j] values for this row\n                A_row_offsets = i_val * N + j_current\n                A_vals = tl.load(A_ptr + A_row_offsets, mask=j_mask, other=0.0)\n\n                # Compute dot product contribution\n                contribution = tl.sum(A_vals * y_1_vals)\n                x1_acc = tl.where(offsets == i_idx, contribution, 0.0) + tl.where(offsets == i_idx, 0.0, x1_acc)\n                x1_acc = tl.where(offsets == i_idx, x1_acc[0] + contribution, x1_acc)\n                                                    ^\nValueError('unsupported tensor index: constexpr[0]')\n  Test 3: ERROR - at 38:52:\n        # For each i in this block, process all j values\n        for i_idx in range(BLOCK_SIZE):\n            i_val = block_start + i_idx\n            if i_val < N:\n                # Load A[i][j] values for this row\n                A_row_offsets = i_val * N + j_current\n                A_vals = tl.load(A_ptr + A_row_offsets, mask=j_mask, other=0.0)\n\n                # Compute dot product contribution\n                contribution = tl.sum(A_vals * y_1_vals)\n                x1_acc = tl.where(offsets == i_idx, contribution, 0.0) + tl.where(offsets == i_idx, 0.0, x1_acc)\n                x1_acc = tl.where(offsets == i_idx, x1_acc[0] + contribution, x1_acc)\n                                                    ^\nValueError('unsupported tensor index: constexpr[0]')\nSome tests FAILED!\n"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "nussinov": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 4,
-    "final_error": {
-      "type": "unknown",
-      "message": "  Test 1: ERROR - at 16:20:\n    # For each i from N-1 down to 0\n    for i in range(N-1, -1, -1):\n        # For each j from i+1 to N-1, process in blocks\n        for j_start in range(i+1, N, BLOCK_SIZE):\n            # Calculate block end\n            j_end = min(j_start + BLOCK_SIZE, N)\n\n            # Process each j in the block\n            for j_idx in range(j_start, j_end):\n                j = j_idx\n                if j <= i:\n                    continue\n                    ^\nunsupported AST node type: Continue\n  Test 2: ERROR - at 16:20:\n    # For each i from N-1 down to 0\n    for i in range(N-1, -1, -1):\n        # For each j from i+1 to N-1, process in blocks\n        for j_start in range(i+1, N, BLOCK_SIZE):\n            # Calculate block end\n            j_end = min(j_start + BLOCK_SIZE, N)\n\n            # Process each j in the block\n            for j_idx in range(j_start, j_end):\n                j = j_idx\n                if j <= i:\n                    continue\n                    ^\nunsupported AST node type: Continue\n  Test 3: ERROR - at 16:20:\n    # For each i from N-1 down to 0\n    for i in range(N-1, -1, -1):\n        # For each j from i+1 to N-1, process in blocks\n        for j_start in range(i+1, N, BLOCK_SIZE):\n            # Calculate block end\n            j_end = min(j_start + BLOCK_SIZE, N)\n\n            # Process each j in the block\n            for j_idx in range(j_start, j_end):\n                j = j_idx\n                if j <= i:\n                    continue\n                    ^\nunsupported AST node type: Continue\nSome tests FAILED!\n"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "seidel_2d": {
     "triton_generated": true,
@@ -212,8 +165,8 @@
     "attempts": 5,
     "final_error": {
       "type": "numerical",
-      "message": "max_error = 8.618799e-02",
-      "max_error": "8.618799e-02"
+      "message": "abs_error=2.585948e-02 rel_error=7.402124e-03",
+      "max_error": "2.585948e-02"
     }
   },
   "symm": {
@@ -225,11 +178,8 @@
   "syr2k": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 2,
-    "final_error": {
-      "type": "unknown",
-      "message": "  Test 1: ERROR - at 9:28:\ndef syr2k_kernel(A, B, C, alpha, beta, M, N, BLOCK_SIZE: tl.constexpr):\n    i = tl.program_id(0)\n\n    if i >= N:\n        return\n\n    # First loop: C[i][j] *= beta for j <= i\n    j_offsets = tl.arange(0, BLOCK_SIZE)\n    for j_block in range(0, triton.cdiv(i + 1, BLOCK_SIZE)):\n                            ^\nValueError('Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)')\n  Test 2: ERROR - at 9:28:\ndef syr2k_kernel(A, B, C, alpha, beta, M, N, BLOCK_SIZE: tl.constexpr):\n    i = tl.program_id(0)\n\n    if i >= N:\n        return\n\n    # First loop: C[i][j] *= beta for j <= i\n    j_offsets = tl.arange(0, BLOCK_SIZE)\n    for j_block in range(0, triton.cdiv(i + 1, BLOCK_SIZE)):\n                            ^\nValueError('Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)')\n  Test 3: ERROR - at 9:28:\ndef syr2k_kernel(A, B, C, alpha, beta, M, N, BLOCK_SIZE: tl.constexpr):\n    i = tl.program_id(0)\n\n    if i >= N:\n        return\n\n    # First loop: C[i][j] *= beta for j <= i\n    j_offsets = tl.arange(0, BLOCK_SIZE)\n    for j_block in range(0, triton.cdiv(i + 1, BLOCK_SIZE)):\n                            ^\nValueError('Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)')\nSome tests FAILED!\n"
-    }
+    "attempts": 1,
+    "final_error": null
   },
   "syrk": {
     "triton_generated": true,
@@ -239,13 +189,9 @@
   },
   "trisolv": {
     "triton_generated": true,
-    "test_passed": false,
-    "attempts": 5,
-    "final_error": {
-      "type": "numerical",
-      "message": "max_error = 3.739408e+31",
-      "max_error": "3.739408e+31"
-    }
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null
   },
   "trmm": {
     "triton_generated": true,

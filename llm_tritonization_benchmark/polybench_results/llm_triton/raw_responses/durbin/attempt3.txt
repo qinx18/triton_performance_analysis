@@ -1,29 +1,16 @@
 
-## PREVIOUS ATTEMPT FAILED
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-**Error type**: unknown
-**Error message**:
-```
-  Test 1: ERROR - at 3:14:
-def durbin_kernel(r_ptr, y_ptr, z_ptr, N):
-    BLOCK_SIZE = 128
-    offsets = tl.arange(0, BLOCK_SIZE)
-              ^
-  Test 2: ERROR - at 3:14:
-def durbin_kernel(r_ptr, y_ptr, z_ptr, N):
-    BLOCK_SIZE = 128
-    offsets = tl.arange(0, BLOCK_SIZE)
-              ^
-  Test 3: ERROR - at 3:14:
-def durbin_kernel(r_ptr, y_ptr, z_ptr, N):
-    BLOCK_SIZE = 128
-    offsets = tl.arange(0, BLOCK_SIZE)
-              ^
-Some tests FAILED!
+Your last attempt produced incorrect numerical results.
 
-```
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 3.292179e-02
 
-Please fix the error.
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns (row-major vs column-major)
+- Missing or incorrect operations
+- Off-by-one errors
 
 ## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
@@ -32,62 +19,69 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def durbin_kernel(r_ptr, y_ptr, z_ptr, N):
-    BLOCK_SIZE = 128
+def durbin_kernel(r_ptr, y_ptr, z_ptr, N, BLOCK_SIZE: tl.constexpr):
+    # Initialize
+    r_0 = tl.load(r_ptr)
+    alpha = -r_0
+    tl.store(y_ptr, alpha)
+    beta = 1.0
+    
     offsets = tl.arange(0, BLOCK_SIZE)
     
-    # Initialize
-    y_0 = tl.load(r_ptr)
-    tl.store(y_ptr, -y_0)
-    
-    beta = 1.0
-    alpha = -y_0
-    
-    # Sequential k loop
+    # Sequential loop over k
     for k in range(1, N):
         # Update beta
         beta = (1.0 - alpha * alpha) * beta
         
-        # Compute sum with parallel reduction
+        # Compute sum = sum(r[k-i-1]*y[i] for i in range(k))
         sum_val = 0.0
-        
         for block_start in range(0, k, BLOCK_SIZE):
-            current_offsets = block_start + offsets
-            mask = current_offsets < k
+            i_offsets = block_start + offsets
+            mask = i_offsets < k
             
-            # Load r[k-i-1] and y[i]
-            r_indices = k - current_offsets - 1
+            r_indices = k - i_offsets - 1
+            y_indices = i_offsets
+            
             r_vals = tl.load(r_ptr + r_indices, mask=mask, other=0.0)
-            y_vals = tl.load(y_ptr + current_offsets, mask=mask, other=0.0)
+            y_vals = tl.load(y_ptr + y_indices, mask=mask, other=0.0)
             
-            # Accumulate sum
-            products = r_vals * y_vals
-            sum_val += tl.sum(tl.where(mask, products, 0.0))
+            products = tl.where(mask, r_vals * y_vals, 0.0)
+            sum_val += tl.sum(products)
         
         # Update alpha
         r_k = tl.load(r_ptr + k)
         alpha = -(r_k + sum_val) / beta
         
-        # Update z and y arrays in parallel
+        # Compute z[i] = y[i] + alpha*y[k-i-1] for i in range(k)
         for block_start in range(0, k, BLOCK_SIZE):
-            current_offsets = block_start + offsets
-            mask = current_offsets < k
+            i_offsets = block_start + offsets
+            mask = i_offsets < k
             
-            # z[i] = y[i] + alpha*y[k-i-1]
-            y_i = tl.load(y_ptr + current_offsets, mask=mask, other=0.0)
-            y_k_minus_i = tl.load(y_ptr + (k - current_offsets - 1), mask=mask, other=0.0)
-            z_vals = y_i + alpha * y_k_minus_i
-            tl.store(z_ptr + current_offsets, z_vals, mask=mask)
+            y_forward_indices = i_offsets
+            y_backward_indices = k - i_offsets - 1
             
-            # y[i] = z[i]
-            tl.store(y_ptr + current_offsets, z_vals, mask=mask)
+            y_forward = tl.load(y_ptr + y_forward_indices, mask=mask, other=0.0)
+            y_backward = tl.load(y_ptr + y_backward_indices, mask=mask, other=0.0)
+            
+            z_vals = y_forward + alpha * y_backward
+            tl.store(z_ptr + i_offsets, z_vals, mask=mask)
+        
+        # Copy z to y: y[i] = z[i] for i in range(k)
+        for block_start in range(0, k, BLOCK_SIZE):
+            i_offsets = block_start + offsets
+            mask = i_offsets < k
+            
+            z_vals = tl.load(z_ptr + i_offsets, mask=mask, other=0.0)
+            tl.store(y_ptr + i_offsets, z_vals, mask=mask)
         
         # Set y[k] = alpha
         tl.store(y_ptr + k, alpha)
 
 def durbin_triton(r, y, z, N):
+    BLOCK_SIZE = 64
+    
     grid = (1,)
-    durbin_kernel[grid](r, y, z, N)
+    durbin_kernel[grid](r, y, z, N, BLOCK_SIZE)
 ```
 
 
@@ -166,11 +160,9 @@ y[0] = -r[0];
 **Loop dimensions**: ['k', 'i']
 **Triangular bounds**: i < k
 
-- Parallelize `k`, sequential `i`: VALID
-  - Data dependencies detected - verify k is safe to parallelize
-
 - Parallelize `i`, sequential `k`: VALID
-  - Data dependencies detected - verify i is safe to parallelize
+
+- Parallelize `k`, sequential `i`: VALID
 
 
 ## Array Information:

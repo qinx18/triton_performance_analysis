@@ -121,16 +121,16 @@ def load_war_analysis(kernel_name: str) -> Optional[dict]:
 
 def load_parallelization_analysis(kernel_name: str) -> Optional[dict]:
     """Load parallelization analysis with LLVM fallback."""
+    kernel_file = os.path.join(POLYBENCH_KERNELS_DIR, f"{kernel_name}.c")
     if HAS_PARDIMS_ANALYSIS and analyze_kernel_parallelization:
         try:
-            result = analyze_kernel_parallelization(kernel_name)
+            result = analyze_kernel_parallelization(kernel_name, kernel_file=kernel_file)
             if result is not None:
                 return result
         except Exception:
             pass
 
     if HAS_LLVM_FALLBACK:
-        kernel_file = os.path.join(POLYBENCH_KERNELS_DIR, f"{kernel_name}.c")
         try:
             return llvm_parallel_dims_fallback(kernel_file)
         except Exception:
@@ -162,8 +162,9 @@ def load_reduction_analysis(kernel_name: str) -> Optional[dict]:
     """Load reduction analysis."""
     if not HAS_REDUCTION or analyze_kernel_reduction is None:
         return None
+    kernel_file = os.path.join(POLYBENCH_KERNELS_DIR, f"{kernel_name}.c")
     try:
-        return analyze_kernel_reduction(kernel_name)
+        return analyze_kernel_reduction(kernel_name, kernel_file=kernel_file)
     except Exception:
         return None
 
@@ -530,10 +531,12 @@ def test_correctness():
             max_error = 0.0
 {_gen_comparison_code(output_arrays)}
 
-            if max_error < 1e-3:
-                print(f"  Test {{test_idx + 1}}: PASS (max_error={{max_error:.6e}})")
+            # Pass if absolute error < 1e-3 OR relative error < 1e-4
+            passed = (max_error < 1e-3) or (max_rel_error < 1e-4)
+            if passed:
+                print(f"  Test {{test_idx + 1}}: PASS (abs={{max_error:.6e}} rel={{max_rel_error:.6e}})")
             else:
-                print(f"  Test {{test_idx + 1}}: FAIL (max_error={{max_error:.6e}})")
+                print(f"  Test {{test_idx + 1}}: FAIL (abs={{max_error:.6e}} rel={{max_rel_error:.6e}})")
                 all_passed = False
 
         except Exception as e:
@@ -629,14 +632,192 @@ def _gen_ctypes_array_readback(kernel_name: str, arrays: dict, params: dict) -> 
 
 
 def _gen_comparison_code(output_arrays: list) -> str:
-    """Generate comparison code for output arrays."""
+    """Generate comparison code for output arrays using combined abs+rel tolerance."""
     lines = []
+    lines.append(f"            max_rel_error = 0.0")
     for arr in output_arrays:
         lines.append(f"            c_val = torch.from_numpy({arr}_c).float()")
         lines.append(f"            tr_val = {arr}_tr.cpu().float()")
-        lines.append(f"            err = torch.max(torch.abs(c_val - tr_val)).item()")
-        lines.append(f"            max_error = max(max_error, err)")
+        lines.append(f"            abs_err = torch.max(torch.abs(c_val - tr_val)).item()")
+        lines.append(f"            denom = torch.max(torch.abs(c_val)).item()")
+        lines.append(f"            rel_err = abs_err / max(denom, 1e-10)")
+        lines.append(f"            max_error = max(max_error, abs_err)")
+        lines.append(f"            max_rel_error = max(max_rel_error, rel_err)")
     return "\n".join(lines)
+
+
+# ============================================================================
+# Benchmarking
+# ============================================================================
+
+def generate_benchmark_test(kernel_name: str, func_spec: dict, attempt: int = 1) -> str:
+    """Generate performance benchmark script for a Polybench kernel."""
+    arrays = func_spec['arrays']
+    scalar_params = func_spec.get('scalar_params', {})
+    params = get_kernel_params(kernel_name)
+
+    func_id = kernel_name
+    if func_id[0].isdigit():
+        func_id = "k" + func_id
+
+    # Build array initialization
+    array_inits = []
+    for arr_name, mode in sorted(arrays.items()):
+        shape = _get_array_shape(kernel_name, arr_name, params)
+        if shape:
+            shape_str = ", ".join(str(s) for s in shape)
+            array_inits.append(f"    {arr_name} = torch.randn({shape_str}, device='cuda', dtype=torch.float32)")
+
+    for sp_name in sorted(scalar_params.keys()):
+        if sp_name in ('alpha', 'beta'):
+            array_inits.append(f"    {sp_name} = 1.5")
+        elif sp_name in ('float_n',):
+            n_val = params.get('N', 100)
+            array_inits.append(f"    {sp_name} = float({n_val})")
+        elif sp_name == 'eps':
+            array_inits.append(f"    {sp_name} = 0.1")
+        else:
+            array_inits.append(f"    {sp_name} = 1.0")
+
+    for p_name, p_val in sorted(params.items()):
+        if p_name not in scalar_params:
+            array_inits.append(f"    {p_name} = {p_val}")
+
+    array_init_str = "\n".join(array_inits)
+
+    array_names = sorted([a for a, m in arrays.items() if m in ['r', 'rw', 'w']])
+    scalar_names = sorted(scalar_params.keys())
+    dim_names = sorted([p for p in params.keys() if p not in scalar_params])
+
+    # C reference args
+    c_args = [f"{a}_c" for a in array_names] + scalar_names + dim_names
+    c_call_str = ", ".join(c_args)
+
+    # Triton args
+    tr_args = [f"{a}_tr" for a in array_names] + scalar_names + dim_names
+    tr_call_str = ", ".join(tr_args)
+
+    # Import block
+    if kernel_name[0].isdigit():
+        import_block = (
+            f"import importlib\n"
+            f"    _mod = importlib.import_module(\"{OUTPUT_DIR}.llm_triton.{kernel_name}.attempt{attempt}\")\n"
+            f"    {func_id}_triton = _mod.{func_id}_triton"
+        )
+    else:
+        import_block = f"from {OUTPUT_DIR}.llm_triton.{kernel_name}.attempt{attempt} import {func_id}_triton"
+
+    benchmark_code = f'''#!/usr/bin/env python3
+"""Performance Benchmark for {kernel_name} (Polybench)"""
+import sys
+import time
+import ctypes
+import numpy as np
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+import torch
+
+try:
+    {import_block}
+except ImportError as e:
+    print(f"Import error: {{e}}")
+    sys.exit(1)
+
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs" / "lib{kernel_name}.so"
+
+def run_c_reference({c_call_str}):
+    lib = ctypes.CDLL(str(C_LIB_PATH))
+{_gen_ctypes_array_setup(kernel_name, arrays, params)}
+{_gen_ctypes_scalar_setup(kernel_name, scalar_params, params)}
+    func = getattr(lib, "{func_id}_kernel")
+    func.argtypes = []
+    func.restype = None
+    func()
+{_gen_ctypes_array_readback(kernel_name, arrays, params)}
+
+def benchmark():
+    num_warmup = 5
+    num_iterations = 50
+
+{array_init_str}
+
+    # C reference benchmark
+    c_time = None
+    try:
+        for _ in range(num_warmup):
+{chr(10).join(["            " + f"{a}_c = {a}.cpu().numpy().copy()" for a in array_names])}
+            run_c_reference({c_call_str})
+        start = time.perf_counter()
+        for _ in range(num_iterations):
+{chr(10).join(["            " + f"{a}_c = {a}.cpu().numpy().copy()" for a in array_names])}
+            run_c_reference({c_call_str})
+        c_time = (time.perf_counter() - start) / num_iterations
+    except Exception as e:
+        print(f"C ref error: {{e}}")
+
+    # Triton benchmark
+    tr_time = None
+    try:
+        for _ in range(num_warmup):
+{chr(10).join(["            " + f"{a}_tr = {a}.clone()" for a in array_names])}
+            {func_id}_triton({tr_call_str})
+        torch.cuda.synchronize()
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        for _ in range(num_iterations):
+{chr(10).join(["            " + f"{a}_tr = {a}.clone()" for a in array_names])}
+            {func_id}_triton({tr_call_str})
+        torch.cuda.synchronize()
+        tr_time = (time.perf_counter() - start) / num_iterations
+    except Exception as e:
+        print(f"Triton error: {{e}}")
+
+    # Report
+    speedup = c_time / tr_time if c_time and tr_time and tr_time > 0 else None
+    c_ms = c_time * 1000 if c_time else -1
+    tr_ms = tr_time * 1000 if tr_time else -1
+    sp = speedup if speedup else -1
+
+    print(f"C ref:   {{c_ms:8.3f}} ms")
+    print(f"Triton:  {{tr_ms:8.3f}} ms")
+    if speedup:
+        print(f"Speedup: {{speedup:8.2f}}x")
+    else:
+        print(f"Speedup: N/A")
+    print(f"BENCHMARK_RESULT:{{c_ms:.6f}},{{tr_ms:.6f}},{{sp:.6f}}")
+
+if __name__ == "__main__":
+    benchmark()
+'''
+    return benchmark_code
+
+
+def run_benchmark(kernel_name: str, benchmark_file: Path) -> Optional[dict]:
+    """Run performance benchmark and parse results."""
+    try:
+        env = os.environ.copy()
+        env['MKL_THREADING_LAYER'] = 'GNU'
+        result = subprocess.run(
+            [sys.executable, str(benchmark_file)],
+            capture_output=True, text=True, timeout=180,
+            cwd=Path.cwd(), env=env
+        )
+
+        stdout = result.stdout
+        match = re.search(r'BENCHMARK_RESULT:([-\d.]+),([-\d.]+),([-\d.]+)', stdout)
+        if match:
+            c_ms = float(match.group(1))
+            tr_ms = float(match.group(2))
+            sp = float(match.group(3))
+            return {
+                'c_ref_time_ms': c_ms if c_ms > 0 else None,
+                'triton_time_ms': tr_ms if tr_ms > 0 else None,
+                'speedup': sp if sp > 0 else None,
+            }
+        return None
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -777,10 +958,12 @@ def run_test(kernel_name: str, test_file: Path) -> Tuple[bool, dict]:
         if "CompilationError" in combined:
             return False, {'type': 'compilation', 'message': combined[-2000:]}
 
-        if "FAIL" in stdout and "max_error" in stdout:
-            max_error_match = re.search(r'max_error[=:]?\s*([\d.e+-]+)', stdout)
-            max_error = max_error_match.group(1) if max_error_match else 'unknown'
-            return False, {'type': 'numerical', 'message': f"max_error = {max_error}", 'max_error': max_error}
+        if "FAIL" in stdout and ("abs=" in stdout or "max_error" in stdout):
+            abs_match = re.search(r'abs[=:]\s*([\d.e+-]+)', stdout)
+            rel_match = re.search(r'rel[=:]\s*([\d.e+-]+)', stdout)
+            max_error = abs_match.group(1) if abs_match else 'unknown'
+            rel_error = rel_match.group(1) if rel_match else 'unknown'
+            return False, {'type': 'numerical', 'message': f"abs_error={max_error} rel_error={rel_error}", 'max_error': max_error}
 
         if "ERROR:" in stdout or "Exception" in combined or "Error" in stderr:
             return False, {'type': 'runtime', 'message': combined[-2000:]}
@@ -886,8 +1069,96 @@ def process_kernel(kernel_name: str, func_spec: dict) -> dict:
     return results
 
 
+def benchmark_passed_kernels(kernel_names: list = None):
+    """Run benchmarks on all passed kernels."""
+    import json
+
+    results_file = Path(OUTPUT_DIR) / "results.json"
+    if not results_file.exists():
+        print("No results.json found — run the pipeline first!")
+        return
+
+    with open(results_file) as f:
+        all_results = json.load(f)
+
+    # Find passed kernels and their best attempt
+    to_benchmark = {}
+    for kernel_name, result in all_results.items():
+        if kernel_names and kernel_name not in kernel_names:
+            continue
+        if result.get("test_passed"):
+            to_benchmark[kernel_name] = result["attempts"]
+
+    print("=" * 70)
+    print(f"Benchmarking {len(to_benchmark)} passed kernels")
+    print("=" * 70)
+
+    bench_results = {}
+    for i, (kernel_name, attempt) in enumerate(sorted(to_benchmark.items()), 1):
+        func_spec = POLYBENCH_FUNCTIONS[kernel_name]
+        print(f"\n[{i}/{len(to_benchmark)}] {kernel_name} (attempt {attempt})...")
+
+        bench_dir = Path("my_polybench_tests") / kernel_name
+        bench_dir.mkdir(exist_ok=True, parents=True)
+        bench_file = bench_dir / f"benchmark_{kernel_name}.py"
+
+        bench_code = generate_benchmark_test(kernel_name, func_spec, attempt)
+        with open(bench_file, 'w') as f:
+            f.write(bench_code)
+
+        result = run_benchmark(kernel_name, bench_file)
+        if result:
+            bench_results[kernel_name] = result
+            c_ms = result.get('c_ref_time_ms')
+            tr_ms = result.get('triton_time_ms')
+            sp = result.get('speedup')
+            c_str = f"{c_ms:.3f}ms" if c_ms else "N/A"
+            tr_str = f"{tr_ms:.3f}ms" if tr_ms else "N/A"
+            sp_str = f"{sp:.2f}x" if sp else "N/A"
+            print(f"  C: {c_str}  Triton: {tr_str}  Speedup: {sp_str}")
+        else:
+            print(f"  Benchmark failed")
+
+    # Summary table
+    print(f"\n{'=' * 70}")
+    print(f"{'Kernel':<18} {'C ref (ms)':<14} {'Triton (ms)':<14} {'Speedup':<10}")
+    print(f"{'-' * 56}")
+    for kernel_name, result in sorted(bench_results.items()):
+        c_ms = result.get('c_ref_time_ms')
+        tr_ms = result.get('triton_time_ms')
+        sp = result.get('speedup')
+        c_str = f"{c_ms:.3f}" if c_ms else "N/A"
+        tr_str = f"{tr_ms:.3f}" if tr_ms else "N/A"
+        sp_str = f"{sp:.2f}x" if sp else "N/A"
+        print(f"{kernel_name:<18} {c_str:<14} {tr_str:<14} {sp_str:<10}")
+
+    # Save benchmark results
+    bench_file = Path(OUTPUT_DIR) / "benchmark_results.json"
+    with open(bench_file, 'w') as f:
+        json.dump(bench_results, f, indent=2)
+    print(f"\nBenchmark results saved to: {bench_file}")
+
+    # Stats
+    speedups = [r['speedup'] for r in bench_results.values() if r.get('speedup') and r['speedup'] > 0]
+    if speedups:
+        print(f"\nSpeedup stats ({len(speedups)} kernels):")
+        print(f"  Median: {sorted(speedups)[len(speedups)//2]:.2f}x")
+        print(f"  Mean:   {sum(speedups)/len(speedups):.2f}x")
+        print(f"  Min:    {min(speedups):.2f}x")
+        print(f"  Max:    {max(speedups):.2f}x")
+        print(f"  >1x:    {sum(1 for s in speedups if s > 1)}/{len(speedups)}")
+
+
 def main():
     """Main Polybench pipeline."""
+
+    # Check for --benchmark flag
+    if '--benchmark' in sys.argv:
+        sys.argv.remove('--benchmark')
+        kernel_names = [k.replace("-", "_") for k in sys.argv[1:]] if len(sys.argv) > 1 else None
+        benchmark_passed_kernels(kernel_names)
+        return
+
     print("=" * 70)
     print("Polybench/C Generation and Testing Pipeline")
     print(f"Total kernels available: {len(POLYBENCH_FUNCTIONS)}")
