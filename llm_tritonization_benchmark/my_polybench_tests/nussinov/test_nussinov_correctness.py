@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Correctness test for nussinov (Polybench) - attempt 4"""
+import sys
+import ctypes
+import numpy as np
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+import torch
+
+# Import Triton implementation
+try:
+    from polybench_results.llm_triton.nussinov.attempt4 import nussinov_triton
+except ImportError as e:
+    print(f"Import error: {e}")
+    sys.exit(1)
+
+# Load C reference
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs" / "libnussinov.so"
+if not C_LIB_PATH.exists():
+    print(f"C reference library not found: {C_LIB_PATH}")
+    sys.exit(1)
+
+def run_c_reference(seq_c, table_c, N):
+    """Run C reference kernel via ctypes."""
+    lib = ctypes.CDLL(str(C_LIB_PATH))
+
+    # Set global arrays in the .so
+    CType_seq = ctypes.c_float * (180)
+    c_arr_seq = CType_seq.in_dll(lib, 'seq')
+    src_seq = np.ascontiguousarray(seq_c, dtype=np.float32)
+    ctypes.memmove(c_arr_seq, src_seq.ctypes.data, src_seq.nbytes)
+    CType_table = ctypes.c_float * (180 * 180)
+    c_arr_table = CType_table.in_dll(lib, 'table')
+    src_table = np.ascontiguousarray(table_c, dtype=np.float32)
+    ctypes.memmove(c_arr_table, src_table.ctypes.data, src_table.nbytes)
+
+    # Set global scalars
+    pass
+
+    # Run kernel
+    func = getattr(lib, "nussinov_kernel")
+    func.argtypes = []
+    func.restype = None
+    func()
+
+    # Read back output arrays
+    CType_table = ctypes.c_float * (180 * 180)
+    c_arr_table = CType_table.in_dll(lib, 'table')
+    table_c[:] = np.frombuffer(c_arr_table, dtype=np.float32).reshape(180, 180).copy()
+
+def test_correctness():
+    """Test Triton vs C reference."""
+    num_tests = 3
+    all_passed = True
+
+    for test_idx in range(num_tests):
+        try:
+            # Initialize arrays
+            seq = torch.randn(180, device='cuda', dtype=torch.float32)
+            table = torch.randn(180, 180, device='cuda', dtype=torch.float32)
+            N = 180
+
+            # Clone for C reference
+            seq_c = seq.cpu().numpy().copy()
+            table_c = table.cpu().numpy().copy()
+
+            # Clone for Triton
+            seq_tr = seq.clone()
+            table_tr = table.clone()
+
+            # Run C reference
+            run_c_reference(seq_c, table_c, N)
+
+            # Run Triton
+            nussinov_triton(seq_tr, table_tr, N)
+
+            # Compare output arrays
+            max_error = 0.0
+            c_val = torch.from_numpy(table_c).float()
+            tr_val = table_tr.cpu().float()
+            err = torch.max(torch.abs(c_val - tr_val)).item()
+            max_error = max(max_error, err)
+
+            if max_error < 1e-3:
+                print(f"  Test {test_idx + 1}: PASS (max_error={max_error:.6e})")
+            else:
+                print(f"  Test {test_idx + 1}: FAIL (max_error={max_error:.6e})")
+                all_passed = False
+
+        except Exception as e:
+            print(f"  Test {test_idx + 1}: ERROR - {e}")
+            all_passed = False
+
+    if all_passed:
+        print("All tests PASSED!")
+    else:
+        print("Some tests FAILED!")
+    return all_passed
+
+if __name__ == "__main__":
+    test_correctness()
