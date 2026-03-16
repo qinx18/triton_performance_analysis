@@ -1,10 +1,123 @@
-# LLM-Generated Triton Implementation for fdtd_2d (Polybench)
-# Generated: 2026-03-16 22:29:58
-# Model: claude-sonnet-4-20250514
 
-================================================================================
-PROMPT:
-================================================================================
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+
+Your last attempt produced incorrect numerical results.
+
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 9.177856e+01
+
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns (row-major vs column-major)
+- Missing or incorrect operations
+- Off-by-one errors
+- Cloning input arrays instead of modifying them in-place (the test checks the original tensors)
+
+## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
+```python
+import triton
+import triton.language as tl
+import torch
+
+@triton.jit
+def fdtd_2d_kernel(_fict_ptr, ex_ptr, ey_ptr, hz_ptr, 
+                   NX: tl.constexpr, NY: tl.constexpr, TMAX: tl.constexpr,
+                   BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr):
+    pid_i = tl.program_id(0)
+    pid_j = tl.program_id(1)
+    
+    i_start = pid_i * BLOCK_I
+    j_start = pid_j * BLOCK_J
+    
+    i_offsets = i_start + tl.arange(0, BLOCK_I)
+    j_offsets = j_start + tl.arange(0, BLOCK_J)
+    
+    for t in range(TMAX):
+        # Step 1: ey[0][j] = _fict_[t]
+        if pid_i == 0:
+            fict_val = tl.load(_fict_ptr + t)
+            j_mask = j_offsets < NY
+            ey_idx = 0 * NY + j_offsets
+            tl.store(ey_ptr + ey_idx, fict_val, mask=j_mask)
+        
+        tl.debug_barrier()
+        
+        # Step 2: ey[i][j] = ey[i][j] - 0.5*(hz[i][j]-hz[i-1][j]) for i >= 1
+        if i_start >= 1:
+            i_mask = i_offsets < NX
+            j_mask = j_offsets < NY
+            mask = i_mask[:, None] & j_mask[None, :]
+            
+            ey_idx = i_offsets[:, None] * NY + j_offsets[None, :]
+            hz_idx = i_offsets[:, None] * NY + j_offsets[None, :]
+            hz_prev_idx = (i_offsets[:, None] - 1) * NY + j_offsets[None, :]
+            
+            ey_vals = tl.load(ey_ptr + ey_idx, mask=mask)
+            hz_vals = tl.load(hz_ptr + hz_idx, mask=mask)
+            hz_prev_vals = tl.load(hz_ptr + hz_prev_idx, mask=mask)
+            
+            new_ey = ey_vals - 0.5 * (hz_vals - hz_prev_vals)
+            tl.store(ey_ptr + ey_idx, new_ey, mask=mask)
+        
+        tl.debug_barrier()
+        
+        # Step 3: ex[i][j] = ex[i][j] - 0.5*(hz[i][j]-hz[i][j-1]) for j >= 1
+        if j_start >= 1:
+            i_mask = i_offsets < NX
+            j_mask = j_offsets < NY
+            mask = i_mask[:, None] & j_mask[None, :]
+            
+            ex_idx = i_offsets[:, None] * NY + j_offsets[None, :]
+            hz_idx = i_offsets[:, None] * NY + j_offsets[None, :]
+            hz_prev_idx = i_offsets[:, None] * NY + (j_offsets[None, :] - 1)
+            
+            ex_vals = tl.load(ex_ptr + ex_idx, mask=mask)
+            hz_vals = tl.load(hz_ptr + hz_idx, mask=mask)
+            hz_prev_vals = tl.load(hz_ptr + hz_prev_idx, mask=mask)
+            
+            new_ex = ex_vals - 0.5 * (hz_vals - hz_prev_vals)
+            tl.store(ex_ptr + ex_idx, new_ex, mask=mask)
+        
+        tl.debug_barrier()
+        
+        # Step 4: hz[i][j] = hz[i][j] - 0.7*(ex[i][j+1] - ex[i][j] + ey[i+1][j] - ey[i][j])
+        i_mask = i_offsets < (NX - 1)
+        j_mask = j_offsets < (NY - 1)
+        mask = i_mask[:, None] & j_mask[None, :]
+        
+        hz_idx = i_offsets[:, None] * NY + j_offsets[None, :]
+        ex_idx = i_offsets[:, None] * NY + j_offsets[None, :]
+        ex_next_idx = i_offsets[:, None] * NY + (j_offsets[None, :] + 1)
+        ey_idx = i_offsets[:, None] * NY + j_offsets[None, :]
+        ey_next_idx = (i_offsets[:, None] + 1) * NY + j_offsets[None, :]
+        
+        hz_vals = tl.load(hz_ptr + hz_idx, mask=mask)
+        ex_vals = tl.load(ex_ptr + ex_idx, mask=mask)
+        ex_next_vals = tl.load(ex_ptr + ex_next_idx, mask=mask)
+        ey_vals = tl.load(ey_ptr + ey_idx, mask=mask)
+        ey_next_vals = tl.load(ey_ptr + ey_next_idx, mask=mask)
+        
+        new_hz = hz_vals - 0.7 * (ex_next_vals - ex_vals + ey_next_vals - ey_vals)
+        tl.store(hz_ptr + hz_idx, new_hz, mask=mask)
+        
+        tl.debug_barrier()
+
+def fdtd_2d_triton(_fict_, ex, ey, hz, NX, NY, TMAX):
+    BLOCK_I = 16
+    BLOCK_J = 16
+    
+    grid_i = triton.cdiv(NX, BLOCK_I)
+    grid_j = triton.cdiv(NY, BLOCK_J)
+    
+    fdtd_2d_kernel[(grid_i, grid_j)](
+        _fict_, ex, ey, hz,
+        NX, NY, TMAX,
+        BLOCK_I, BLOCK_J
+    )
+```
+
+
+## ORIGINAL TASK:
 I have a Polybench/C kernel that I want to implement in Triton for GPU acceleration.
 
 ## Original C Code:
@@ -158,73 +271,5 @@ vals = tl.load(ptr + offsets, mask=mask)
 
 Provide ONLY the Python code, no additional explanation.
 
-================================================================================
-RESPONSE:
-================================================================================
-```python
-import triton
-import triton.language as tl
-import torch
-
-@triton.jit
-def fdtd_2d_kernel(_fict_ptr, ex_ptr, ey_ptr, hz_ptr, 
-                   NX: tl.constexpr, NY: tl.constexpr, TMAX: tl.constexpr):
-    
-    for t in range(TMAX):
-        # Phase 1: Set boundary conditions for ey[0][j]
-        j_offsets = tl.arange(0, NY)
-        ey_boundary_offsets = 0 * NY + j_offsets  # ey[0][j]
-        fict_val = tl.load(_fict_ptr + t)
-        tl.store(ey_ptr + ey_boundary_offsets, fict_val)
-        
-        # Phase 2: Update ey[i][j] for i >= 1
-        for i in range(1, NX):
-            ey_offsets = i * NY + j_offsets  # ey[i][j]
-            hz_offsets = i * NY + j_offsets  # hz[i][j]
-            hz_prev_offsets = (i - 1) * NY + j_offsets  # hz[i-1][j]
-            
-            ey_vals = tl.load(ey_ptr + ey_offsets)
-            hz_vals = tl.load(hz_ptr + hz_offsets)
-            hz_prev_vals = tl.load(hz_ptr + hz_prev_offsets)
-            
-            new_ey = ey_vals - 0.5 * (hz_vals - hz_prev_vals)
-            tl.store(ey_ptr + ey_offsets, new_ey)
-        
-        # Phase 3: Update ex[i][j] for j >= 1
-        i_offsets = tl.arange(0, NX)
-        for j in range(1, NY):
-            ex_offsets = i_offsets * NY + j  # ex[i][j]
-            hz_offsets = i_offsets * NY + j  # hz[i][j]
-            hz_prev_offsets = i_offsets * NY + (j - 1)  # hz[i][j-1]
-            
-            ex_vals = tl.load(ex_ptr + ex_offsets)
-            hz_vals = tl.load(hz_ptr + hz_offsets)
-            hz_prev_vals = tl.load(hz_ptr + hz_prev_offsets)
-            
-            new_ex = ex_vals - 0.5 * (hz_vals - hz_prev_vals)
-            tl.store(ex_ptr + ex_offsets, new_ex)
-        
-        # Phase 4: Update hz[i][j] for i < NX-1, j < NY-1
-        for i in range(NX - 1):
-            j_range_offsets = tl.arange(0, NY - 1)
-            
-            hz_offsets = i * NY + j_range_offsets  # hz[i][j]
-            ex_offsets = i * NY + (j_range_offsets + 1)  # ex[i][j+1]
-            ex_curr_offsets = i * NY + j_range_offsets  # ex[i][j]
-            ey_next_offsets = (i + 1) * NY + j_range_offsets  # ey[i+1][j]
-            ey_curr_offsets = i * NY + j_range_offsets  # ey[i][j]
-            
-            hz_vals = tl.load(hz_ptr + hz_offsets)
-            ex_next_vals = tl.load(ex_ptr + ex_offsets)
-            ex_curr_vals = tl.load(ex_ptr + ex_curr_offsets)
-            ey_next_vals = tl.load(ey_ptr + ey_next_offsets)
-            ey_curr_vals = tl.load(ey_ptr + ey_curr_offsets)
-            
-            new_hz = hz_vals - 0.7 * ((ex_next_vals - ex_curr_vals) + 
-                                      (ey_next_vals - ey_curr_vals))
-            tl.store(hz_ptr + hz_offsets, new_hz)
-
-def fdtd_2d_triton(_fict_, ex, ey, hz, NX, NY, TMAX):
-    grid = (1,)
-    fdtd_2d_kernel[grid](_fict_, ex, ey, hz, NX, NY, TMAX)
-```
+This is attempt 7 of 10. Please provide a corrected implementation.
+Provide ONLY the Python code, no additional explanation.

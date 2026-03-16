@@ -60,9 +60,9 @@
     "speedup": 7.400768
   },
   "doitgen": {
-    "c_ref_time_ms": 0.468373,
-    "triton_time_ms": 0.089853,
-    "speedup": 5.212668
+    "c_ref_time_ms": 0.382819,
+    "triton_time_ms": 0.075587,
+    "speedup": 5.0646
   },
   "durbin": {
     "c_ref_time_ms": 0.142448,
@@ -90,14 +90,14 @@
     "speedup": 0.609013
   },
   "jacobi_1d": {
-    "c_ref_time_ms": 0.16535,
-    "triton_time_ms": 0.053366,
-    "speedup": 3.098431
+    "c_ref_time_ms": 0.081864,
+    "triton_time_ms": 0.04113,
+    "speedup": 1.990382
   },
   "jacobi_2d": {
-    "c_ref_time_ms": 2.644578,
-    "triton_time_ms": 0.266493,
-    "speedup": 9.923643
+    "c_ref_time_ms": 0.602601,
+    "triton_time_ms": 1.025741,
+    "speedup": 0.587479
   },
   "ludcmp": {
     "c_ref_time_ms": 1.420596,
@@ -130,9 +130,9 @@
     "speedup": 1.085023
   },
   "fdtd_2d": {
-    "c_ref_time_ms": 0.762801,
-    "triton_time_ms": 0.150555,
-    "speedup": 5.066605
+    "c_ref_time_ms": 0.368025,
+    "triton_time_ms": 1.075719,
+    "speedup": 0.34212
   },
   "nussinov": {
     "c_ref_time_ms": 1.541969,

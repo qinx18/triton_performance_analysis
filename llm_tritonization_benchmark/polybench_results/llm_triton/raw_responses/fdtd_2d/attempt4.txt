@@ -1,10 +1,107 @@
-# LLM-Generated Triton Implementation for fdtd_2d (Polybench)
-# Generated: 2026-03-16 22:29:58
-# Model: claude-sonnet-4-20250514
 
-================================================================================
-PROMPT:
-================================================================================
+## PREVIOUS ATTEMPT HAS LOW PERFORMANCE - NEEDS BETTER PARALLELIZATION
+
+Your last attempt is CORRECT but has very low performance (speedup: 0.038132x).
+This indicates the code is NOT properly parallelized for GPU execution.
+
+**CRITICAL ISSUE**: Your kernel is likely running sequentially instead of in parallel.
+
+**Common parallelization mistakes to fix**:
+1. Using `grid=(1,)` with a single thread doing all work — this is SEQUENTIAL on GPU!
+2. Using scalar `tl.load`/`tl.store` in a Python for loop instead of vectorized block operations
+3. NOT using `tl.program_id(0)` to distribute work across GPU blocks
+4. Processing ALL elements in one block instead of splitting across multiple blocks
+
+**CORRECT parallel pattern** (each block handles different elements):
+```python
+@triton.jit
+def kernel(..., BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)                    # Get unique block ID
+    block_start = pid * BLOCK_SIZE            # Each block starts at different offset
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)  # Each block handles BLOCK_SIZE elements
+    mask = offsets < n_elements
+    # Load, compute, store for THIS block only - NO for loop over all elements!
+```
+
+**For 2D kernels**, parallelize the outer loop dimension:
+```python
+@triton.jit
+def kernel(..., N, BLOCK_SIZE: tl.constexpr):
+    row = tl.program_id(0)  # Each block handles one row
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    # Process row 'row' with vectorized column access
+```
+
+## LAST ATTEMPT (NEEDS PARALLELIZATION FIX):
+```python
+import triton
+import triton.language as tl
+import torch
+
+@triton.jit
+def fdtd_2d_kernel(_fict_ptr, ex_ptr, ey_ptr, hz_ptr, 
+                   NX: tl.constexpr, NY: tl.constexpr, TMAX: tl.constexpr):
+    
+    for t in range(TMAX):
+        # Phase 1: Set boundary conditions for ey[0][j]
+        for j in range(NY):
+            fict_val = tl.load(_fict_ptr + t)
+            tl.store(ey_ptr + j, fict_val)
+        
+        # Phase 2: Update ey[i][j] for i >= 1
+        for i in range(1, NX):
+            for j in range(NY):
+                ey_offset = i * NY + j
+                hz_offset = i * NY + j
+                hz_prev_offset = (i - 1) * NY + j
+                
+                ey_val = tl.load(ey_ptr + ey_offset)
+                hz_val = tl.load(hz_ptr + hz_offset)
+                hz_prev_val = tl.load(hz_ptr + hz_prev_offset)
+                
+                new_ey = ey_val - 0.5 * (hz_val - hz_prev_val)
+                tl.store(ey_ptr + ey_offset, new_ey)
+        
+        # Phase 3: Update ex[i][j] for j >= 1
+        for i in range(NX):
+            for j in range(1, NY):
+                ex_offset = i * NY + j
+                hz_offset = i * NY + j
+                hz_prev_offset = i * NY + (j - 1)
+                
+                ex_val = tl.load(ex_ptr + ex_offset)
+                hz_val = tl.load(hz_ptr + hz_offset)
+                hz_prev_val = tl.load(hz_ptr + hz_prev_offset)
+                
+                new_ex = ex_val - 0.5 * (hz_val - hz_prev_val)
+                tl.store(ex_ptr + ex_offset, new_ex)
+        
+        # Phase 4: Update hz[i][j] for i < NX-1, j < NY-1
+        for i in range(NX - 1):
+            for j in range(NY - 1):
+                hz_offset = i * NY + j
+                ex_next_offset = i * NY + (j + 1)
+                ex_curr_offset = i * NY + j
+                ey_next_offset = (i + 1) * NY + j
+                ey_curr_offset = i * NY + j
+                
+                hz_val = tl.load(hz_ptr + hz_offset)
+                ex_next_val = tl.load(ex_ptr + ex_next_offset)
+                ex_curr_val = tl.load(ex_ptr + ex_curr_offset)
+                ey_next_val = tl.load(ey_ptr + ey_next_offset)
+                ey_curr_val = tl.load(ey_ptr + ey_curr_offset)
+                
+                new_hz = hz_val - 0.7 * ((ex_next_val - ex_curr_val) + 
+                                        (ey_next_val - ey_curr_val))
+                tl.store(hz_ptr + hz_offset, new_hz)
+
+def fdtd_2d_triton(_fict_, ex, ey, hz, NX, NY, TMAX):
+    grid = (1,)
+    fdtd_2d_kernel[grid](_fict_, ex, ey, hz, NX, NY, TMAX)
+```
+
+
+## ORIGINAL TASK:
 I have a Polybench/C kernel that I want to implement in Triton for GPU acceleration.
 
 ## Original C Code:
@@ -158,73 +255,5 @@ vals = tl.load(ptr + offsets, mask=mask)
 
 Provide ONLY the Python code, no additional explanation.
 
-================================================================================
-RESPONSE:
-================================================================================
-```python
-import triton
-import triton.language as tl
-import torch
-
-@triton.jit
-def fdtd_2d_kernel(_fict_ptr, ex_ptr, ey_ptr, hz_ptr, 
-                   NX: tl.constexpr, NY: tl.constexpr, TMAX: tl.constexpr):
-    
-    for t in range(TMAX):
-        # Phase 1: Set boundary conditions for ey[0][j]
-        j_offsets = tl.arange(0, NY)
-        ey_boundary_offsets = 0 * NY + j_offsets  # ey[0][j]
-        fict_val = tl.load(_fict_ptr + t)
-        tl.store(ey_ptr + ey_boundary_offsets, fict_val)
-        
-        # Phase 2: Update ey[i][j] for i >= 1
-        for i in range(1, NX):
-            ey_offsets = i * NY + j_offsets  # ey[i][j]
-            hz_offsets = i * NY + j_offsets  # hz[i][j]
-            hz_prev_offsets = (i - 1) * NY + j_offsets  # hz[i-1][j]
-            
-            ey_vals = tl.load(ey_ptr + ey_offsets)
-            hz_vals = tl.load(hz_ptr + hz_offsets)
-            hz_prev_vals = tl.load(hz_ptr + hz_prev_offsets)
-            
-            new_ey = ey_vals - 0.5 * (hz_vals - hz_prev_vals)
-            tl.store(ey_ptr + ey_offsets, new_ey)
-        
-        # Phase 3: Update ex[i][j] for j >= 1
-        i_offsets = tl.arange(0, NX)
-        for j in range(1, NY):
-            ex_offsets = i_offsets * NY + j  # ex[i][j]
-            hz_offsets = i_offsets * NY + j  # hz[i][j]
-            hz_prev_offsets = i_offsets * NY + (j - 1)  # hz[i][j-1]
-            
-            ex_vals = tl.load(ex_ptr + ex_offsets)
-            hz_vals = tl.load(hz_ptr + hz_offsets)
-            hz_prev_vals = tl.load(hz_ptr + hz_prev_offsets)
-            
-            new_ex = ex_vals - 0.5 * (hz_vals - hz_prev_vals)
-            tl.store(ex_ptr + ex_offsets, new_ex)
-        
-        # Phase 4: Update hz[i][j] for i < NX-1, j < NY-1
-        for i in range(NX - 1):
-            j_range_offsets = tl.arange(0, NY - 1)
-            
-            hz_offsets = i * NY + j_range_offsets  # hz[i][j]
-            ex_offsets = i * NY + (j_range_offsets + 1)  # ex[i][j+1]
-            ex_curr_offsets = i * NY + j_range_offsets  # ex[i][j]
-            ey_next_offsets = (i + 1) * NY + j_range_offsets  # ey[i+1][j]
-            ey_curr_offsets = i * NY + j_range_offsets  # ey[i][j]
-            
-            hz_vals = tl.load(hz_ptr + hz_offsets)
-            ex_next_vals = tl.load(ex_ptr + ex_offsets)
-            ex_curr_vals = tl.load(ex_ptr + ex_curr_offsets)
-            ey_next_vals = tl.load(ey_ptr + ey_next_offsets)
-            ey_curr_vals = tl.load(ey_ptr + ey_curr_offsets)
-            
-            new_hz = hz_vals - 0.7 * ((ex_next_vals - ex_curr_vals) + 
-                                      (ey_next_vals - ey_curr_vals))
-            tl.store(hz_ptr + hz_offsets, new_hz)
-
-def fdtd_2d_triton(_fict_, ex, ey, hz, NX, NY, TMAX):
-    grid = (1,)
-    fdtd_2d_kernel[grid](_fict_, ex, ey, hz, NX, NY, TMAX)
-```
+This is attempt 4 of 10. Please provide a corrected implementation.
+Provide ONLY the Python code, no additional explanation.

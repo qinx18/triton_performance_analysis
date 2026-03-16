@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for jacobi_2d (Polybench)
-# Generated: 2026-03-06 06:26:30
+# Generated: 2026-03-16 22:29:15
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -60,20 +60,16 @@ for (t = 0; t < TSTEPS; t++)
 
 **Both `i` and `j` are freely parallelizable.** Use a 2D grid to parallelize both simultaneously for best GPU occupancy.
 
-**CRITICAL: Timestep/phase structure**: Use `grid=(1,)` with the `t` loop **INSIDE** the kernel. This puts everything in a single kernel launch, avoiding kernel launch overhead entirely.
-```python
-kernel[grid=(1,)](...)  # ONE kernel launch — t loop inside
-```
-With `grid=(1,)` (single thread block), the `t` loop inside the kernel is correct — there are no cross-CTA race conditions because there is only one CTA. All phases execute sequentially within each timestep, and the `t` loop iterates normally.
 
-**Inside the kernel**: Use 2D tiling to process all elements:
-```python
-for t in range(TSTEPS):
-    for row_start in range(0, N_ROWS, BLOCK_ROW):
-        for col_start in range(0, N_COLS, BLOCK_COL):
-            # vectorize within each tile
-```
-Process all phases for each timestep sequentially within the kernel. Vectorize the column dimension with `tl.arange(0, BLOCK_COL)`.
+## Common Mistakes to AVOID
+
+1. **NEVER use Python for-loops to launch many small kernels.** If you have sequential dims `r, q` and parallel dim `p`, do NOT write `for r in range(NR): for q in range(NQ): kernel[grid](...)`. Instead, fuse them: `grid = (NR * NQ * cdiv(NP, BLOCK),)` and inside the kernel compute `r = pid // (NQ * NP_blocks)`, `q = (pid // NP_blocks) % NQ`, `p_start = (pid % NP_blocks) * BLOCK`.
+
+2. **NEVER write parallel kernels then call a serial fallback.** If you write tiled/vectorized phase kernels (e.g., `phase1_kernel`, `phase2_kernel`), the host function MUST call them. Do NOT add a serial `grid=(1,)` wrapper that ignores the parallel implementations.
+
+3. **Use `tl.dot()` for ALL matrix multiply and outer-product accumulations.** NEVER use scalar triple-nested loops (`for i: for j: for k: acc += a[i,k]*b[k,j]`) inside a Triton kernel. Tile with BLOCK_SIZE and use `acc += tl.dot(a_tile, b_tile)`.
+
+4. **For stencil kernels with `grid=(1,)` guidance: NEVER use multi-block grids.** If the analysis says `grid=(1,)`, do NOT use `grid=(triton.cdiv(N, BLOCK),)`. Multiple CTAs cannot synchronize between phases — CTA 0 may read stale values written by CTA 1. Use `BLOCK = triton.next_power_of_2(N)` so one CTA covers ALL elements.
 
 
 ## Array Information:
@@ -153,69 +149,59 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def jacobi_2d_kernel(A, B, N: tl.constexpr, TSTEPS: tl.constexpr, 
-                     BLOCK_ROW: tl.constexpr, BLOCK_COL: tl.constexpr):
-    row_offsets = tl.arange(0, BLOCK_ROW)
-    col_offsets = tl.arange(0, BLOCK_COL)
+def jacobi_2d_kernel(A_ptr, B_ptr, N: tl.constexpr, TSTEPS: tl.constexpr, BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr):
+    pid_i = tl.program_id(0)
+    pid_j = tl.program_id(1)
+    
+    i_start = pid_i * BLOCK_I + 1
+    j_start = pid_j * BLOCK_J + 1
+    
+    i_offsets = tl.arange(0, BLOCK_I)
+    j_offsets = tl.arange(0, BLOCK_J)
     
     for t in range(TSTEPS):
-        # Phase 1: Update B from A
-        for row_start in range(1, N - 1, BLOCK_ROW):
-            for col_start in range(1, N - 1, BLOCK_COL):
-                rows = row_start + row_offsets
-                cols = col_start + col_offsets
-                
-                row_mask = rows < N - 1
-                col_mask = cols < N - 1
-                mask = row_mask[:, None] & col_mask[None, :]
-                
-                # Load stencil values
-                center_idx = rows[:, None] * N + cols[None, :]
-                left_idx = rows[:, None] * N + (cols[None, :] - 1)
-                right_idx = rows[:, None] * N + (cols[None, :] + 1)
-                up_idx = (rows[:, None] - 1) * N + cols[None, :]
-                down_idx = (rows[:, None] + 1) * N + cols[None, :]
-                
-                a_center = tl.load(A + center_idx, mask=mask)
-                a_left = tl.load(A + left_idx, mask=mask)
-                a_right = tl.load(A + right_idx, mask=mask)
-                a_up = tl.load(A + up_idx, mask=mask)
-                a_down = tl.load(A + down_idx, mask=mask)
-                
-                result = 0.2 * (a_center + a_left + a_right + a_down + a_up)
-                tl.store(B + center_idx, result, mask=mask)
+        # First phase: update B from A
+        i_indices = i_start + i_offsets
+        j_indices = j_start + j_offsets[:, None]
         
-        # Phase 2: Update A from B
-        for row_start in range(1, N - 1, BLOCK_ROW):
-            for col_start in range(1, N - 1, BLOCK_COL):
-                rows = row_start + row_offsets
-                cols = col_start + col_offsets
-                
-                row_mask = rows < N - 1
-                col_mask = cols < N - 1
-                mask = row_mask[:, None] & col_mask[None, :]
-                
-                # Load stencil values
-                center_idx = rows[:, None] * N + cols[None, :]
-                left_idx = rows[:, None] * N + (cols[None, :] - 1)
-                right_idx = rows[:, None] * N + (cols[None, :] + 1)
-                up_idx = (rows[:, None] - 1) * N + cols[None, :]
-                down_idx = (rows[:, None] + 1) * N + cols[None, :]
-                
-                b_center = tl.load(B + center_idx, mask=mask)
-                b_left = tl.load(B + left_idx, mask=mask)
-                b_right = tl.load(B + right_idx, mask=mask)
-                b_up = tl.load(B + up_idx, mask=mask)
-                b_down = tl.load(B + down_idx, mask=mask)
-                
-                result = 0.2 * (b_center + b_left + b_right + b_down + b_up)
-                tl.store(A + center_idx, result, mask=mask)
+        i_mask = i_indices < N - 1
+        j_mask = j_indices < N - 1
+        mask = i_mask[None, :] & j_mask
+        
+        # Load A values for stencil computation
+        center_idx = i_indices[None, :] * N + j_indices
+        left_idx = i_indices[None, :] * N + (j_indices - 1)
+        right_idx = i_indices[None, :] * N + (j_indices + 1)
+        up_idx = (i_indices[None, :] - 1) * N + j_indices
+        down_idx = (i_indices[None, :] + 1) * N + j_indices
+        
+        a_center = tl.load(A_ptr + center_idx, mask=mask, other=0.0)
+        a_left = tl.load(A_ptr + left_idx, mask=mask, other=0.0)
+        a_right = tl.load(A_ptr + right_idx, mask=mask, other=0.0)
+        a_up = tl.load(A_ptr + up_idx, mask=mask, other=0.0)
+        a_down = tl.load(A_ptr + down_idx, mask=mask, other=0.0)
+        
+        b_new = 0.2 * (a_center + a_left + a_right + a_up + a_down)
+        tl.store(B_ptr + center_idx, b_new, mask=mask)
+        
+        # Second phase: update A from B
+        b_center = tl.load(B_ptr + center_idx, mask=mask, other=0.0)
+        b_left = tl.load(B_ptr + left_idx, mask=mask, other=0.0)
+        b_right = tl.load(B_ptr + right_idx, mask=mask, other=0.0)
+        b_up = tl.load(B_ptr + up_idx, mask=mask, other=0.0)
+        b_down = tl.load(B_ptr + down_idx, mask=mask, other=0.0)
+        
+        a_new = 0.2 * (b_center + b_left + b_right + b_up + b_down)
+        tl.store(A_ptr + center_idx, a_new, mask=mask)
 
 def jacobi_2d_triton(A, B, N, TSTEPS):
-    BLOCK_ROW = 16
-    BLOCK_COL = 16
+    BLOCK_I = 32
+    BLOCK_J = 32
     
-    jacobi_2d_kernel[(1,)](
-        A, B, N, TSTEPS, BLOCK_ROW, BLOCK_COL
+    grid_i = triton.cdiv(N - 2, BLOCK_I)
+    grid_j = triton.cdiv(N - 2, BLOCK_J)
+    
+    jacobi_2d_kernel[(grid_i, grid_j)](
+        A, B, N, TSTEPS, BLOCK_I, BLOCK_J
     )
 ```

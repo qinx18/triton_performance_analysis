@@ -120,9 +120,9 @@
     "attempts": 1,
     "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.468373,
-      "triton_time_ms": 0.089853,
-      "speedup": 5.212668
+      "c_ref_time_ms": 0.382819,
+      "triton_time_ms": 0.075587,
+      "speedup": 5.0646
     },
     "final_attempt": 1
   },
@@ -145,14 +145,18 @@
   "fdtd_2d": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
-    "benchmark": {
-      "c_ref_time_ms": 0.762801,
-      "triton_time_ms": 0.150555,
-      "speedup": 5.066605
+    "attempts": 8,
+    "final_error": {
+      "type": "numerical",
+      "message": "abs_error=9.177856e+01 rel_error=1.759557e+01",
+      "max_error": "9.177856e+01"
     },
-    "final_attempt": 1
+    "benchmark": {
+      "c_ref_time_ms": 0.368025,
+      "triton_time_ms": 1.075719,
+      "speedup": 0.34212
+    },
+    "final_attempt": 8
   },
   "floyd_warshall": {
     "triton_generated": true,
@@ -229,30 +233,30 @@
   "jacobi_1d": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 4,
-    "final_error": {
-      "type": "numerical",
-      "message": "abs_error=2.686736e+00 rel_error=5.414840e+00",
-      "max_error": "2.686736e+00"
-    },
+    "attempts": 2,
+    "final_error": null,
     "benchmark": {
-      "c_ref_time_ms": 0.16535,
-      "triton_time_ms": 0.053366,
-      "speedup": 3.098431
+      "c_ref_time_ms": 0.081864,
+      "triton_time_ms": 0.04113,
+      "speedup": 1.990382
     },
-    "final_attempt": 4
+    "final_attempt": 2
   },
   "jacobi_2d": {
     "triton_generated": true,
     "test_passed": true,
-    "attempts": 1,
-    "final_error": null,
-    "benchmark": {
-      "c_ref_time_ms": 2.644578,
-      "triton_time_ms": 0.266493,
-      "speedup": 9.923643
+    "attempts": 2,
+    "final_error": {
+      "type": "numerical",
+      "message": "abs_error=1.038288e+00 rel_error=3.345114e-01",
+      "max_error": "1.038288e+00"
     },
-    "final_attempt": 1
+    "benchmark": {
+      "c_ref_time_ms": 0.602601,
+      "triton_time_ms": 1.025741,
+      "speedup": 0.587479
+    },
+    "final_attempt": 2
   },
   "lu": {
     "triton_generated": true,

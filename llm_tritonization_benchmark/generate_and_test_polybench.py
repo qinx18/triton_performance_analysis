@@ -614,11 +614,10 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                         else:
                             _total_valid_dims = len(valid_opts)
 
-                        if _total_valid_dims >= 2:
-                            # 2D+ stencils (e.g., jacobi_2d, fdtd_2d, heat_3d): multi-CTA
-                            # approach. Single CTA is catastrophic at large sizes (e.g., N=720
-                            # → 500 tiles iterated sequentially). Kernel launch overhead from
-                            # the Python t-loop is negligible compared to parallelism gain.
+                        # At large sizes (8x+), 2D stencils benefit from multi-CTA;
+                        # at small sizes (1x), grid=(1,) avoids launch overhead.
+                        _stencil_multi_cta_threshold = 2 if SIZE_SCALE >= 4 else 3
+                        if _total_valid_dims >= _stencil_multi_cta_threshold:
                             section += f"\n**CRITICAL: Timestep/phase structure**: The `{t_dim}` loop must be in "
                             section += "**Python host code**, NOT inside the Triton kernel.\n"
                             section += f"Do NOT put `for {t_dim} in range(...)` inside the Triton kernel — there is no "

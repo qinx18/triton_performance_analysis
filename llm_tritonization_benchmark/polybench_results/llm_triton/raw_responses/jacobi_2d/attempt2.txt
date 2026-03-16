@@ -1,86 +1,79 @@
 
-## PREVIOUS ATTEMPT FAILED - MISSING tl.debug_barrier()
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your code will produce WRONG NUMERICAL RESULTS because it is missing `tl.debug_barrier()` calls.
+Your last attempt produced incorrect numerical results.
 
-**Root cause**: In a single-CTA stencil kernel (`grid=(1,)`), vectorized `tl.store()` writes go to
-L1 cache. A subsequent `tl.load()` from overlapping addresses reads STALE cache data unless
-`tl.debug_barrier()` is inserted between the store and load.
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 1.038288e+00
 
-**YOU MUST add `tl.debug_barrier()` calls**. Without them, abs_error will be ~0.1-0.2.
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns (row-major vs column-major)
+- Missing or incorrect operations
+- Off-by-one errors
+- Cloning input arrays instead of modifying them in-place (the test checks the original tensors)
 
-Here is EXACTLY where to place them:
-```python
-for t in range(TSTEPS):
-    tl.debug_barrier()  # <-- ADD THIS
-    # Phase 1: load A, compute, store B
-    a_left = tl.load(A_ptr + offsets - 1, mask=mask)
-    ...
-    tl.store(B_ptr + offsets, b_val, mask=mask)
-
-    tl.debug_barrier()  # <-- ADD THIS (between Phase 1 stores and Phase 2 loads)
-
-    # Phase 2: load B, compute, store A
-    b_left = tl.load(B_ptr + offsets - 1, mask=mask)
-    ...
-    tl.store(A_ptr + offsets, a_val, mask=mask)
-```
-
-**DO NOT remove or skip `tl.debug_barrier()`.** It is NOT optional — it is REQUIRED for correctness.
-Keep `grid=(1,)` — do NOT switch to multi-block grid.
-
-## LAST ATTEMPT (MISSING BARRIERS — ADD THEM):
+## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
 import triton
 import triton.language as tl
 import torch
 
 @triton.jit
-def jacobi_1d_kernel(A_ptr, B_ptr, N: tl.constexpr, TSTEPS: tl.constexpr, BLOCK: tl.constexpr):
-    offsets = tl.arange(0, BLOCK)
-    mask = offsets < N
+def jacobi_2d_kernel(A_ptr, B_ptr, N: tl.constexpr, TSTEPS: tl.constexpr, BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr):
+    pid_i = tl.program_id(0)
+    pid_j = tl.program_id(1)
+    
+    i_start = pid_i * BLOCK_I + 1
+    j_start = pid_j * BLOCK_J + 1
+    
+    i_offsets = tl.arange(0, BLOCK_I)
+    j_offsets = tl.arange(0, BLOCK_J)
     
     for t in range(TSTEPS):
-        # Load A array
-        A_vals = tl.load(A_ptr + offsets, mask=mask)
+        # First phase: update B from A
+        i_indices = i_start + i_offsets
+        j_indices = j_start + j_offsets[:, None]
         
-        # First phase: B[i] = 0.33333 * (A[i-1] + A[i] + A[i+1]) for i in [1, N-2]
-        for block_start in range(1, N - 1, BLOCK):
-            current_offsets = block_start + tl.arange(0, BLOCK)
-            current_mask = current_offsets < (N - 1)
-            
-            # Load A[i-1], A[i], A[i+1]
-            A_left = tl.load(A_ptr + current_offsets - 1, mask=current_mask)
-            A_center = tl.load(A_ptr + current_offsets, mask=current_mask)
-            A_right = tl.load(A_ptr + current_offsets + 1, mask=current_mask)
-            
-            # Compute B[i]
-            B_vals = 0.33333 * (A_left + A_center + A_right)
-            
-            # Store B[i]
-            tl.store(B_ptr + current_offsets, B_vals, mask=current_mask)
+        i_mask = i_indices < N - 1
+        j_mask = j_indices < N - 1
+        mask = i_mask[None, :] & j_mask
         
-        # Second phase: A[i] = 0.33333 * (B[i-1] + B[i] + B[i+1]) for i in [1, N-2]
-        for block_start in range(1, N - 1, BLOCK):
-            current_offsets = block_start + tl.arange(0, BLOCK)
-            current_mask = current_offsets < (N - 1)
-            
-            # Load B[i-1], B[i], B[i+1]
-            B_left = tl.load(B_ptr + current_offsets - 1, mask=current_mask)
-            B_center = tl.load(B_ptr + current_offsets, mask=current_mask)
-            B_right = tl.load(B_ptr + current_offsets + 1, mask=current_mask)
-            
-            # Compute A[i]
-            A_vals = 0.33333 * (B_left + B_center + B_right)
-            
-            # Store A[i]
-            tl.store(A_ptr + current_offsets, A_vals, mask=current_mask)
+        # Load A values for stencil computation
+        center_idx = i_indices[None, :] * N + j_indices
+        left_idx = i_indices[None, :] * N + (j_indices - 1)
+        right_idx = i_indices[None, :] * N + (j_indices + 1)
+        up_idx = (i_indices[None, :] - 1) * N + j_indices
+        down_idx = (i_indices[None, :] + 1) * N + j_indices
+        
+        a_center = tl.load(A_ptr + center_idx, mask=mask, other=0.0)
+        a_left = tl.load(A_ptr + left_idx, mask=mask, other=0.0)
+        a_right = tl.load(A_ptr + right_idx, mask=mask, other=0.0)
+        a_up = tl.load(A_ptr + up_idx, mask=mask, other=0.0)
+        a_down = tl.load(A_ptr + down_idx, mask=mask, other=0.0)
+        
+        b_new = 0.2 * (a_center + a_left + a_right + a_up + a_down)
+        tl.store(B_ptr + center_idx, b_new, mask=mask)
+        
+        # Second phase: update A from B
+        b_center = tl.load(B_ptr + center_idx, mask=mask, other=0.0)
+        b_left = tl.load(B_ptr + left_idx, mask=mask, other=0.0)
+        b_right = tl.load(B_ptr + right_idx, mask=mask, other=0.0)
+        b_up = tl.load(B_ptr + up_idx, mask=mask, other=0.0)
+        b_down = tl.load(B_ptr + down_idx, mask=mask, other=0.0)
+        
+        a_new = 0.2 * (b_center + b_left + b_right + b_up + b_down)
+        tl.store(A_ptr + center_idx, a_new, mask=mask)
 
-def jacobi_1d_triton(A, B, N, TSTEPS):
-    BLOCK = triton.next_power_of_2(N)
+def jacobi_2d_triton(A, B, N, TSTEPS):
+    BLOCK_I = 32
+    BLOCK_J = 32
     
-    jacobi_1d_kernel[(1,)](
-        A, B, N, TSTEPS, BLOCK
+    grid_i = triton.cdiv(N - 2, BLOCK_I)
+    grid_j = triton.cdiv(N - 2, BLOCK_J)
+    
+    jacobi_2d_kernel[(grid_i, grid_j)](
+        A, B, N, TSTEPS, BLOCK_I, BLOCK_J
     )
 ```
 
@@ -93,20 +86,22 @@ I have a Polybench/C kernel that I want to implement in Triton for GPU accelerat
 #include <math.h>
 
 #define TSTEPS 40
-#define N 120
+#define N 90
 
-float A[N];
-float B[N];
+float A[N][N];
+float B[N][N];
 
-void jacobi_1d_kernel() {
-  int t, i;
+void jacobi_2d_kernel() {
+  int t, i, j;
 #pragma scop
   for (t = 0; t < TSTEPS; t++)
     {
       for (i = 1; i < N - 1; i++)
-	B[i] = 0.33333 * (A[i-1] + A[i] + A[i + 1]);
+	for (j = 1; j < N - 1; j++)
+	  B[i][j] = 0.2 * (A[i][j] + A[i][j-1] + A[i][1+j] + A[1+i][j] + A[i-1][j]);
       for (i = 1; i < N - 1; i++)
-	A[i] = 0.33333 * (B[i-1] + B[i] + B[i + 1]);
+	for (j = 1; j < N - 1; j++)
+	  A[i][j] = 0.2 * (B[i][j] + B[i][j-1] + B[i][1+j] + B[1+i][j] + B[i-1][j]);
     }
 #pragma endscop
 }
@@ -118,20 +113,26 @@ void jacobi_1d_kernel() {
 for (t = 0; t < TSTEPS; t++)
     {
       for (i = 1; i < N - 1; i++)
-	B[i] = 0.33333 * (A[i-1] + A[i] + A[i + 1]);
+	for (j = 1; j < N - 1; j++)
+	  B[i][j] = 0.2 * (A[i][j] + A[i][j-1] + A[i][1+j] + A[1+i][j] + A[i-1][j]);
       for (i = 1; i < N - 1; i++)
-	A[i] = 0.33333 * (B[i-1] + B[i] + B[i + 1]);
+	for (j = 1; j < N - 1; j++)
+	  A[i][j] = 0.2 * (B[i][j] + B[i][j-1] + B[i][1+j] + B[1+i][j] + B[i-1][j]);
     }
 ```
 
 ## Parallelization Analysis
 
-**Loop dimensions**: ['t', 'i']
-
-- Parallelize `i`, sequential `t`: VALID (vectorize within single CTA — MUST use grid=(1,), see below)
+**Loop dimensions**: ['t', 'i', 'j']
 
 - Parallelize `t`, sequential `i`: INVALID
-  - Cross-phase dependency: different loop bodies under `t` read/write the same arrays (e.g., phase 1 writes B, phase 2 reads B)
+  - `t` is a sequential context loop (e.g. timestep) — must remain sequential
+
+- Parallelize `i`, sequential `t`: VALID
+
+- Parallelize `j`, sequential `t`: VALID
+
+**Both `i` and `j` are freely parallelizable.** Use a 2D grid to parallelize both simultaneously for best GPU occupancy.
 
 
 ## Common Mistakes to AVOID
@@ -150,13 +151,13 @@ for (t = 0; t < TSTEPS; t++)
 - `B`: read-write
 
 ## Dimension Parameters (compile-time constants in C, runtime parameters in Triton):
-- `N` = 120
+- `N` = 90
 - `TSTEPS` = 40
 
 ## Requirements:
 Please generate a complete Triton implementation that:
-1. Includes a @triton.jit kernel function named `jacobi_1d_kernel`
-2. Includes a Python wrapper function named `jacobi_1d_triton`
+1. Includes a @triton.jit kernel function named `jacobi_2d_kernel`
+2. Includes a Python wrapper function named `jacobi_2d_triton`
 3. The wrapper accepts tensor arrays, scalar parameters, and dimension parameters
 4. Uses appropriate block sizes and memory access patterns
 5. Handles edge cases with masking
@@ -166,7 +167,7 @@ Please generate a complete Triton implementation that:
 
 ## REQUIRED function signature (use EXACTLY these parameter names):
 ```python
-def jacobi_1d_triton(A, B, N, TSTEPS):
+def jacobi_2d_triton(A, B, N, TSTEPS):
     ...  # kernel computation
 ```
 
