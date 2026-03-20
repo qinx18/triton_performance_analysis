@@ -3,54 +3,55 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def cholesky_kernel_col(A_ptr, N: tl.constexpr, stride: tl.constexpr, i: tl.constexpr):
-    j = tl.program_id(0)
+def cholesky_kernel(A_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Each program handles one row
+    i = tl.program_id(0)
     
-    if j >= i:
+    if i >= N:
         return
     
-    # Compute A[i][j] -= A[i][k] * A[j][k] for k < j
-    acc = 0.0
-    for k in range(j):
-        i_idx = i * stride + k
-        j_idx = j * stride + k
-        a_ik = tl.load(A_ptr + i_idx)
-        a_jk = tl.load(A_ptr + j_idx)
-        acc += a_ik * a_jk
+    # Process j < i (off-diagonal elements)
+    for j in range(i):
+        # Compute A[i][j] -= sum(A[i][k] * A[j][k] for k < j)
+        sum_val = 0.0
+        for k in range(j):
+            a_ik = tl.load(A_ptr + i * N + k)
+            a_jk = tl.load(A_ptr + j * N + k)
+            sum_val += a_ik * a_jk
+        
+        # Update A[i][j]
+        a_ij_offset = i * N + j
+        a_ij = tl.load(A_ptr + a_ij_offset)
+        a_ij -= sum_val
+        
+        # Divide by A[j][j]
+        a_jj = tl.load(A_ptr + j * N + j)
+        a_ij /= a_jj
+        
+        # Store updated A[i][j]
+        tl.store(A_ptr + a_ij_offset, a_ij)
     
-    # Load current A[i][j], subtract accumulation, then divide by A[j][j]
-    ij_idx = i * stride + j
-    jj_idx = j * stride + j
-    a_ij = tl.load(A_ptr + ij_idx)
-    a_jj = tl.load(A_ptr + jj_idx)
-    a_ij = (a_ij - acc) / a_jj
-    tl.store(A_ptr + ij_idx, a_ij)
-
-@triton.jit
-def cholesky_kernel_diag(A_ptr, N: tl.constexpr, stride: tl.constexpr, i: tl.constexpr):
-    if tl.program_id(0) != 0:
-        return
-    
-    # Compute A[i][i] -= A[i][k] * A[i][k] for k < i
-    acc = 0.0
+    # Process diagonal element A[i][i]
+    sum_val = 0.0
     for k in range(i):
-        ik_idx = i * stride + k
-        a_ik = tl.load(A_ptr + ik_idx)
-        acc += a_ik * a_ik
+        a_ik = tl.load(A_ptr + i * N + k)
+        sum_val += a_ik * a_ik
     
-    ii_idx = i * stride + i
-    a_ii = tl.load(A_ptr + ii_idx)
-    a_ii = tl.sqrt(a_ii - acc)
-    tl.store(A_ptr + ii_idx, a_ii)
+    # Update A[i][i]
+    a_ii_offset = i * N + i
+    a_ii = tl.load(A_ptr + a_ii_offset)
+    a_ii -= sum_val
+    a_ii = tl.sqrt(a_ii)
+    
+    # Store updated A[i][i]
+    tl.store(A_ptr + a_ii_offset, a_ii)
 
 def cholesky_triton(A, N):
-    stride = A.stride(0)
+    BLOCK_SIZE = 128
     
+    # Launch kernel with one program per row, process sequentially
     for i in range(N):
-        # Process off-diagonal elements A[i][j] for j < i in parallel
-        if i > 0:
-            grid = (i,)
-            cholesky_kernel_col[grid](A, N, stride, i)
-        
-        # Process diagonal element A[i][i]
-        cholesky_kernel_diag[(1,)](A, N, stride, i)
+        grid = (1,)
+        cholesky_kernel[grid](
+            A, N, BLOCK_SIZE
+        )

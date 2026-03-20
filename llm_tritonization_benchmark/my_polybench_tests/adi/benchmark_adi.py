@@ -15,7 +15,7 @@ except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libadi.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libadi.so"
 
 def run_c_reference(p_c, q_c, u_c, v_c, N, TSTEPS):
     lib = ctypes.CDLL(str(C_LIB_PATH))

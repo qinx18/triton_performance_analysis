@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.deriche.attempt4 import deriche_triton
+    from polybench_results_scale8x.llm_triton.deriche.attempt5 import deriche_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libderiche.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libderiche.so"
 
 def run_c_reference(imgIn_c, imgOut_c, y2_c, yy1_c, alpha, H, W):
     lib = ctypes.CDLL(str(C_LIB_PATH))

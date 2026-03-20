@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.floyd_warshall.attempt2 import floyd_warshall_triton
+    from polybench_results_scale8x.llm_triton.floyd_warshall.attempt1 import floyd_warshall_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libfloyd_warshall.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libfloyd_warshall.so"
 
 def run_c_reference(path_c, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

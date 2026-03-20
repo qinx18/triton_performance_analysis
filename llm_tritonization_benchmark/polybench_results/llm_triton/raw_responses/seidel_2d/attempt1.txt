@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for seidel_2d (Polybench)
-# Generated: 2026-03-06 06:30:08
+# Generated: 2026-03-18 17:10:48
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -68,6 +68,21 @@ This kernel has **no safely parallelizable dimensions**. Use `grid=(1,)` with se
 This kernel reads and writes the **same array** with neighbor dependencies. Use `grid=(1,)` with nested loops to process elements sequentially.
 
 
+## Common Mistakes to AVOID
+
+1. **NEVER use Python for-loops to launch many small kernels.** If you have sequential dims `r, q` and parallel dim `p`, do NOT write `for r in range(NR): for q in range(NQ): kernel[grid](...)`. Instead, fuse them: `grid = (NR * NQ * cdiv(NP, BLOCK),)` and inside the kernel compute `r = pid // (NQ * NP_blocks)`, `q = (pid // NP_blocks) % NQ`, `p_start = (pid % NP_blocks) * BLOCK`.
+
+2. **NEVER write parallel kernels then call a serial fallback.** If you write tiled/vectorized phase kernels (e.g., `phase1_kernel`, `phase2_kernel`), the host function MUST call them. Do NOT add a serial `grid=(1,)` wrapper that ignores the parallel implementations.
+
+3. **Use `tl.dot()` for ALL matrix multiply and outer-product accumulations.** NEVER use scalar triple-nested loops (`for i: for j: for k: acc += a[i,k]*b[k,j]`) inside a Triton kernel. Tile with BLOCK_SIZE and use `acc += tl.dot(a_tile, b_tile)`.
+
+4. **For stencil kernels with `grid=(1,)` guidance: NEVER use multi-block grids.** If the analysis says `grid=(1,)`, do NOT use `grid=(triton.cdiv(N, BLOCK),)`. Multiple CTAs cannot synchronize between phases — CTA 0 may read stale values written by CTA 1. Use `BLOCK = triton.next_power_of_2(N)` so one CTA covers ALL elements.
+
+5. **Cap BLOCK_SIZE at 128 for vectorized dimensions** (except `grid=(1,)` kernels). Use `BLOCK = min(triton.next_power_of_2(N), 128)` and iterate in chunks with `for j_start in range(0, N, BLOCK)`. Large BLOCK sizes (256+) waste registers and kill GPU occupancy. Use BLOCK_SIZE = 64 for inner reduction loops.
+
+6. **Minimize kernel launches.** Fuse phases that share the same grid dimension into a SINGLE kernel (e.g., forward pass + backward pass + combine on the same row). Each kernel launch adds ~5-10μs overhead that dominates at small problem sizes.
+
+
 ## Array Information:
 - `A`: read-write
 
@@ -114,16 +129,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -145,39 +164,27 @@ import torch
 
 @triton.jit
 def seidel_2d_kernel(A_ptr, N: tl.constexpr, TSTEPS: tl.constexpr):
+    # Sequential execution - no parallelization due to WAR dependencies
     for t in range(TSTEPS):
         for i in range(1, N - 1):
             for j in range(1, N - 1):
-                # Calculate linear indices for the 9 neighbors
-                idx_center = i * N + j
-                idx_up_left = (i - 1) * N + (j - 1)
-                idx_up = (i - 1) * N + j
-                idx_up_right = (i - 1) * N + (j + 1)
-                idx_left = i * N + (j - 1)
-                idx_right = i * N + (j + 1)
-                idx_down_left = (i + 1) * N + (j - 1)
-                idx_down = (i + 1) * N + j
-                idx_down_right = (i + 1) * N + (j + 1)
-                
-                # Load the 9 values
-                val_up_left = tl.load(A_ptr + idx_up_left)
-                val_up = tl.load(A_ptr + idx_up)
-                val_up_right = tl.load(A_ptr + idx_up_right)
-                val_left = tl.load(A_ptr + idx_left)
-                val_center = tl.load(A_ptr + idx_center)
-                val_right = tl.load(A_ptr + idx_right)
-                val_down_left = tl.load(A_ptr + idx_down_left)
-                val_down = tl.load(A_ptr + idx_down)
-                val_down_right = tl.load(A_ptr + idx_down_right)
+                # Load 9-point stencil values
+                val_nw = tl.load(A_ptr + (i - 1) * N + (j - 1))
+                val_n = tl.load(A_ptr + (i - 1) * N + j)
+                val_ne = tl.load(A_ptr + (i - 1) * N + (j + 1))
+                val_w = tl.load(A_ptr + i * N + (j - 1))
+                val_c = tl.load(A_ptr + i * N + j)
+                val_e = tl.load(A_ptr + i * N + (j + 1))
+                val_sw = tl.load(A_ptr + (i + 1) * N + (j - 1))
+                val_s = tl.load(A_ptr + (i + 1) * N + j)
+                val_se = tl.load(A_ptr + (i + 1) * N + (j + 1))
                 
                 # Compute average and store
-                result = (val_up_left + val_up + val_up_right +
-                         val_left + val_center + val_right +
-                         val_down_left + val_down + val_down_right) / 9.0
-                
-                tl.store(A_ptr + idx_center, result)
+                result = (val_nw + val_n + val_ne + val_w + val_c + val_e + val_sw + val_s + val_se) / 9.0
+                tl.store(A_ptr + i * N + j, result)
 
 def seidel_2d_triton(A, N, TSTEPS):
+    # Single CTA execution due to WAR dependencies
     grid = (1,)
     seidel_2d_kernel[grid](A, N, TSTEPS)
 ```

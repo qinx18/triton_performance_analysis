@@ -6,71 +6,52 @@ import torch
 def jacobi_2d_kernel(A_ptr, B_ptr, N: tl.constexpr, TSTEPS: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     
-    # Calculate total number of inner elements
-    inner_size = (N - 2) * (N - 2)
-    
-    # Calculate starting position for this block
     block_start = pid * BLOCK_SIZE
-    
-    # Create offsets for this block
     offsets = tl.arange(0, BLOCK_SIZE)
-    current_offsets = block_start + offsets
-    mask = current_offsets < inner_size
+    indices = block_start + offsets
     
     for t in range(TSTEPS):
-        # Convert linear index to 2D coordinates in inner region
-        valid_idx = tl.where(mask, current_offsets, 0)
-        inner_i = valid_idx // (N - 2)
-        inner_j = valid_idx % (N - 2)
+        # First phase: compute B from A
+        mask = indices < (N-2) * (N-2)
         
-        # Convert to actual array coordinates (add 1 for boundary offset)
-        i = inner_i + 1
-        j = inner_j + 1
+        i_coords = 1 + indices // (N-2)
+        j_coords = 1 + indices % (N-2)
         
-        # Calculate memory offsets for 5-point stencil
-        center_off = i * N + j
-        left_off = i * N + (j - 1)
-        right_off = i * N + (j + 1)
-        up_off = (i - 1) * N + j
-        down_off = (i + 1) * N + j
+        center_idx = i_coords * N + j_coords
+        left_idx = center_idx - 1
+        right_idx = center_idx + 1
+        top_idx = center_idx - N
+        bottom_idx = center_idx + N
         
-        # First phase: update B from A
-        a_center = tl.load(A_ptr + center_off, mask=mask, other=0.0)
-        a_left = tl.load(A_ptr + left_off, mask=mask, other=0.0)
-        a_right = tl.load(A_ptr + right_off, mask=mask, other=0.0)
-        a_up = tl.load(A_ptr + up_off, mask=mask, other=0.0)
-        a_down = tl.load(A_ptr + down_off, mask=mask, other=0.0)
+        center = tl.load(A_ptr + center_idx, mask=mask)
+        left = tl.load(A_ptr + left_idx, mask=mask)
+        right = tl.load(A_ptr + right_idx, mask=mask)
+        top = tl.load(A_ptr + top_idx, mask=mask)
+        bottom = tl.load(A_ptr + bottom_idx, mask=mask)
         
-        b_new = 0.2 * (a_center + a_left + a_right + a_up + a_down)
-        tl.store(B_ptr + center_off, b_new, mask=mask)
+        result_b = 0.2 * (center + left + right + top + bottom)
+        tl.store(B_ptr + center_idx, result_b, mask=mask)
         
-        # Wait for all B updates to complete
-        tl.device_print("debug", 0)
+        # Wait for all threads to complete phase 1
+        tl.debug_barrier()
         
-        # Second phase: update A from B  
-        b_center = tl.load(B_ptr + center_off, mask=mask, other=0.0)
-        b_left = tl.load(B_ptr + left_off, mask=mask, other=0.0)
-        b_right = tl.load(B_ptr + right_off, mask=mask, other=0.0)
-        b_up = tl.load(B_ptr + up_off, mask=mask, other=0.0)
-        b_down = tl.load(B_ptr + down_off, mask=mask, other=0.0)
+        # Second phase: compute A from B
+        center = tl.load(B_ptr + center_idx, mask=mask)
+        left = tl.load(B_ptr + left_idx, mask=mask)
+        right = tl.load(B_ptr + right_idx, mask=mask)
+        top = tl.load(B_ptr + top_idx, mask=mask)
+        bottom = tl.load(B_ptr + bottom_idx, mask=mask)
         
-        a_new = 0.2 * (b_center + b_left + b_right + b_up + b_down)
-        tl.store(A_ptr + center_off, a_new, mask=mask)
+        result_a = 0.2 * (center + left + right + top + bottom)
+        tl.store(A_ptr + center_idx, result_a, mask=mask)
         
-        # Wait for all A updates to complete
-        tl.device_print("debug", 0)
+        # Wait for all threads to complete phase 2
+        tl.debug_barrier()
 
 def jacobi_2d_triton(A, B, N, TSTEPS):
-    # Calculate number of inner elements to process
-    inner_size = (N - 2) * (N - 2)
+    BLOCK_SIZE = 256
+    grid_size = triton.cdiv((N-2) * (N-2), BLOCK_SIZE)
     
-    # Block size for computation
-    BLOCK_SIZE = 32
-    
-    # Calculate number of blocks needed
-    num_blocks = triton.cdiv(inner_size, BLOCK_SIZE)
-    
-    # Launch the kernel with single program launch
-    jacobi_2d_kernel[(1,)](
-        A, B, N, TSTEPS, inner_size
+    jacobi_2d_kernel[(grid_size,)](
+        A, B, N, TSTEPS, BLOCK_SIZE
     )

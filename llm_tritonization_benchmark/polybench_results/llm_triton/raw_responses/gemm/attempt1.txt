@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for gemm (Polybench)
-# Generated: 2026-03-06 14:38:11
+# Generated: 2026-03-18 17:02:14
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -60,6 +60,43 @@ for (i = 0; i < NI; i++) {
 
 **Both `j` and `i` are freely parallelizable.** Use a 2D grid to parallelize both simultaneously for best GPU occupancy.
 
+**Matrix Multiply Pattern (small problem size)**:
+With dimensions < 128, use a **1D row-parallel** strategy for maximum GPU occupancy:
+```python
+grid = (M,)  # one CTA per output row
+@triton.jit
+def matmul_kernel(C_ptr, A_ptr, B_ptr, M, N, K, alpha, beta, BLOCK_N: tl.constexpr):
+    row = tl.program_id(0)
+    # Scale existing C row by beta
+    col_offs = tl.arange(0, BLOCK_N)
+    mask = col_offs < N
+    c_row = tl.load(C_ptr + row * N + col_offs, mask=mask)
+    c_row = beta * c_row
+    # Accumulate A[row,:] @ B into c_row
+    for k in range(K):
+        a_val = tl.load(A_ptr + row * K + k)
+        b_row = tl.load(B_ptr + k * N + col_offs, mask=mask)
+        c_row += alpha * a_val * b_row
+    tl.store(C_ptr + row * N + col_offs, c_row, mask=mask)
+```
+Use `BLOCK_N = min(triton.next_power_of_2(N), 128)` to cover the row in chunks for good occupancy.
+This gives M CTAs (one per row) instead of ceil(M/32)*ceil(N/32) with 2D tiling.
+
+
+## Common Mistakes to AVOID
+
+1. **NEVER use Python for-loops to launch many small kernels.** If you have sequential dims `r, q` and parallel dim `p`, do NOT write `for r in range(NR): for q in range(NQ): kernel[grid](...)`. Instead, fuse them: `grid = (NR * NQ * cdiv(NP, BLOCK),)` and inside the kernel compute `r = pid // (NQ * NP_blocks)`, `q = (pid // NP_blocks) % NQ`, `p_start = (pid % NP_blocks) * BLOCK`.
+
+2. **NEVER write parallel kernels then call a serial fallback.** If you write tiled/vectorized phase kernels (e.g., `phase1_kernel`, `phase2_kernel`), the host function MUST call them. Do NOT add a serial `grid=(1,)` wrapper that ignores the parallel implementations.
+
+3. **Use `tl.dot()` for ALL matrix multiply and outer-product accumulations.** NEVER use scalar triple-nested loops (`for i: for j: for k: acc += a[i,k]*b[k,j]`) inside a Triton kernel. Tile with BLOCK_SIZE and use `acc += tl.dot(a_tile, b_tile)`.
+
+4. **For stencil kernels with `grid=(1,)` guidance: NEVER use multi-block grids.** If the analysis says `grid=(1,)`, do NOT use `grid=(triton.cdiv(N, BLOCK),)`. Multiple CTAs cannot synchronize between phases — CTA 0 may read stale values written by CTA 1. Use `BLOCK = triton.next_power_of_2(N)` so one CTA covers ALL elements.
+
+5. **Cap BLOCK_SIZE at 128 for vectorized dimensions** (except `grid=(1,)` kernels). Use `BLOCK = min(triton.next_power_of_2(N), 128)` and iterate in chunks with `for j_start in range(0, N, BLOCK)`. Large BLOCK sizes (256+) waste registers and kill GPU occupancy. Use BLOCK_SIZE = 64 for inner reduction loops.
+
+6. **Minimize kernel launches.** Fuse phases that share the same grid dimension into a SINGLE kernel (e.g., forward pass + backward pass + combine on the same row). Each kernel launch adds ~5-10μs overhead that dominates at small problem sizes.
+
 
 ## Array Information:
 - `A`: read-only
@@ -110,16 +147,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -137,55 +178,37 @@ RESPONSE:
 ```python
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def gemm_kernel(A, B, C, alpha, beta, NI: tl.constexpr, NJ: tl.constexpr, NK: tl.constexpr, BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr):
-    # Get program IDs
-    pid_i = tl.program_id(0)
-    pid_j = tl.program_id(1)
+def gemm_kernel(C_ptr, A_ptr, B_ptr, NI: tl.constexpr, NJ: tl.constexpr, NK: tl.constexpr, 
+                alpha, beta, BLOCK_N: tl.constexpr):
+    row = tl.program_id(0)
     
-    # Calculate offsets
-    i_offsets = pid_i * BLOCK_I + tl.arange(0, BLOCK_I)
-    j_offsets = pid_j * BLOCK_J + tl.arange(0, BLOCK_J)
+    # Load column offsets once
+    col_offs = tl.arange(0, BLOCK_N)
+    mask = col_offs < NJ
     
-    # Masks
-    i_mask = i_offsets < NI
-    j_mask = j_offsets < NJ
+    # Scale existing C row by beta
+    c_row = tl.load(C_ptr + row * NJ + col_offs, mask=mask)
+    c_row = beta * c_row
     
-    # Calculate C indices
-    c_indices = i_offsets[:, None] * NJ + j_offsets[None, :]
-    c_mask = i_mask[:, None] & j_mask[None, :]
-    
-    # Load and multiply C by beta
-    c_vals = tl.load(C + c_indices, mask=c_mask, other=0.0)
-    c_vals = c_vals * beta
-    
-    # Accumulate A * B
+    # Accumulate A[row,:] @ B into c_row
     for k in range(NK):
-        # Load A[i, k]
-        a_indices = i_offsets * NK + k
-        a_vals = tl.load(A + a_indices, mask=i_mask, other=0.0)
-        
-        # Load B[k, j]
-        b_indices = k * NJ + j_offsets
-        b_vals = tl.load(B + b_indices, mask=j_mask, other=0.0)
-        
-        # Compute alpha * A[i, k] * B[k, j] and accumulate
-        ab_vals = alpha * a_vals[:, None] * b_vals[None, :]
-        c_vals = c_vals + ab_vals
+        a_val = tl.load(A_ptr + row * NK + k)
+        b_row = tl.load(B_ptr + k * NJ + col_offs, mask=mask)
+        c_row += alpha * a_val * b_row
     
     # Store result
-    tl.store(C + c_indices, c_vals, mask=c_mask)
+    tl.store(C_ptr + row * NJ + col_offs, c_row, mask=mask)
 
 def gemm_triton(A, B, C, alpha, beta, NI, NJ, NK):
-    BLOCK_I = 16
-    BLOCK_J = 16
+    BLOCK_N = min(triton.next_power_of_2(NJ), 128)
+    grid = (NI,)
     
-    grid_i = triton.cdiv(NI, BLOCK_I)
-    grid_j = triton.cdiv(NJ, BLOCK_J)
-    
-    gemm_kernel[(grid_i, grid_j)](
-        A, B, C, alpha, beta, NI, NJ, NK, BLOCK_I, BLOCK_J
+    gemm_kernel[grid](
+        C, A, B,
+        NI, NJ, NK,
+        alpha, beta,
+        BLOCK_N
     )
 ```

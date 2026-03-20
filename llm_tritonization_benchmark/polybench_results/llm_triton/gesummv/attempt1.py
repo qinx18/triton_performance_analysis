@@ -3,56 +3,56 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def gesummv_kernel(A, B, tmp, x, y, alpha, beta, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for the i dimension (parallelized)
-    pid = tl.program_id(0)
+def gesummv_kernel(
+    A_ptr, B_ptr, tmp_ptr, x_ptr, y_ptr, 
+    alpha, beta,
+    N: tl.constexpr,
+    BLOCK_J: tl.constexpr,
+):
+    i = tl.program_id(0)
     
-    # Calculate the row index for this thread block
-    i = pid
+    if i >= N:
+        return
     
-    # Initialize tmp[i] and y[i] to 0
-    tmp_val = 0.0
-    y_val = 0.0
+    # Initialize accumulation values
+    tmp_acc = 0.0
+    y_acc = 0.0
     
-    # Sequential loop over j dimension with blocking
-    j_offsets = tl.arange(0, BLOCK_SIZE)
+    # Get j offsets once
+    j_offsets = tl.arange(0, BLOCK_J)
     
-    for j_start in range(0, N, BLOCK_SIZE):
-        current_j_offsets = j_start + j_offsets
-        mask = current_j_offsets < N
+    # Reduction over j dimension
+    for j_start in range(0, N, BLOCK_J):
+        j_idx = j_start + j_offsets
+        j_mask = j_idx < N
         
-        # Load x[j] values
-        x_vals = tl.load(x + current_j_offsets, mask=mask, other=0.0)
+        # Load A[i, j] and B[i, j]
+        A_offsets = i * N + j_idx
+        B_offsets = i * N + j_idx
         
-        # Load A[i][j] values
-        a_offsets = i * N + current_j_offsets
-        a_vals = tl.load(A + a_offsets, mask=mask, other=0.0)
+        A_vals = tl.load(A_ptr + A_offsets, mask=j_mask, other=0.0)
+        B_vals = tl.load(B_ptr + B_offsets, mask=j_mask, other=0.0)
+        x_vals = tl.load(x_ptr + j_idx, mask=j_mask, other=0.0)
         
-        # Load B[i][j] values
-        b_offsets = i * N + current_j_offsets
-        b_vals = tl.load(B + b_offsets, mask=mask, other=0.0)
-        
-        # Accumulate tmp[i] = A[i][j] * x[j] + tmp[i]
-        tmp_val += tl.sum(a_vals * x_vals)
-        
-        # Accumulate y[i] = B[i][j] * x[j] + y[i]
-        y_val += tl.sum(b_vals * x_vals)
+        # Accumulate tmp[i] and y[i]
+        tmp_acc += tl.sum(A_vals * x_vals)
+        y_acc += tl.sum(B_vals * x_vals)
     
     # Final computation: y[i] = alpha * tmp[i] + beta * y[i]
-    final_y = alpha * tmp_val + beta * y_val
+    final_y = alpha * tmp_acc + beta * y_acc
     
     # Store results
-    tl.store(tmp + i, tmp_val)
-    tl.store(y + i, final_y)
+    tl.store(tmp_ptr + i, tmp_acc)
+    tl.store(y_ptr + i, final_y)
 
 def gesummv_triton(A, B, tmp, x, y, alpha, beta, N):
-    # Define block size for the j dimension
-    BLOCK_SIZE = 32
+    BLOCK_J = 64
     
-    # Number of thread blocks (one per row i)
     grid = (N,)
     
-    # Launch kernel
     gesummv_kernel[grid](
-        A, B, tmp, x, y, alpha, beta, N, BLOCK_SIZE
+        A, B, tmp, x, y,
+        alpha, beta,
+        N=N,
+        BLOCK_J=BLOCK_J,
     )

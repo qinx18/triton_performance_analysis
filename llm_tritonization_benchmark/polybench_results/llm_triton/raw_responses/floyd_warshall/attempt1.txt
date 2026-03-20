@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for floyd_warshall (Polybench)
-# Generated: 2026-03-06 06:21:52
+# Generated: 2026-03-18 17:01:44
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -78,6 +78,21 @@ path_copy = path.clone()  # Read from copy, write to original
 **Both `i` and `j` are freely parallelizable.** Use a 2D grid to parallelize both simultaneously for best GPU occupancy.
 
 
+## Common Mistakes to AVOID
+
+1. **NEVER use Python for-loops to launch many small kernels.** If you have sequential dims `r, q` and parallel dim `p`, do NOT write `for r in range(NR): for q in range(NQ): kernel[grid](...)`. Instead, fuse them: `grid = (NR * NQ * cdiv(NP, BLOCK),)` and inside the kernel compute `r = pid // (NQ * NP_blocks)`, `q = (pid // NP_blocks) % NQ`, `p_start = (pid % NP_blocks) * BLOCK`.
+
+2. **NEVER write parallel kernels then call a serial fallback.** If you write tiled/vectorized phase kernels (e.g., `phase1_kernel`, `phase2_kernel`), the host function MUST call them. Do NOT add a serial `grid=(1,)` wrapper that ignores the parallel implementations.
+
+3. **Use `tl.dot()` for ALL matrix multiply and outer-product accumulations.** NEVER use scalar triple-nested loops (`for i: for j: for k: acc += a[i,k]*b[k,j]`) inside a Triton kernel. Tile with BLOCK_SIZE and use `acc += tl.dot(a_tile, b_tile)`.
+
+4. **For stencil kernels with `grid=(1,)` guidance: NEVER use multi-block grids.** If the analysis says `grid=(1,)`, do NOT use `grid=(triton.cdiv(N, BLOCK),)`. Multiple CTAs cannot synchronize between phases — CTA 0 may read stale values written by CTA 1. Use `BLOCK = triton.next_power_of_2(N)` so one CTA covers ALL elements.
+
+5. **Cap BLOCK_SIZE at 128 for vectorized dimensions** (except `grid=(1,)` kernels). Use `BLOCK = min(triton.next_power_of_2(N), 128)` and iterate in chunks with `for j_start in range(0, N, BLOCK)`. Large BLOCK sizes (256+) waste registers and kill GPU occupancy. Use BLOCK_SIZE = 64 for inner reduction loops.
+
+6. **Minimize kernel launches.** Fuse phases that share the same grid dimension into a SINGLE kernel (e.g., forward pass + backward pass + combine on the same row). Each kernel launch adds ~5-10μs overhead that dominates at small problem sizes.
+
+
 ## Array Information:
 - `path`: read-write
 
@@ -123,16 +138,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -153,49 +172,72 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def floyd_warshall_kernel(path_ptr, k: tl.constexpr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def floyd_warshall_kernel(path_ptr, N: tl.constexpr, BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr, k: tl.constexpr):
+    # Get program IDs for i and j dimensions
     pid_i = tl.program_id(0)
     pid_j = tl.program_id(1)
     
-    i_offsets = pid_i * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    j_offsets = pid_j * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    # Compute starting indices for this block
+    i_start = pid_i * BLOCK_I
+    j_start = pid_j * BLOCK_J
     
+    # Create offset arrays
+    i_offsets = i_start + tl.arange(0, BLOCK_I)
+    j_offsets = j_start + tl.arange(0, BLOCK_J)
+    
+    # Create masks for valid indices
     i_mask = i_offsets < N
     j_mask = j_offsets < N
     
-    # Load path[i, j] values
-    ij_ptrs = path_ptr + i_offsets[:, None] * N + j_offsets[None, :]
-    ij_mask = i_mask[:, None] & j_mask[None, :]
-    path_ij = tl.load(ij_ptrs, mask=ij_mask)
+    # Create 2D masks
+    mask = i_mask[:, None] & j_mask[None, :]
     
-    # Load path[i, k] values
-    ik_ptrs = path_ptr + i_offsets * N + k
-    path_ik = tl.load(ik_ptrs, mask=i_mask)
+    # Compute linear indices for path[i][j]
+    path_ij_offsets = i_offsets[:, None] * N + j_offsets[None, :]
     
-    # Load path[k, j] values
-    kj_ptrs = path_ptr + k * N + j_offsets
-    path_kj = tl.load(kj_ptrs, mask=j_mask)
+    # Load current path[i][j] values
+    path_ij = tl.load(path_ptr + path_ij_offsets, mask=mask, other=0.0)
+    
+    # Load path[i][k] values (broadcast across j dimension)
+    path_ik_offsets = i_offsets * N + k
+    i_mask_k = i_offsets < N
+    path_ik = tl.load(path_ptr + path_ik_offsets, mask=i_mask_k, other=0.0)
+    path_ik_broadcast = path_ik[:, None]
+    
+    # Load path[k][j] values (broadcast across i dimension)
+    path_kj_offsets = k * N + j_offsets
+    j_mask_k = j_offsets < N
+    path_kj = tl.load(path_ptr + path_kj_offsets, mask=j_mask_k, other=0.0)
+    path_kj_broadcast = path_kj[None, :]
     
     # Compute path[i][k] + path[k][j]
-    path_sum = path_ik[:, None] + path_kj[None, :]
+    path_sum = path_ik_broadcast + path_kj_broadcast
     
     # Update path[i][j] = min(path[i][j], path[i][k] + path[k][j])
-    path_new = tl.minimum(path_ij, path_sum)
+    new_path_ij = tl.minimum(path_ij, path_sum)
     
-    # Store results
-    tl.store(ij_ptrs, path_new, mask=ij_mask)
+    # Store the result
+    tl.store(path_ptr + path_ij_offsets, new_path_ij, mask=mask)
 
 def floyd_warshall_triton(path, N):
-    BLOCK_SIZE = 16
+    # Ensure path is contiguous
+    path = path.contiguous()
     
-    grid_size = triton.cdiv(N, BLOCK_SIZE)
-    grid = (grid_size, grid_size)
+    # Choose block sizes
+    BLOCK_I = min(triton.next_power_of_2(N), 32)
+    BLOCK_J = min(triton.next_power_of_2(N), 32)
     
+    # Compute grid dimensions
+    grid_i = triton.cdiv(N, BLOCK_I)
+    grid_j = triton.cdiv(N, BLOCK_J)
+    
+    # Sequential k loop with kernel launches
     for k in range(N):
-        floyd_warshall_kernel[grid](
+        floyd_warshall_kernel[(grid_i, grid_j)](
             path,
-            k=k,
             N=N,
-            BLOCK_SIZE=BLOCK_SIZE
+            BLOCK_I=BLOCK_I,
+            BLOCK_J=BLOCK_J,
+            k=k
         )
 ```

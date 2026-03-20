@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.trisolv.attempt1 import trisolv_triton
+    from polybench_results_scale8x.llm_triton.trisolv.attempt1 import trisolv_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libtrisolv.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libtrisolv.so"
 
 def run_c_reference(L_c, b_c, x_c, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

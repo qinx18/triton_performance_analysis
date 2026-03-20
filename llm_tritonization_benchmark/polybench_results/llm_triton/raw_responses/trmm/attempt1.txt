@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for trmm (Polybench)
-# Generated: 2026-03-06 13:42:06
+# Generated: 2026-03-18 17:12:47
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -74,6 +74,21 @@ Cloning is only needed if reads and writes to the same array happen **within a s
 - **RECOMMENDED**: Parallelize `j` — no WAR copies needed for any array
 
 
+## Common Mistakes to AVOID
+
+1. **NEVER use Python for-loops to launch many small kernels.** If you have sequential dims `r, q` and parallel dim `p`, do NOT write `for r in range(NR): for q in range(NQ): kernel[grid](...)`. Instead, fuse them: `grid = (NR * NQ * cdiv(NP, BLOCK),)` and inside the kernel compute `r = pid // (NQ * NP_blocks)`, `q = (pid // NP_blocks) % NQ`, `p_start = (pid % NP_blocks) * BLOCK`.
+
+2. **NEVER write parallel kernels then call a serial fallback.** If you write tiled/vectorized phase kernels (e.g., `phase1_kernel`, `phase2_kernel`), the host function MUST call them. Do NOT add a serial `grid=(1,)` wrapper that ignores the parallel implementations.
+
+3. **Use `tl.dot()` for ALL matrix multiply and outer-product accumulations.** NEVER use scalar triple-nested loops (`for i: for j: for k: acc += a[i,k]*b[k,j]`) inside a Triton kernel. Tile with BLOCK_SIZE and use `acc += tl.dot(a_tile, b_tile)`.
+
+4. **For stencil kernels with `grid=(1,)` guidance: NEVER use multi-block grids.** If the analysis says `grid=(1,)`, do NOT use `grid=(triton.cdiv(N, BLOCK),)`. Multiple CTAs cannot synchronize between phases — CTA 0 may read stale values written by CTA 1. Use `BLOCK = triton.next_power_of_2(N)` so one CTA covers ALL elements.
+
+5. **Cap BLOCK_SIZE at 128 for vectorized dimensions** (except `grid=(1,)` kernels). Use `BLOCK = min(triton.next_power_of_2(N), 128)` and iterate in chunks with `for j_start in range(0, N, BLOCK)`. Large BLOCK sizes (256+) waste registers and kill GPU occupancy. Use BLOCK_SIZE = 64 for inner reduction loops.
+
+6. **Minimize kernel launches.** Fuse phases that share the same grid dimension into a SINGLE kernel (e.g., forward pass + backward pass + combine on the same row). Each kernel launch adds ~5-10μs overhead that dominates at small problem sizes.
+
+
 ## Array Information:
 - `A`: read-only
 - `B`: read-write
@@ -121,16 +136,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -151,47 +170,39 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def trmm_kernel(A_ptr, B_ptr, alpha, M: tl.constexpr, N: tl.constexpr, BLOCK_J: tl.constexpr):
-    # Get program ID for j dimension
-    pid_j = tl.program_id(0)
+def trmm_kernel(A_ptr, B_ptr, alpha, M: tl.constexpr, N: tl.constexpr, BLOCK_N: tl.constexpr):
+    pid = tl.program_id(0)
+    j_start = pid * BLOCK_N
     
-    # Calculate j indices for this block
-    j_offsets = pid_j * BLOCK_J + tl.arange(0, BLOCK_J)
+    j_offsets = j_start + tl.arange(0, BLOCK_N)
     j_mask = j_offsets < N
     
-    # Sequential loop over i
     for i in range(M):
-        # Load B[i, j] values for this row
-        b_ptrs = B_ptr + i * N + j_offsets
-        b_vals = tl.load(b_ptrs, mask=j_mask, other=0.0)
+        # Load B[i, j_start:j_start+BLOCK_N]
+        b_offsets = i * N + j_offsets
+        b_vals = tl.load(B_ptr + b_offsets, mask=j_mask, other=0.0)
         
-        # Inner loop over k from i+1 to M-1
+        # Accumulate over k from i+1 to M-1
         for k in range(i + 1, M):
             # Load A[k, i] (scalar)
-            a_val = tl.load(A_ptr + k * M + i)
+            a_ki = tl.load(A_ptr + k * M + i)
             
-            # Load B[k, j] values
-            bk_ptrs = B_ptr + k * N + j_offsets
-            bk_vals = tl.load(bk_ptrs, mask=j_mask, other=0.0)
+            # Load B[k, j_start:j_start+BLOCK_N]
+            b_k_offsets = k * N + j_offsets
+            b_k_vals = tl.load(B_ptr + b_k_offsets, mask=j_mask, other=0.0)
             
-            # Accumulate: B[i][j] += A[k][i] * B[k][j]
-            b_vals += a_val * bk_vals
+            # Accumulate B[i, j] += A[k, i] * B[k, j]
+            b_vals += a_ki * b_k_vals
         
-        # Scale by alpha: B[i][j] = alpha * B[i][j]
+        # Scale by alpha
         b_vals = alpha * b_vals
         
-        # Store back to B[i, j]
-        tl.store(b_ptrs, b_vals, mask=j_mask)
+        # Store back B[i, j_start:j_start+BLOCK_N]
+        tl.store(B_ptr + b_offsets, b_vals, mask=j_mask)
 
 def trmm_triton(A, B, alpha, M, N):
-    # Choose block size for j dimension
-    BLOCK_J = 32
+    BLOCK_N = min(triton.next_power_of_2(N), 128)
+    grid = (triton.cdiv(N, BLOCK_N),)
     
-    # Calculate grid size
-    grid_j = triton.cdiv(N, BLOCK_J)
-    
-    # Launch kernel
-    trmm_kernel[(grid_j,)](
-        A, B, alpha, M, N, BLOCK_J
-    )
+    trmm_kernel[grid](A, B, alpha, M, N, BLOCK_N)
 ```

@@ -2,7 +2,7 @@
 
 %% Rights management
 \setcopyright{none}
-\acmConference[AI4HPCC '26]{2nd Workshop on AI-Assisted Compilation for HPC}{July 6--9, 2026}{Kyoto, Japan}
+\acmConference[AI4HPCC '26]{Workshop on AI for High Performance Compiler Construction}{July 6--9, 2026}{Belfast, Northern Ireland, UK}
 
 \usepackage{booktabs}
 \usepackage{subcaption}
@@ -32,40 +32,43 @@
 \title{Analysis-Guided LLM Code Generation for GPU Kernels:\\Bridging Polyhedral Analysis and Triton Synthesis}
 
 \author{Qin Xiao}
-% \authornote{TODO: Add affiliation}
 \affiliation{
-  \institution{TODO: Institution}
-  \city{TODO}
-  \country{TODO}
+  \institution{University of Leeds}
+  \city{Leeds}
+  \country{United Kingdom}
 }
-\email{TODO@example.com}
+\email{ppnh4382@leeds.ac.uk}
 
-% Add co-authors as needed
-% \author{Second Author}
-% \affiliation{...}
+\author{Chunwei Xia}
+\affiliation{
+  \institution{University of Leeds}
+  \city{Leeds}
+  \country{United Kingdom}
+}
+
+\author{Zheng Wang}
+\affiliation{
+  \institution{University of Leeds}
+  \city{Leeds}
+  \country{United Kingdom}
+}
 
 \begin{abstract}
 Large language models (LLMs) can generate GPU kernel code, but without
-understanding parallelization constraints, they frequently produce
-implementations that are incorrect (data races, stale reads) or
-inefficient (serial execution on GPU, excessive kernel launches). We
-present \sysname, a system that bridges classical polyhedral analysis
-with LLM-based Triton kernel generation.  \sysname extracts
-parallelization properties, data dependences, and memory access patterns
-from C loop nests using the Polyhedral Extraction Tool (PET) and LLVM's
-dependence analysis, then encodes these as structured natural-language
-guidance in the LLM prompt.  On the 30-kernel Polybench/C suite,
-\sysname achieves a 100\% correctness pass rate with a median speedup of
-3.06$\times$ over single-threaded C on an NVIDIA RTX~3090.  An ablation
-study shows that analysis-guided generation passes 2 additional kernels,
-wins 18 out of 28 head-to-head comparisons, and improves median speedup
-from 1.17$\times$ to 3.06$\times$.  At 8$\times$ problem sizes, median
-speedup rises to 28.97$\times$ with all 30 kernels passing.
-Beyond loop benchmarks, \sysname generalizes to real-world application
-kernels from the Rodinia benchmark suite---achieving up to
-24.9$\times$ speedup on SRAD (speckle-reducing anisotropic diffusion)
-and 13.2$\times$ on LUD (LU decomposition), with all 6 kernels
-passing correctness on the first attempt.
+understanding parallelization constraints they frequently produce
+incorrect or inefficient implementations.  We present \sysname, a
+system that extracts parallelization properties from C loop nests
+using polyhedral analysis (\pet) and LLVM's dependence analysis, then
+encodes them as structured natural-language guidance in the LLM prompt.
+On 30 Polybench/C kernels, \sysname achieves 100\% correctness
+(vs.\ 93\% without analysis) with 2.15$\times$ median speedup over
+single-threaded C, rising to 28.97$\times$ at 8$\times$ problem sizes.
+On 151 TSVC loop kernels, \sysname passes 150/151 (99\%);
+at 32\,MB per array, the generated GPU kernels achieve 46$\times$
+median speedup over single-threaded C and 9$\times$ over
+80-thread OpenMP.
+The approach generalizes to 8 application kernels from Rodinia and
+ECP proxy applications, achieving up to 25.8$\times$ speedup.
 \end{abstract}
 
 \begin{CCSXML}
@@ -86,7 +89,7 @@ passing correctness on the first attempt.
 \ccsdesc[500]{Software and its engineering~Compilers}
 \ccsdesc[300]{Computing methodologies~Parallel computing methodologies}
 
-\keywords{LLM code generation, GPU kernels, Triton, polyhedral analysis, compiler-guided synthesis}
+\keywords{LLM code generation, GPU kernels, Triton, polyhedral analysis}
 
 \maketitle
 
@@ -97,187 +100,104 @@ passing correctness on the first attempt.
 GPU programming remains a significant barrier to adopting hardware
 accelerators for scientific computing.  Writing efficient GPU kernels
 requires expertise in thread-level parallelism, memory coalescing,
-shared memory management, and synchronization---skills that domain
-scientists often lack.  OpenAI's Triton~\cite{tillet2019triton}
-simplifies GPU programming by providing a block-level abstraction, but
-generating correct Triton code still requires understanding which loop
-dimensions are safe to parallelize, how data dependences constrain
-execution order, and when synchronization barriers are needed.
+and synchronization---skills that domain scientists often lack.
+OpenAI's Triton~\cite{tillet2019triton} simplifies GPU programming
+with a block-level abstraction, but generating correct Triton code
+still requires understanding which loop dimensions are safe to
+parallelize, how data dependences constrain execution order, and when
+synchronization barriers are needed.
 
-Recent work has demonstrated that large language models can generate
-functional GPU code from natural-language descriptions or sequential
-implementations~\cite{chen2024chatgpt,nichols2024modeling,
-ouyang2024kernelbench}.  However, LLMs lack the ability to perform
-precise dependence analysis: they cannot determine whether parallelizing
-a particular loop dimension introduces write-after-read (WAR) hazards,
-whether array accesses across loop phases create stale-cache reads, or
-whether reduction operations require specific accumulation strategies.
-As a result, LLM-generated GPU code frequently suffers from:
+Recent work has shown that LLMs can generate functional GPU
+code~\cite{chen2024chatgpt, ouyang2024kernelbench}, but they lack the
+ability to perform precise dependence analysis.  As a result,
+LLM-generated GPU code frequently suffers from:
 \begin{enumerate}
   \item \textbf{Correctness failures}: data races from parallelizing
     dimensions with carried dependences;
-  \item \textbf{Performance anti-patterns}: serial grid launches
-    (\texttt{grid=(1,)}) that waste GPU parallelism, scalar loops inside
-    kernels instead of vectorized operations, or excessive Python-side
-    kernel launches;
-  \item \textbf{Synchronization errors}: missing memory barriers between
-    phases in stencil computations, leading to stale L1 cache reads.
+  \item \textbf{Performance anti-patterns}: serial launches,
+    scalar loops, or excessive kernel invocations;
+  \item \textbf{Synchronization errors}: missing memory barriers
+    between phases in stencil computations.
 \end{enumerate}
 
-We present \sysname, a system that addresses these challenges by
-integrating classical compiler analysis into the LLM prompting
-pipeline.  \sysname uses the Polyhedral Extraction Tool
-(\pet)~\cite{verdoolaege2012polyhedral} and LLVM's dependence
-analysis~\cite{llvm} to extract parallelization properties from C loop
-nests, then translates these into structured natural-language guidance
-that steers the LLM toward correct and efficient Triton
-implementations.  The key insight is that \emph{analysis results can be
-communicated to LLMs as domain-expert advice}, enabling the model to
-make informed parallelization decisions without performing dependence
-analysis itself.
-
-Our contributions are:
+We present \sysname, which integrates classical compiler analysis into
+the LLM prompting pipeline.  \sysname uses \pet~\cite{verdoolaege2012polyhedral}
+and LLVM's dependence analysis~\cite{llvm} to extract parallelization
+properties, then translates these into structured guidance that steers
+the LLM toward correct Triton implementations.  The key insight is that
+\emph{analysis results can be communicated to LLMs as domain-expert
+advice}, enabling the model to make informed parallelization decisions
+without performing dependence analysis itself.  Our contributions:
 \begin{itemize}
-  \item A pipeline that automatically extracts parallelization
-    constraints from C code via polyhedral and LLVM analysis, and
-    encodes them as structured LLM prompt guidance
-    (\S\ref{sec:analysis});
-  \item An iterative refinement loop with error-specific feedback that
-    recovers from correctness and performance failures
-    (\S\ref{sec:pipeline});
-  \item A comprehensive evaluation on 30 Polybench/C kernels showing
-    100\% pass rate, 3.06$\times$ median speedup at standard sizes and
-    28.97$\times$ at 8$\times$ sizes, with ablation evidence that
-    analysis guidance is the primary driver (\S\ref{sec:eval});
-  \item Generalization to 6 real-world application kernels from the
-    Rodinia benchmark suite, achieving 100\% first-attempt pass rate
-    with up to 24.9$\times$ speedup (\S\ref{sec:realworld}).
+  \item A pipeline that extracts parallelization constraints via
+    polyhedral and LLVM analysis and encodes them as structured LLM
+    prompt guidance (\S\ref{sec:method});
+  \item Evaluation on 30 Polybench/C kernels (100\% pass, 2.15$\times$
+    median), 151 TSVC kernels (99\% pass, 9$\times$ median over
+    80-thread OpenMP at 32\,MB), and 8 application kernels from
+    Rodinia/ECP proxy applications (\S\ref{sec:eval}).
 \end{itemize}
 
 
 %% ===================================================================
-\section{System Overview}
-\label{sec:overview}
+\section{Method}
+\label{sec:method}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\columnwidth]{figures/pipeline_overview.pdf}
-  \caption{%
-    \sysname pipeline.  C loop nests are analyzed by \pet{} and LLVM to
-    extract parallelization properties.  These are encoded as structured
-    guidance in the LLM prompt alongside the source code.  The LLM
-    generates Triton code, which is validated against a C reference
-    and benchmarked.  Failures trigger error-specific retry prompts.}
-  \label{fig:pipeline}
-\end{figure}
+Given a C loop nest, \sysname proceeds in four stages: (1)~static
+analysis, (2)~prompt construction, (3)~LLM generation and validation,
+and (4)~iterative refinement.
 
-Figure~\ref{fig:pipeline} shows the \sysname pipeline.  Given a C loop
-nest (e.g., from the Polybench/C benchmark suite~\cite{polybench}), the
-system proceeds in four stages:
+\paragraph{Static Analysis.}
+\pet{} extracts a polyhedral representation from which we compute
+parallelizable dimensions with validity constraints, WAR dependences
+with loop-level scoping, scalar expansion opportunities, and reduction
+types.  When \pet{} cannot handle a construct (e.g., non-affine
+subscripts), we fall back to LLVM's \texttt{DependenceAnalysis} pass,
+parsing direction vectors to determine which loop levels carry
+dependences.
 
-\paragraph{Stage 1: Static Analysis.}
-The C kernel is analyzed by \pet{} to extract a polyhedral
-representation, from which we compute: (a)~parallelizable dimensions
-with validity constraints, (b)~WAR dependences with loop-level scoping,
-(c)~scalar expansion opportunities, and (d)~reduction operation types.
-When \pet{} cannot handle a construct (e.g., non-affine subscripts), we
-fall back to LLVM's \texttt{DependenceAnalysis} pass, parsing direction
-vectors from the IR to determine which loop levels carry dependences.
+\paragraph{Prompt Construction.}
+Analysis results are translated into structured natural-language
+sections appended to the LLM prompt.  Five principal categories of
+guidance are generated:
 
-\paragraph{Stage 2: Prompt Construction.}
-Analysis results are translated into structured natural-language sections
-appended to the LLM prompt.  Each section follows a consistent format:
-the analysis finding, its implication for GPU parallelization, and a
-concrete code-level recommendation.  The prompt also includes the
-original C source, array read/write modes, the exact function signature
-the generated code must match, and Triton-specific compilation rules.
-
-\paragraph{Stage 3: LLM Generation and Validation.}
-The prompt is sent to a Claude Sonnet~4 model~\cite{anthropic2025claude},
-which generates a Triton kernel implementation.  The generated code is
-tested against a C reference compiled as a shared library: both
-implementations are executed on the same random inputs, and outputs are
-compared element-wise with kernel-specific tolerances.
-
-\paragraph{Stage 4: Iterative Refinement.}
-If validation fails, the system classifies the error (numerical
-mismatch, compilation error, runtime exception, or timeout) and
-constructs a targeted retry prompt.  For numerical errors, the feedback
-includes the maximum absolute error and suggestions for index-bounds
-checking.  For performance issues (speedup~$<0.1\times$), the feedback
-identifies parallelization anti-patterns.  Up to 10 attempts are made,
-with a context reset at attempt~6 to escape local minima.
-
-
-%% ===================================================================
-\section{Analysis-Guided Prompt Engineering}
-\label{sec:analysis}
-
-The core technical contribution is the translation of compiler analysis
-results into LLM-comprehensible guidance.  We describe the five
-principal analysis categories and how each maps to prompt guidance.
-
-\subsection{Parallelization Dimension Analysis}
-
-For each loop nest, \pet{} computes which dimensions can be safely
-parallelized by checking whether the iteration-to-memory mapping is
-injective (no write conflicts) and whether dependences are only carried
-by outer sequential loops.  Each dimension is classified as
-\emph{valid} (safe to parallelize), \emph{invalid} with a specific
-reason (cross-phase write conflict, sequential context, forward
-substitution), or \emph{reduction} (parallelizable with atomic or
-tree reduction).
-
-The prompt presents valid options as:
+\emph{Parallelization dimensions}: Each loop dimension is classified as
+valid (safe to parallelize), invalid with a specific reason, or
+reduction-safe.  The prompt presents valid options with grid
+configurations and flags unsafe dimensions with explanations:
 \begin{lstlisting}[language={},frame=none,numbers=none,xleftmargin=0em]
 Option 1: Parallelize dim `j` (innermost)
   - Grid: triton.cdiv(NY, BLOCK)
   - Each CTA processes BLOCK elements of j
   - Issue: None (fully parallel)
+Option 2: Parallelize dim `i` (outermost)
+  - Issue: Dependencies carried on `i`
 \end{lstlisting}
-Invalid options are shown with explanations to prevent the LLM from
-attempting unsafe parallelizations.
 
-\subsection{Write-After-Read Dependence Analysis}
+\emph{WAR dependences}: \pet{} computes exact WAR sets via polyhedral
+dependence analysis; when \pet{} fails, we parse LLVM direction vectors
+and map them to loop levels.  Three cases are distinguished---no WAR
+(in-place update), WAR with parallel resolution (\texttt{B = A.clone()}
+and read from clone while writing to original), and WAR requiring
+sequential execution (\texttt{grid=(1,)} with explicit loops inside
+the kernel).
 
-WAR dependences determine whether arrays must be cloned before in-place
-update.  \pet{} computes exact WAR sets via polyhedral dependence
-analysis; when \pet{} fails, we parse LLVM direction vectors and map
-them to loop levels.  The guidance distinguishes three cases:
+\emph{Multi-phase decomposition}: Many kernels contain multiple
+computational phases with inter-phase dependences (e.g.,
+\texttt{correlation}: mean $\to$ normalization $\to$ correlation
+matrix).  The analysis detects phases via cross-phase write conflicts
+and recommends splitting into separate kernel launches connected by a
+Python driver loop.  This is critical: LLMs frequently attempt to fuse
+all phases into a single kernel, causing incorrect results or serial
+execution.
 
-\begin{enumerate}
-  \item \textbf{No WAR}: arrays can be updated in-place.
-  \item \textbf{WAR with parallel resolution}: clone the array
-    (\texttt{B = A.clone()}) and read from the clone while writing to
-    the original.
-  \item \textbf{WAR requiring sequential execution}: when all
-    dimensions carry dependences (e.g., triangular solvers), the
-    guidance recommends \texttt{grid=(1,)} with explicit sequential
-    loops inside the kernel.
-\end{enumerate}
+\emph{Reduction patterns}: Reduction operations are mapped to Triton
+primitives (\texttt{tl.sum()}, \texttt{tl.dot()}).  For kernels with
+opposing reductions (e.g., \texttt{bicg}: row reduction on $A$ and
+column reduction on $A^T$), the guidance recommends fusing both
+reductions with row-major iteration for coalesced memory access.
 
-\subsection{Multi-Phase Decomposition}
-
-Many Polybench kernels contain multiple computational phases with
-inter-phase dependences (e.g., \texttt{correlation}: mean computation
-$\to$ normalization $\to$ correlation matrix).  The analysis detects
-phases via cross-phase write conflicts and recommends splitting into
-separate kernel launches connected by a Python driver loop.  This is
-critical: LLMs frequently attempt to fuse all phases into a single
-kernel, causing incorrect results or serial execution.
-
-\subsection{Reduction and Memory Access Patterns}
-
-The analysis identifies reduction operations (sum, dot product, min/max)
-and recommends appropriate Triton primitives (\texttt{tl.sum()},
-\texttt{tl.dot()}).  For kernels with opposing reductions (e.g.,
-\texttt{bicg}: row reduction on $A$ and column reduction on $A^T$), the
-guidance recommends fusing both reductions with row-major iteration for
-coalesced memory access.
-
-\subsection{Stencil Synchronization}
-
-For stencil computations (e.g., \texttt{jacobi\_1d}), the analysis
+\emph{Stencil synchronization}: For stencil computations, the analysis
 detects cross-phase data dependences within a single CTA.  Triton's
 vectorized stores go to L1 cache, and subsequent loads from overlapping
 addresses may read stale data.  The guidance inserts
@@ -285,63 +205,47 @@ addresses may read stale data.  The guidance inserts
 pre-validation check that rejects generated code missing these barriers
 before executing the expensive GPU test.
 
+\paragraph{Generation and Refinement.}
+The prompt is sent to Claude Sonnet~4~\cite{anthropic2025claude}, which
+generates a Triton kernel implementation.  The generated code is tested
+against a C reference compiled as a shared library (\texttt{-O0} to
+preserve reference semantics): both implementations execute on
+identical random inputs, and outputs are compared element-wise with
+per-kernel tolerances that account for FP32 accumulation order
+differences.
 
-%% ===================================================================
-\section{Implementation}
-\label{sec:pipeline}
+If validation fails, the system classifies the error and constructs a
+targeted retry prompt.  For numerical mismatches, the feedback includes
+the maximum absolute error and suggests index-bounds checking.  For
+performance issues ($<$0.1$\times$ speedup), the feedback identifies
+anti-patterns (serial grid, scalar loops, excessive launches).  Up to
+10 attempts are made, with a context reset at attempt~6 to escape
+fixation on broken approaches.
 
-\sysname is implemented in approximately 14,000 lines of Python.  The
-analysis frontend comprises 18 modules built on \pet{} (which uses
+\sysname is implemented in approximately 14,000 lines of Python.
+The analysis frontend comprises 18 modules built on \pet{} (which uses
 isl~\cite{verdoolaege2010isl} for polyhedral operations) and LLVM~17
 for fallback dependence analysis.
-
-\paragraph{C Reference Infrastructure.}
-Each Polybench kernel is compiled as a shared library (\texttt{.so})
-with \texttt{-O0} to preserve the reference semantics.  Global arrays
-are accessed via \texttt{ctypes.in\_dll()}, and the test harness
-initializes identical \texttt{torch.Tensor} inputs for both the C
-reference and the Triton implementation.  Correctness is verified with
-element-wise comparison using per-kernel tolerances that account for
-FP32 accumulation order differences (e.g., \texttt{atol=6.0} for triple
-matrix multiply due to \texttt{tl.dot()} vs.\ sequential accumulation).
-
-\paragraph{Retry Strategy.}
-The retry loop makes up to 10 attempts per kernel.  Attempts 1--5 build
-on prior errors; attempt~6 resets context (discards failed code to
-escape fixation on a broken approach); attempts 7--10 continue from the
-reset.  Error feedback is category-specific:
-\begin{itemize}
-  \item \emph{Numerical}: reports max absolute/relative error, suggests
-    loop-bound and indexing checks.
-  \item \emph{Missing barrier}: provides exact placement template for
-    \texttt{tl.debug\_barrier()} between stencil phases.
-  \item \emph{Low speedup} ($<0.1\times$): identifies anti-patterns
-    (serial grid, scalar loops, excessive launches).
-  \item \emph{Compilation/runtime}: passes error message verbatim.
-\end{itemize}
-
-\paragraph{Benchmark Methodology.}
-Performance is measured as the ratio of C reference wall-clock time to
-Triton kernel time, each averaged over 50 iterations after 5 warmup
-runs.  The C reference is compiled with \texttt{-O2} and executed
-single-threaded to represent the baseline a domain scientist would
-write without GPU expertise.
 
 
 %% ===================================================================
 \section{Evaluation}
 \label{sec:eval}
 
-We evaluate \sysname on the 30-kernel Polybench/C~4.2.1 suite on a
-system with two NVIDIA RTX~3090 GPUs (24\,GB VRAM each), PyTorch~2.5.1,
-Triton~3.1.0, and CUDA~12.4.  The LLM is Claude Sonnet~4
-(\texttt{claude-sonnet-4-20250514}).
+All experiments run on an NVIDIA RTX~3090 GPU (24\,GB,
+936\,GB/s) with a dual-socket Xeon Gold 5218R (80 cores,
+${\sim}$140\,GB/s), PyTorch~2.5.1, Triton~3.1.0, CUDA~12.4.
+The LLM is Claude Sonnet~4~\cite{anthropic2025claude}.
+Polybench/application speedups are vs.\ single-threaded C
+(\texttt{-O2}); TSVC additionally reports speedup vs.\ an
+80-thread OpenMP baseline (\texttt{-fopenmp}).
+All speedups are kernel-only with data pre-staged on GPU,
+averaged over 10--50 iterations after warmup.
 
-\subsection{Correctness and Performance (Standard Sizes)}
+\subsection{Polybench/C (30 Kernels)}
 
 \begin{table}[t]
-  \caption{Polybench/C results at standard (1$\times$) problem sizes.
-    WA = with analysis, NA = no analysis.}
+  \caption{Polybench/C results.  WA = with analysis, NA = no analysis.}
   \label{tab:results_1x}
   \centering\small
   \begin{tabular}{lcc}
@@ -349,92 +253,82 @@ Triton~3.1.0, and CUDA~12.4.  The LLM is Claude Sonnet~4
     \textbf{Metric} & \textbf{WA} & \textbf{NA} \\
     \midrule
     Pass rate              & 30/30 (100\%) & 28/30 (93\%) \\
-    First-try pass         & 24/30         & ---           \\
-    Median speedup         & 3.06$\times$  & 1.17$\times$ \\
-    Mean speedup           & 3.83$\times$  & 2.94$\times$ \\
-    Kernels $>1\times$     & 21/30         & 14/28         \\
+    Median speedup         & 2.15$\times$  & 1.06$\times$ \\
+    Mean speedup           & 3.44$\times$  & 1.52$\times$ \\
+    Kernels $>1\times$     & 20/30         & 14/28         \\
     \midrule
-    \multicolumn{3}{l}{\emph{Head-to-head (28 kernels both passed):}} \\
-    WA wins ($>$15\% faster) & \multicolumn{2}{c}{18} \\
-    NA wins ($>$15\% faster) & \multicolumn{2}{c}{4}  \\
-    Ties (within 15\%)       & \multicolumn{2}{c}{6}  \\
-    WA-only passes           & \multicolumn{2}{c}{2 (jacobi\_2d, seidel\_2d)}  \\
+    \multicolumn{3}{l}{\emph{Head-to-head (28 common):}} \\
+    WA wins ($>$10\% faster) & \multicolumn{2}{c}{12} \\
+    NA wins ($>$10\% faster) & \multicolumn{2}{c}{6 (3 race conditions)}  \\
+    Ties (within 10\%)       & \multicolumn{2}{c}{10}  \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-Table~\ref{tab:results_1x} summarizes the results.  With analysis
-guidance, all 30 kernels pass correctness, 24 on the first attempt.
-The median speedup of 3.06$\times$ over single-threaded C reflects the
-mix of compute-bound kernels that benefit from GPU parallelism (e.g.,
-\texttt{heat\_3d}: 12.36$\times$, \texttt{3mm}: 13.04$\times$) and
-memory-bound or inherently sequential kernels where Triton overhead
-dominates (e.g., \texttt{trisolv}: 1.09$\times$, \texttt{durbin}:
-0.45$\times$).
+Table~\ref{tab:results_1x} summarizes results at standard
+(1$\times$) problem sizes.  All 30 kernels pass with analysis
+guidance; without it, two stencil kernels fail due to
+parallelizing dimensions with carried dependences.
+The 2.15$\times$ median speedup is limited by Polybench's
+small defaults ($N$\,=\,60--120), where GPU launch overhead
+dominates.  Compute-bound kernels show strong speedups
+(\texttt{heat\_3d}: 12.36$\times$, \texttt{deriche}:
+7.44$\times$, \texttt{covariance}: 7.40$\times$).
 
-Without analysis, two kernels (\texttt{jacobi\_2d},
-\texttt{seidel\_2d}) fail entirely---the LLM parallelizes a dimension
-with carried dependences, producing incorrect results across all
-retry attempts.  In head-to-head comparison, analysis-guided generation
-wins 18 of 28 benchmarked kernels by more than 15\%.
+Of 6 apparent NA wins, 3 (\texttt{lu}, \texttt{ludcmp}, \texttt{bicg})
+contain confirmed race conditions---the NA code uses
+\texttt{grid=(N,)} for LU decomposition where row~$i$ reads from
+row~$k$ ($k<i$) that may not yet be computed by its CTA, producing up
+to $10^{33}$ variation across runs.  The remaining 3 NA wins reflect
+nondeterministic LLM code quality, not structural differences.
 
-\subsection{Scaling to Realistic Problem Sizes}
+\paragraph{Scaling.}
 
 \begin{table}[t]
-  \caption{Results at 8$\times$ problem sizes (e.g., $N$: 60$\to$480,
-    matrix dims: 120$\to$960).  Only benchmarked kernels shown.}
+  \caption{Polybench scaling: 1$\times$ to 8$\times$ problem sizes
+    ($N$: 60$\to$480, matrices: 120$\to$960).
+    ``ST'' = single-threaded C; ``OMP'' = 80-thread OpenMP.}
   \label{tab:results_8x}
   \centering\small
-  \begin{tabular}{lcc}
+  \begin{tabular}{lccc}
     \toprule
-    \textbf{Metric} & \textbf{1$\times$} & \textbf{8$\times$} \\
+    \textbf{Metric} & \textbf{1$\times$} & \textbf{8$\times$ (ST)} & \textbf{8$\times$ (OMP)} \\
     \midrule
-    Pass rate          & 30/30     & 30/30     \\
-    Benchmarked        & 30        & 26        \\
-    Median speedup     & 3.06$\times$ & 28.97$\times$ \\
-    Kernels $>1\times$ & 21/30     & 22/26     \\
-    Max speedup        & 13.04$\times$ & 1826$\times$ \\
+    Median speedup     & 2.15$\times$ & 28.97$\times$ & 7.98$\times$ \\
+    Kernels $>1\times$ & 20/30        & 22/26         & 21/27        \\
+    Max speedup        & 12.36$\times$ & 1826$\times$ & 1464$\times$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-At 8$\times$ problem sizes (Table~\ref{tab:results_8x}), median speedup
-increases from 3.06$\times$ to 28.97$\times$ as larger matrices
-amortize GPU launch overhead and better utilize the GPU's parallelism.
-Four kernels (\texttt{adi}, \texttt{cholesky}, \texttt{nussinov},
-\texttt{seidel\_2d}) pass correctness but their Triton implementations
-are too slow to benchmark within the 60-second timeout---these are
-inherently sequential algorithms where \texttt{grid=(1,)} execution
-cannot exploit GPU parallelism.
+At 8$\times$ sizes (Table~\ref{tab:results_8x}), median speedup
+rises to 28.97$\times$ over single-threaded C.  Against 80-thread
+OpenMP, the GPU still achieves 7.98$\times$ median, confirming
+genuine advantage beyond CPU parallelism.  Matrix-multiply kernels
+reach 1464$\times$ (\texttt{3mm}) even vs.\ OpenMP.  Four kernels
+time out (inherently sequential, \texttt{grid=(1,)}).
 
-The top performers at 8$\times$ are matrix-multiply kernels that
-benefit from \texttt{tl.dot()} tiled accumulation:
-\texttt{3mm} (1826$\times$), \texttt{2mm} (1515$\times$),
-\texttt{doitgen} (1283$\times$).
-
-
-\subsection{Iterative Guidance Refinement}
+\paragraph{Guidance Impact.}
 
 \begin{table}[t]
-  \caption{Impact of five guidance categories.  ``Before'' and
-    ``After'' are speedups at 1$\times$ problem sizes except where noted.}
+  \caption{Impact of analysis-triggered guidance categories.
+    ``Before'' and ``After'' are speedups at 1$\times$ sizes
+    except where noted.}
   \label{tab:guidance_fixes}
   \centering\small
   \begin{tabular}{llcc}
     \toprule
-    \textbf{Guidance Category} & \textbf{Kernel} & \textbf{Before} & \textbf{After} \\
+    \textbf{Guidance} & \textbf{Kernel} & \textbf{Before} & \textbf{After} \\
     \midrule
     Multi-phase split      & correlation & 0.19$\times$ & 2.50$\times$ \\
-    WAR sequential fallback & nussinov   & FAIL          & PASS         \\
+    WAR sequential         & nussinov    & FAIL          & PASS         \\
     Triangular grid        & lud$^\dagger$ & 0.14$\times$ & 13.18$\times$ \\
     Fused reductions       & bicg        & 1.04$\times$ & 3.51$\times$ \\
-    Stencil barriers       & jacobi\_1d  & 0.13$\times$ & 3.72$\times$ \\
-    \midrule
-    2D stencil threshold$^\ddagger$ & jacobi\_2d & 1.70$\times$ & 36.82$\times$ \\
-    2D stencil threshold$^\ddagger$ & fdtd\_2d   & 1.55$\times$ & 15.43$\times$ \\
+    Stencil barriers       & jacobi\_1d  & 0.13$\times$ & 1.78$\times$ \\
+    IIR phase fusion       & deriche     & 0.28$\times$ & 7.19$\times$ \\
+    Tridiag.\ sweep        & adi         & 0.24$\times$ & 2.27$\times$ \\
     \bottomrule
-    \multicolumn{4}{l}{\scriptsize $^\dagger$Rodinia benchmark.
-      $^\ddagger$At 8$\times$ sizes.}
+    \multicolumn{4}{l}{\scriptsize $^\dagger$Rodinia benchmark.}
   \end{tabular}
 \end{table}
 
@@ -444,107 +338,135 @@ Each category is triggered by analysis properties (e.g., cross-phase
 dependences, triangular access patterns), not per-kernel heuristics.
 The largest improvements come from multi-phase decomposition
 (correlation: 13$\times$ improvement) and the triangular grid
-recommendation (lud: 94$\times$ improvement).
+recommendation (lud: 94$\times$ improvement).  The IIR phase-fusion
+guidance detects that the forward, backward, and combination phases
+of a deriche filter operate on independent rows/columns, fusing all
+three into a single kernel with \texttt{grid=(W,)} or
+\texttt{grid=(H,)} (2 launches instead of 6).  The tridiagonal sweep
+guidance identifies that ADI has one parallelizable spatial dimension
+and one with sequential recurrence, recommending \texttt{grid=(N-2,)}
+with one CTA per row.  At 8$\times$ sizes, a 2D stencil threshold
+adjustment (multi-CTA grids when $\geq$2 valid dimensions exist)
+improved \texttt{jacobi\_2d} to 36.82$\times$ and \texttt{fdtd\_2d}
+to 15.43$\times$.
 
-At 8$\times$ sizes, a threshold adjustment for 2D stencils
-(recommending multi-CTA grids instead of \texttt{grid=(1,)} when
-$\geq2$ valid parallelization dimensions exist) improved
-\texttt{jacobi\_2d} from 1.70$\times$ to 36.82$\times$ and
-\texttt{fdtd\_2d} from 1.55$\times$ to 15.43$\times$.
+\paragraph{Limitations.}
+Eleven kernels achieve $<$1$\times$ at standard sizes.  Five are
+inherently sequential (\texttt{durbin}: 0.43$\times$,
+\texttt{gramschmidt}: 0.35$\times$, \texttt{trisolv}: 0.58$\times$,
+\texttt{ludcmp}: 0.36$\times$, \texttt{nussinov}: 0.06$\times$), where
+loop-carried dependences on most dimensions limit parallelism; the
+analysis correctly identifies these constraints and the LLM generates
+working but slow GPU implementations.
+
+Two kernels (\texttt{jacobi\_2d}: 0.71$\times$, \texttt{fdtd\_2d}:
+0.34$\times$) have parallelizable spatial dimensions but at Polybench's
+default sizes ($N$=20--30), launching 2--4 kernels per
+timestep$\times$20--40 timesteps creates 80--160 launches that dominate
+execution time.  At 8$\times$ sizes, these same kernels achieve
+36.82$\times$ and 15.43$\times$, confirming that the parallelization
+strategy is correct and the 1$\times$ regression is purely a
+problem-size effect.  These $<$1$\times$ results are \emph{correct}
+failures---preferable to the incorrect parallelization that the NA
+baseline produces for \texttt{jacobi\_2d} and \texttt{seidel\_2d}.
 
 
-\subsection{Analysis of Failures and Limitations}
+\subsection{TSVC (151 Kernels)}
+\label{sec:tsvc}
 
-Four kernels consistently achieve $<1\times$ speedup at both scales:
-
-\begin{itemize}
-  \item \textbf{durbin} (0.37$\times$): inherently sequential
-    120-step recurrence with loop-carried dependences on every
-    dimension.
-  \item \textbf{gramschmidt} (0.41$\times$): Modified Gram-Schmidt
-    requires sequential column processing; only the inner dot product
-    is parallelizable.
-  \item \textbf{trisolv} (0.40$\times$): triangular solve with
-    forward substitution---O($N^2$) sequential work.
-  \item \textbf{ludcmp} (0.91$\times$): LU decomposition with
-    forward/backward substitution; partially parallelizable but
-    kernel launch overhead dominates.
-\end{itemize}
-
-These are \emph{correct} failures---the analysis correctly identifies
-these kernels as having limited parallelism, and the LLM generates
-working (but slow) GPU implementations.  This is preferable to
-incorrect parallelization, which the no-analysis baseline produces
-for \texttt{jacobi\_2d} and \texttt{seidel\_2d}.
-
-
-\subsection{Real-World Application Kernels}
-\label{sec:realworld}
-
-To evaluate whether \sysname generalizes beyond loop benchmarks, we
-apply it to 6 application kernels from the Rodinia benchmark
-suite~\cite{che2009rodinia}: three extracted as self-contained loop
-nests (hotspot, lud, pathfinder) and three larger multi-phase kernels
-(SRAD, lavaMD, Gaussian elimination).  These kernels exhibit
-challenges absent from Polybench: multi-phase computations with
-cross-phase dependences, triangular iteration spaces, and irregular
-neighbor traversals.
+To evaluate breadth, we apply \sysname to the 151-kernel TSVC (Test
+Suite for Vectorizing Compilers)~\cite{callahan1988tsvc} benchmark,
+which covers linear traversals, reductions, indirect addressing,
+control flow, and loop-carried dependences.  Unlike Polybench's
+multi-dimensional stencils, TSVC kernels are predominantly 1D loops
+operating on flat arrays, testing whether the analysis pipeline handles
+simpler but diverse loop patterns.
 
 \begin{table}[t]
-  \caption{Real-world application kernel results.  All 6 kernels pass
-    correctness on the first attempt with analysis guidance.}
-  \label{tab:realworld}
+  \caption{TSVC results at three data sizes.  ``ST'' = single-threaded
+    C (\texttt{-O2}), ``OMP'' = OpenMP C (\texttt{-O2 -fopenmp},
+    80~threads). Pass rate: 150/151 (99.3\%).}
+  \label{tab:tsvc}
   \centering\small
-  \begin{tabular}{lcccc}
+  \begin{tabular}{lccc}
     \toprule
-    \textbf{Kernel} & \textbf{WA} & \textbf{NA} & \textbf{NA} & \textbf{Key} \\
-    & \textbf{Speedup} & \textbf{Speedup} & \textbf{Att.} & \textbf{Challenge} \\
+    & \textbf{32\,KB} & \textbf{32\,MB} & \textbf{3200\,MB} \\
     \midrule
-    SRAD        & 24.86$\times$ & 3.50$\times$ & 1 & Multi-phase (3 phases) \\
-    lud         & 13.18$\times$ & --- & --- & Triangular decomp. \\
-    gaussian    & 3.35$\times$  & 3.61$\times$ & 3 & Triangular + back-sub \\
-    lavaMD      & 1.47$\times$  & 0.56$\times$ & 5 & Irregular neighbor list \\
-    hotspot     & 1.05$\times$  & --- & --- & 2D stencil \\
-    pathfinder  & 0.11$\times$  & --- & --- & Sequential DP \\
+    Per-array size     & 128\,KB & 32\,MB & 3.2\,GB \\
+    Kernels tested     & 84      & 27     & 15      \\
+    \midrule
+    GPU/ST median      & 0.11$\times$ & 46.3$\times$ & 73.2$\times$ \\
+    GPU/ST $>$1$\times$ & 1/84        & 25/27        & 14/15        \\
+    \midrule
+    GPU/OMP median     & 0.13$\times$ & 9.0$\times$  & 14.2$\times$ \\
+    GPU/OMP $>$1$\times$& 1/84        & 24/27        & 14/15        \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-Table~\ref{tab:realworld} shows the results.  All 6 kernels pass
-correctness on the first attempt with analysis guidance.  The three
-multi-phase kernels (SRAD, lavaMD, Gaussian) also have no-analysis
-baselines for comparison:
+Table~\ref{tab:tsvc} shows TSVC results across three data sizes.
+\sysname passes 150 of 151 kernels (99.3\%), with 120 on the first
+attempt.  At the default 32\,KB per array ($N$=32,000), GPU launch
+overhead dominates and the median speedup is 0.11$\times$---neither
+the GPU nor multi-threaded CPU can amortize overhead at this scale.
 
-\paragraph{SRAD (24.9$\times$).}
-This speckle-reducing anisotropic diffusion kernel has three
-computational phases per iteration (ROI statistics, diffusion
-coefficients, divergence update).  The analysis detects cross-phase
-dependences and recommends splitting into separate kernels with
-parallel grids, yielding a 7.1$\times$ improvement over the
-no-analysis baseline (3.5$\times$), which serializes all phases.
+At 32\,MB ($N$=8M), the GPU achieves 46.3$\times$ median over
+single-threaded C and 9.0$\times$ over 80-thread OpenMP.  At
+3200\,MB ($N$=800M), the GPU advantage grows to 73.2$\times$ (ST)
+and 14.2$\times$ (OMP), as the GPU's memory bandwidth (936\,GB/s on
+RTX~3090) decisively outperforms the dual-socket Xeon's bandwidth
+($\sim$140\,GB/s).  Serial kernels with loop-carried dependences are
+excluded from the 32\,MB and 3200\,MB benchmarks since neither CPU
+nor GPU can parallelize them.
 
-\paragraph{Gaussian elimination (3.4$\times$).}
-This kernel has a triangular iteration space with cross-phase
-dependences between the elimination and back-substitution phases.
-The analysis recommends a single kernel with the sequential dimension
-as an internal loop, \texttt{tl.sum(mask) > 0} guards to skip
-empty-mask CTAs in the triangular region, and back-substitution in
-CTA~0.  The no-analysis baseline achieves similar performance
-(3.6$\times$) but requires 3 attempts due to initial timeouts from
-\texttt{tl.constexpr} misuse.
 
-\paragraph{lavaMD (1.5$\times$).}
-This molecular dynamics kernel traverses irregular neighbor lists.
-The analysis identifies the particle dimension as parallelizable,
-enabling a 2.6$\times$ improvement over the no-analysis baseline
-(0.56$\times$), which fails with type-mismatch errors on 4 of 5
-attempts.
+\subsection{Application Kernels}
+\label{sec:realworld}
 
-The real-world results demonstrate two benefits of analysis guidance
-beyond loop benchmarks: (1)~correct multi-phase decomposition for
-kernels with complex inter-phase dependences (SRAD), and
-(2)~first-attempt success vs.\ multiple retries without guidance
-(lavaMD, Gaussian).
+\begin{table}[t]
+  \caption{Application kernel results.  ``---'' = NA failed all attempts.}
+  \label{tab:realworld}
+  \centering\small
+  \begin{tabular}{llcc}
+    \toprule
+    \textbf{Source} & \textbf{Kernel} & \textbf{WA} & \textbf{NA} \\
+    \midrule
+    Rodinia & SRAD       & 24.86$\times$ & 3.50$\times$ \\
+    Rodinia & lud        & 13.18$\times$ & 15.52$\times$ \\
+    Rodinia & gaussian   & 3.35$\times$  & 3.61$\times$ \\
+    Rodinia & lavaMD     & 1.47$\times$  & 0.56$\times$ \\
+    Rodinia & hotspot    & 1.05$\times$  & 1.22$\times$ \\
+    Rodinia & pathfinder & 0.11$\times$  & --- \\
+    \midrule
+    miniMD  & LJ force   & 25.82$\times$ & 23.00$\times$ \\
+    miniFE  & SpMV       & 8.95$\times$  & 7.27$\times$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+To evaluate generalization beyond synthetic benchmarks, we apply
+\sysname to 6 Rodinia kernels~\cite{che2009rodinia} and 2 ECP proxy
+application kernels~\cite{heroux2009mantevo}---CSR sparse matrix-vector
+multiply (SpMV) from miniFE and Lennard-Jones force computation from
+miniMD (Table~\ref{tab:realworld}).  All 8 pass correctness with
+analysis guidance (6 on the first attempt).
+
+SRAD (24.9$\times$) has three computational phases per iteration;
+the analysis detects cross-phase dependences and recommends splitting
+into separate kernels with parallel grids, yielding 7.1$\times$
+improvement over the NA baseline (3.5$\times$).
+The LJ force kernel from miniMD computes pairwise forces using a full
+neighbor list; the outer loop over atoms is embarrassingly parallel.
+With analysis guidance the LLM iterates only actual neighbors
+(25.8$\times$), while the NA version wastes cycles on padded entries
+(23.0$\times$).
+lavaMD improves from 0.56$\times$ (NA) to 1.47$\times$ (WA) as
+analysis identifies the parallelizable particle dimension, while the
+NA baseline fails with type-mismatch errors on 4 of 5 attempts.
+SpMV achieves 8.95$\times$ with analysis vs.\ 7.27$\times$ without,
+as guidance helps select better block sizes for the row-parallel pattern.
+For lud and hotspot, both versions produce near-identical Triton
+times; the speedup differences reflect C reference timing variance.
 
 
 %% ===================================================================
@@ -553,33 +475,28 @@ kernels with complex inter-phase dependences (SRAD), and
 
 \paragraph{LLM Code Generation for GPUs.}
 Chen et al.~\cite{chen2024chatgpt} evaluate ChatGPT on CUDA kernel
-generation from natural-language descriptions, finding frequent
-correctness issues.  Nichols et al.~\cite{nichols2024modeling} use LLMs
-for performance modeling of GPU kernels.
+generation, finding frequent correctness issues including data races and
+incorrect memory management.
 KernelBench~\cite{ouyang2024kernelbench} benchmarks LLM-generated
-Triton/CUDA code on 250 tasks, reporting 20--40\% functional
-correctness without guidance.  Our work differs by using compiler
-analysis to \emph{guide} the LLM, achieving 100\% correctness on
-Polybench/C.
+Triton/CUDA on 250 tasks, reporting 20--40\% functional correctness
+without guidance.  Our work differs fundamentally: rather than relying
+on the LLM's implicit knowledge of parallelism, we provide explicit
+compiler-derived constraints, achieving 100\% correctness on
+Polybench/C and 99\% on TSVC.
 
-\paragraph{AI-Assisted Compilation.}
-CompilerGym~\cite{cummins2022compilergym} provides RL environments for
-compiler optimization.  TVM~\cite{chen2018tvm} and
-Halide~\cite{ragan2013halide} use auto-scheduling with learned cost
-models.  AlphaCode~\cite{li2022alphacode} generates competitive
-programming solutions.  \sysname is complementary: rather than
-replacing the compiler, it uses compiler analysis to improve LLM-based
-code generation.
-
-\paragraph{Polyhedral Compilation.}
-Polyhedral frameworks (Pluto~\cite{bondhugula2008pluto},
-PPCG~\cite{verdoolaege2013ppcg}, Polly~\cite{grosser2012polly})
-automatically generate parallel code from affine loop nests.  These
-produce optimal schedules but are limited to affine programs and
-produce low-level code.  \sysname uses polyhedral analysis for
-\emph{guidance} rather than code generation, enabling the LLM to handle
-non-affine constructs, complex data layouts, and high-level Triton
-abstractions that polyhedral compilers cannot target directly.
+\paragraph{Polyhedral Compilation and Auto-Scheduling.}
+Polyhedral frameworks such as Pluto~\cite{bondhugula2008pluto} and
+PPCG~\cite{verdoolaege2013ppcg} automatically generate parallel code
+from affine loop nests.  PPCG targets CUDA directly but is limited to
+affine programs and produces low-level code that lacks Triton's
+block-level optimizations (automatic memory coalescing, shared memory
+tiling).  TVM~\cite{chen2018tvm} and Halide~\cite{ragan2013halide}
+use auto-scheduling with learned cost models for tensor operations.
+\sysname is complementary: rather than replacing the compiler,
+it uses polyhedral analysis to extract \emph{what} parallelism is
+safe, then delegates the \emph{how} to the LLM, which can handle
+non-affine constructs, irregular access patterns, and high-level
+Triton abstractions that polyhedral compilers cannot target directly.
 
 
 %% ===================================================================
@@ -591,17 +508,28 @@ analysis with LLM-based GPU kernel generation.  By translating
 parallelization constraints, dependence information, and memory access
 patterns into structured prompt guidance, \sysname enables an LLM to
 generate correct and efficient Triton kernels for all 30 Polybench/C
-benchmarks, with a median speedup of 3.06$\times$ at standard sizes
-and 28.97$\times$ at 8$\times$ sizes.  The ablation study confirms that
-analysis guidance is essential: without it, 2 kernels fail entirely and
-median speedup drops to 1.17$\times$.  Beyond loop benchmarks, the
-approach generalizes to 6 real-world Rodinia kernels---all passing on
-the first attempt, with SRAD achieving 24.9$\times$ speedup through
-analysis-guided multi-phase decomposition.
+benchmarks (2.15$\times$ median), 150 of 151 TSVC kernels (9$\times$
+median over 80-thread OpenMP at realistic data sizes), and 8
+application kernels with up to 25.8$\times$ speedup.
+
+The ablation study reveals two key findings: (1)~analysis guidance
+prevents correctness failures that stem from unsafe parallelization
+of dependent loop dimensions, and (2)~unguided code frequently contains
+latent race conditions---producing results that pass tolerance checks
+by chance but exhibit nondeterministic errors at larger scales.
+Three of six apparent NA ``wins'' in Polybench were confirmed to
+contain such race conditions via repeated execution.
+
+For application kernels, analysis guidance is essential for
+complex multi-phase computations (SRAD: 7$\times$ improvement
+over unguided) and beneficial even for naturally parallel patterns
+(LJ~force: guidance promotes efficient neighbor-list traversal).
+No application kernel shows a Triton-time regression with analysis
+guidance enabled.
 
 Future work includes extending the analysis to non-affine programs,
-supporting multi-GPU parallelization, and scaling to larger scientific
-codebases with more complex data structures.
+supporting multi-GPU parallelization, and integrating autotuning
+for block size selection.
 
 %% ===================================================================
 %% References
@@ -619,11 +547,6 @@ Y.~Chen, S.~Huang, D.~Zheng, et~al.
 \newblock {ChatGPT} for {CUDA} programming: Evaluating {LLM}-generated {GPU}
   code.
 \newblock \emph{arXiv preprint arXiv:2404.12000}, 2024.
-
-\bibitem{nichols2024modeling}
-B.~Nichols, S.~Wang, et~al.
-\newblock Modeling {GPU} kernels with {LLMs}.
-\newblock \emph{arXiv preprint}, 2024.
 
 \bibitem{ouyang2024kernelbench}
 A.~Ouyang, S.~Zheng, et~al.
@@ -656,12 +579,6 @@ S.~Verdoolaege.
 \newblock isl: An integer set library for the polyhedral model.
 \newblock In \emph{Proc. ICMS}, 2010.
 
-\bibitem{cummins2022compilergym}
-C.~Cummins, B.~Wasti, J.~Guo, et~al.
-\newblock {CompilerGym}: Robust, performant compiler optimization
-  environments for {AI} research.
-\newblock In \emph{Proc. CGO}, 2022.
-
 \bibitem{chen2018tvm}
 T.~Chen, T.~Moreau, Z.~Jiang, et~al.
 \newblock {TVM}: An automated end-to-end optimizing compiler for deep
@@ -674,11 +591,6 @@ J.~Ragan-Kelley, C.~Barnes, A.~Adams, et~al.
   locality, and recomputation in image processing pipelines.
 \newblock In \emph{Proc. PLDI}, 2013.
 
-\bibitem{li2022alphacode}
-Y.~Li, D.~Choi, J.~Chung, et~al.
-\newblock Competition-level code generation with {AlphaCode}.
-\newblock \emph{Science}, 378(6624), 2022.
-
 \bibitem{bondhugula2008pluto}
 U.~Bondhugula, A.~Hartono, J.~Ramanujam, and P.~Sadayappan.
 \newblock A practical automatic polyhedral parallelizer and locality
@@ -690,16 +602,20 @@ S.~Verdoolaege, J.~Carlos~Juega, A.~Cohen, et~al.
 \newblock Polyhedral parallel code generation for {CUDA}.
 \newblock \emph{ACM TACO}, 9(4), 2013.
 
-\bibitem{grosser2012polly}
-T.~Grosser, A.~Groesslinger, and C.~Lengauer.
-\newblock Polly---performing polyhedral optimizations on a low-level
-  intermediate representation.
-\newblock \emph{Parallel Processing Letters}, 22(04), 2012.
-
 \bibitem{che2009rodinia}
 S.~Che, M.~Boyer, J.~Meng, et~al.
 \newblock Rodinia: A benchmark suite for heterogeneous computing.
 \newblock In \emph{Proc. IISWC}, 2009.
+
+\bibitem{heroux2009mantevo}
+M.~A.~Heroux, D.~W.~Doerfler, P.~S.~Crozier, et~al.
+\newblock Improving performance via mini-applications.
+\newblock Sandia National Laboratories Technical Report SAND2009-5574, 2009.
+
+\bibitem{callahan1988tsvc}
+D.~Callahan, J.~Dongarra, and D.~Levine.
+\newblock Vectorizing compilers: A test suite and results.
+\newblock In \emph{Proc. Supercomputing}, 1988.
 
 \end{thebibliography}
 

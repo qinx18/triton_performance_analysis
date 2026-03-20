@@ -5,9 +5,17 @@ Auto-generated Python wrappers for all TSVC C references.
 
 import ctypes
 import numpy as np
+import os
 from pathlib import Path
 
-_lib_path = Path(__file__).parent / 'libtsvc_all.so'
+# Use OpenMP-enabled library if TSVC_USE_OMP is set
+if os.environ.get('TSVC_USE_OMP'):
+    _lib_path = Path(__file__).parent / 'libtsvc_all_omp.so'
+    if not _lib_path.exists():
+        print("WARNING: libtsvc_all_omp.so not found, falling back to single-threaded")
+        _lib_path = Path(__file__).parent / 'libtsvc_all.so'
+else:
+    _lib_path = Path(__file__).parent / 'libtsvc_all.so'
 _lib = ctypes.CDLL(str(_lib_path))
 
 def _to_ptr(arr):

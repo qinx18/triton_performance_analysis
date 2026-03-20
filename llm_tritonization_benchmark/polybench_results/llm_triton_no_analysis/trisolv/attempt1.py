@@ -1,38 +1,31 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def trisolv_kernel(L_ptr, b_ptr, x_ptr, N: tl.constexpr, stride_L: tl.constexpr):
-    # Each program handles one row i
-    i = tl.program_id(0)
+def trisolv_kernel(L_ptr, b_ptr, x_ptr, N: tl.constexpr):
+    pid = tl.program_id(0)
     
-    if i >= N:
+    if pid >= N:
         return
     
-    # Initialize x[i] = b[i]
-    b_val = tl.load(b_ptr + i)
-    x_val = b_val
+    i = pid
     
-    # Compute sum of L[i][j] * x[j] for j < i
+    # x[i] = b[i]
+    x_val = tl.load(b_ptr + i)
+    
+    # for (j = 0; j < i; j++)
     for j in range(i):
-        L_ij = tl.load(L_ptr + i * stride_L + j)
+        L_val = tl.load(L_ptr + i * N + j)
         x_j = tl.load(x_ptr + j)
-        x_val = x_val - L_ij * x_j
+        x_val = x_val - L_val * x_j
     
-    # Divide by diagonal element L[i][i]
-    L_ii = tl.load(L_ptr + i * stride_L + i)
-    x_val = x_val / L_ii
+    # x[i] = x[i] / L[i][i]
+    L_diag = tl.load(L_ptr + i * N + i)
+    x_val = x_val / L_diag
     
-    # Store result
     tl.store(x_ptr + i, x_val)
 
 def trisolv_triton(L, b, x, N):
-    # Launch kernel with one thread per row
     grid = (N,)
-    
-    trisolv_kernel[grid](
-        L, b, x, 
-        N=N,
-        stride_L=L.stride(0)
-    )
+    trisolv_kernel[grid](L, b, x, N)

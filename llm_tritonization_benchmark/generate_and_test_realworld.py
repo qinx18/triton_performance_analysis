@@ -270,6 +270,78 @@ REALWORLD_FUNCTIONS = {
         "has_3d_arrays": False,
         "scalar_params": {},
     },
+    "spmv": {
+        "name": "spmv",
+        "loop_code": """\
+    for (row = 0; row < NROWS; row++) {
+        sum = 0.0f;
+        for (i = row_offsets[row]; i < row_offsets[row + 1]; i++) {
+            sum += vals[i] * x[cols[i]];
+        }
+        y[row] = sum;
+    }""",
+        "arrays": {
+            'row_offsets': 'r', 'cols': 'r', 'vals': 'r',
+            'x': 'r', 'y': 'w',
+        },
+        "has_offset": True,
+        "has_conditional": False,
+        "has_reduction": True,
+        "has_2d_arrays": False,
+        "has_3d_arrays": False,
+        "scalar_params": {},
+    },
+    "lj_force": {
+        "name": "lj_force",
+        "loop_code": """\
+    /* Clear forces */
+    for (i = 0; i < NLOCAL; i++) {
+        f[i * PAD + 0] = 0.0f;
+        f[i * PAD + 1] = 0.0f;
+        f[i * PAD + 2] = 0.0f;
+    }
+
+    /* Compute pairwise forces -- full neighbor list, no Newton 3rd law */
+    for (i = 0; i < NLOCAL; i++) {
+        xtmp = pos[i * PAD + 0];
+        ytmp = pos[i * PAD + 1];
+        ztmp = pos[i * PAD + 2];
+        fix = 0.0f;
+        fiy = 0.0f;
+        fiz = 0.0f;
+
+        for (k = 0; k < numneigh[i]; k++) {
+            j = neighbors[i * MAXNEIGHS + k];
+            delx = xtmp - pos[j * PAD + 0];
+            dely = ytmp - pos[j * PAD + 1];
+            delz = ztmp - pos[j * PAD + 2];
+            rsq = delx * delx + dely * dely + delz * delz;
+
+            if (rsq < cutforcesq_val) {
+                sr2 = 1.0f / rsq;
+                sr6 = sr2 * sr2 * sr2 * sigma6_val;
+                force = 48.0f * sr6 * (sr6 - 0.5f) * sr2 * epsilon_val;
+                fix += delx * force;
+                fiy += dely * force;
+                fiz += delz * force;
+            }
+        }
+
+        f[i * PAD + 0] += fix;
+        f[i * PAD + 1] += fiy;
+        f[i * PAD + 2] += fiz;
+    }""",
+        "arrays": {
+            'pos': 'r', 'f': 'w',
+            'neighbors': 'r', 'numneigh': 'r',
+        },
+        "has_offset": True,
+        "has_conditional": True,
+        "has_reduction": True,
+        "has_2d_arrays": False,
+        "has_3d_arrays": False,
+        "scalar_params": {'cutforcesq_val': 'scalar', 'sigma6_val': 'scalar', 'epsilon_val': 'scalar'},
+    },
 }
 
 REALWORLD_KERNELS = {
@@ -283,6 +355,12 @@ REALWORLD_KERNELS = {
     "gaussian": {
         "params": {"N": 512},
     },
+    "spmv": {
+        "params": {"NROWS": 4096, "NNZ_PER_ROW": 27},
+    },
+    "lj_force": {
+        "params": {"NLOCAL": 4000, "MAXNEIGHS": 128, "PAD": 3},
+    },
 }
 
 # Kernels requiring higher tolerance
@@ -290,6 +368,8 @@ HIGHER_TOLERANCE_KERNELS = {
     'srad': {'atol': 1e-2, 'rtol': 1e-3},       # 10 iterations of stencil
     'lavaMD': {'atol': 1e-6, 'rtol': 1e-6},      # double precision
     'gaussian': {'atol': 5.0, 'rtol': 0.05},     # pivotless elimination, error compounds
+    'spmv': {'atol': 1e-4, 'rtol': 1e-4},        # float32 SpMV
+    'lj_force': {'atol': 1e-3, 'rtol': 1e-3},    # float32 LJ force, conditional branches
 }
 
 # Torch dtype map for different C types
@@ -1102,16 +1182,33 @@ if tl.sum(mask) > 0:
 When a CTA has no valid elements (mask all-False), skip the inner loop entirely.
 Without this guard, CTAs waste time on useless masked loads/stores.
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner loops (e.g., CSR SpMV row processing,
+neighbor list traversal), scalar `for` loops with `tl.load`/`tl.store` on
+**pointers** are correct and efficient. Store results directly:
+```python
+for k in range(row_start, row_end):
+    sum_val += tl.load(vals_ptr + k) * tl.load(x_ptr + tl.load(cols_ptr + k))
+tl.store(y_ptr + row, sum_val)  # Direct scalar store — OK!
+```
+**For neighbor list traversal**: Iterate using the ACTUAL neighbor count
+(`numneigh[i]`), NOT the maximum capacity (`MAXNEIGHS`). Iterating `MAXNEIGHS`
+wastes cycles processing empty/padded entries:
+```python
+num_neighbors = tl.load(numneigh_ptr + i)
+for k in range(0, num_neighbors, BLOCK):  # NOT range(0, MAXNEIGHS, BLOCK)
+```
+Do NOT use `tl.where(arange == idx, val, vec)` to scatter results — this is
+O(BLOCK_SIZE) per element vs O(1) for direct `tl.store`.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -1355,6 +1452,83 @@ def _get_domain_array_inits(kernel_name: str, arrays: dict, params: dict, indent
         lines.append(f"{indent}m = torch.zeros({N * N}, device='cuda', dtype=torch.float32)")
         lines.append(f"{indent}b = torch.randn({N}, device='cuda', dtype=torch.float32)")
         lines.append(f"{indent}x = torch.zeros({N}, device='cuda', dtype=torch.float32)")
+        return lines
+
+    if kernel_name == 'spmv':
+        NROWS = params.get('NROWS', 4096)
+        NNZ_PER_ROW = params.get('NNZ_PER_ROW', 27)
+        NNZ = NROWS * NNZ_PER_ROW
+        lines = []
+        lines.append(f"{indent}NROWS = {NROWS}")
+        lines.append(f"{indent}NNZ_PER_ROW = {NNZ_PER_ROW}")
+        lines.append(f"{indent}NNZ = NROWS * NNZ_PER_ROW")
+        lines.append(f"{indent}NCOLS = NROWS")
+        lines.append(f"{indent}# Build valid CSR structure: each row has exactly NNZ_PER_ROW entries")
+        lines.append(f"{indent}row_offsets = torch.arange(0, (NROWS + 1) * NNZ_PER_ROW, NNZ_PER_ROW, device='cuda', dtype=torch.int32)")
+        lines.append(f"{indent}# Column indices: centered around diagonal, clamped to [0, NCOLS-1]")
+        lines.append(f"{indent}cols_list = []")
+        lines.append(f"{indent}half_bw = NNZ_PER_ROW // 2")
+        lines.append(f"{indent}for r in range(NROWS):")
+        lines.append(f"{indent}    col_start = max(0, r - half_bw)")
+        lines.append(f"{indent}    row_cols = list(range(col_start, min(col_start + NNZ_PER_ROW, NCOLS)))")
+        lines.append(f"{indent}    while len(row_cols) < NNZ_PER_ROW:")
+        lines.append(f"{indent}        row_cols.append(row_cols[-1])")
+        lines.append(f"{indent}    cols_list.extend(row_cols[:NNZ_PER_ROW])")
+        lines.append(f"{indent}cols = torch.tensor(cols_list, device='cuda', dtype=torch.int32)")
+        lines.append(f"{indent}vals = torch.randn(NNZ, device='cuda', dtype=torch.float32) * 0.1")
+        lines.append(f"{indent}x = torch.randn(NCOLS, device='cuda', dtype=torch.float32)")
+        lines.append(f"{indent}y = torch.zeros(NROWS, device='cuda', dtype=torch.float32)")
+        return lines
+
+    if kernel_name == 'lj_force':
+        NLOCAL = params.get('NLOCAL', 4000)
+        MAXNEIGHS = params.get('MAXNEIGHS', 128)
+        PAD = params.get('PAD', 3)
+        lines = []
+        lines.append(f"{indent}NLOCAL = {NLOCAL}")
+        lines.append(f"{indent}MAXNEIGHS = {MAXNEIGHS}")
+        lines.append(f"{indent}PAD = {PAD}")
+        lines.append(f"{indent}# Atom positions on a lattice in box [0, L]^3, spaced for ~60 neighbors")
+        lines.append(f"{indent}# Lattice spacing 2.0, cutoff 4.0 → each atom sees ~60 neighbors")
+        lines.append(f"{indent}import numpy as np_init")
+        lines.append(f"{indent}lattice_n = int(round(NLOCAL ** (1.0/3.0))) + 1")
+        lines.append(f"{indent}spacing = 2.0")
+        lines.append(f"{indent}coords = []")
+        lines.append(f"{indent}for ix in range(lattice_n):")
+        lines.append(f"{indent}    for iy in range(lattice_n):")
+        lines.append(f"{indent}        for iz in range(lattice_n):")
+        lines.append(f"{indent}            if len(coords) >= NLOCAL:")
+        lines.append(f"{indent}                break")
+        lines.append(f"{indent}            # Small random perturbation")
+        lines.append(f"{indent}            coords.append([ix*spacing + np_init.random.uniform(-0.2, 0.2),")
+        lines.append(f"{indent}                           iy*spacing + np_init.random.uniform(-0.2, 0.2),")
+        lines.append(f"{indent}                           iz*spacing + np_init.random.uniform(-0.2, 0.2)])")
+        lines.append(f"{indent}        if len(coords) >= NLOCAL:")
+        lines.append(f"{indent}            break")
+        lines.append(f"{indent}    if len(coords) >= NLOCAL:")
+        lines.append(f"{indent}        break")
+        lines.append(f"{indent}coords = np_init.array(coords[:NLOCAL], dtype=np_init.float32)")
+        lines.append(f"{indent}pos = torch.from_numpy(coords.flatten()).to('cuda')")
+        lines.append(f"{indent}f = torch.zeros(NLOCAL * PAD, device='cuda', dtype=torch.float32)")
+        lines.append(f"{indent}# Build neighbor lists using scipy KDTree for efficiency")
+        lines.append(f"{indent}from scipy.spatial import cKDTree")
+        lines.append(f"{indent}tree = cKDTree(coords)")
+        lines.append(f"{indent}cutoff = 4.0")
+        lines.append(f"{indent}numneigh_list = []")
+        lines.append(f"{indent}neighbors_flat = []")
+        lines.append(f"{indent}for i_atom in range(NLOCAL):")
+        lines.append(f"{indent}    nlist = tree.query_ball_point(coords[i_atom], cutoff)")
+        lines.append(f"{indent}    nlist = [j for j in nlist if j != i_atom]")
+        lines.append(f"{indent}    if len(nlist) > MAXNEIGHS:")
+        lines.append(f"{indent}        nlist = nlist[:MAXNEIGHS]")
+        lines.append(f"{indent}    numneigh_list.append(len(nlist))")
+        lines.append(f"{indent}    padded = nlist + [0] * (MAXNEIGHS - len(nlist))")
+        lines.append(f"{indent}    neighbors_flat.extend(padded)")
+        lines.append(f"{indent}numneigh = torch.tensor(numneigh_list, device='cuda', dtype=torch.int32)")
+        lines.append(f"{indent}neighbors = torch.tensor(neighbors_flat, device='cuda', dtype=torch.int32)")
+        lines.append(f"{indent}cutforcesq_val = 16.0  # cutoff^2")
+        lines.append(f"{indent}sigma6_val = 1.0")
+        lines.append(f"{indent}epsilon_val = 1.0")
         return lines
 
     return None

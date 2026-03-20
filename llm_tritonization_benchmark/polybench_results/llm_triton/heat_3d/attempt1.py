@@ -3,112 +3,109 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def heat_3d_kernel_step1(A_ptr, B_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Calculate flattened index for interior points
-    flat_idx = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+def heat_3d_phase1_kernel(A, B, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Each program handles a block of elements from the 3D space
+    pid = tl.program_id(0)
     
-    # Total interior elements: (N-2)^3
-    N_interior = N - 2
-    total_interior = N_interior * N_interior * N_interior
+    # Calculate starting offset for this block
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Mask for valid elements
-    mask = flat_idx < total_interior
+    # Convert linear index to 3D coordinates (i, j, k)
+    # For interior points: i,j,k in [1, N-2]
+    interior_size = N - 2
+    total_interior = interior_size * interior_size * interior_size
     
-    # Convert flat index to 3D coordinates (interior space)
-    k_interior = flat_idx % N_interior
-    j_interior = (flat_idx // N_interior) % N_interior
-    i_interior = flat_idx // (N_interior * N_interior)
+    mask = offsets < total_interior
     
-    # Convert to actual array indices (add 1 for boundary offset)
-    i = i_interior + 1
-    j = j_interior + 1
-    k = k_interior + 1
+    # Convert linear offset to 3D coordinates
+    temp = offsets
+    k = temp % interior_size + 1  # k in [1, N-2]
+    temp = temp // interior_size
+    j = temp % interior_size + 1  # j in [1, N-2]
+    i = temp // interior_size + 1  # i in [1, N-2]
     
-    # Calculate linear indices for 3D array access
-    center_idx = i * (N * N) + j * N + k
+    # Calculate 3D array indices
+    idx = i * N * N + j * N + k
     
-    # Load center values
-    A_center = tl.load(A_ptr + center_idx, mask=mask)
+    # Load central values
+    A_center = tl.load(A + idx, mask=mask)
     
-    # Load neighbors for i-dimension
-    A_ip1 = tl.load(A_ptr + center_idx + N * N, mask=mask)  # i+1
-    A_im1 = tl.load(A_ptr + center_idx - N * N, mask=mask)  # i-1
+    # Load neighbor values for stencil computation
+    A_i_plus = tl.load(A + idx + N * N, mask=mask)   # A[i+1][j][k]
+    A_i_minus = tl.load(A + idx - N * N, mask=mask)  # A[i-1][j][k]
+    A_j_plus = tl.load(A + idx + N, mask=mask)       # A[i][j+1][k]
+    A_j_minus = tl.load(A + idx - N, mask=mask)      # A[i][j-1][k]
+    A_k_plus = tl.load(A + idx + 1, mask=mask)       # A[i][j][k+1]
+    A_k_minus = tl.load(A + idx - 1, mask=mask)      # A[i][j][k-1]
     
-    # Load neighbors for j-dimension
-    A_jp1 = tl.load(A_ptr + center_idx + N, mask=mask)  # j+1
-    A_jm1 = tl.load(A_ptr + center_idx - N, mask=mask)  # j-1
-    
-    # Load neighbors for k-dimension
-    A_kp1 = tl.load(A_ptr + center_idx + 1, mask=mask)  # k+1
-    A_km1 = tl.load(A_ptr + center_idx - 1, mask=mask)  # k-1
-    
-    # Compute heat equation update
-    B_new = (0.125 * (A_ip1 - 2.0 * A_center + A_im1) +
-             0.125 * (A_jp1 - 2.0 * A_center + A_jm1) +
-             0.125 * (A_kp1 - 2.0 * A_center + A_km1) +
-             A_center)
+    # Compute stencil: 0.125 * second derivative + original value
+    result = (0.125 * (A_i_plus - 2.0 * A_center + A_i_minus) +
+              0.125 * (A_j_plus - 2.0 * A_center + A_j_minus) +
+              0.125 * (A_k_plus - 2.0 * A_center + A_k_minus) +
+              A_center)
     
     # Store result
-    tl.store(B_ptr + center_idx, B_new, mask=mask)
+    tl.store(B + idx, result, mask=mask)
 
 @triton.jit
-def heat_3d_kernel_step2(A_ptr, B_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Calculate flattened index for interior points
-    flat_idx = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+def heat_3d_phase2_kernel(A, B, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Each program handles a block of elements from the 3D space
+    pid = tl.program_id(0)
     
-    # Total interior elements: (N-2)^3
-    N_interior = N - 2
-    total_interior = N_interior * N_interior * N_interior
+    # Calculate starting offset for this block
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
-    # Mask for valid elements
-    mask = flat_idx < total_interior
+    # Convert linear index to 3D coordinates (i, j, k)
+    # For interior points: i,j,k in [1, N-2]
+    interior_size = N - 2
+    total_interior = interior_size * interior_size * interior_size
     
-    # Convert flat index to 3D coordinates (interior space)
-    k_interior = flat_idx % N_interior
-    j_interior = (flat_idx // N_interior) % N_interior
-    i_interior = flat_idx // (N_interior * N_interior)
+    mask = offsets < total_interior
     
-    # Convert to actual array indices (add 1 for boundary offset)
-    i = i_interior + 1
-    j = j_interior + 1
-    k = k_interior + 1
+    # Convert linear offset to 3D coordinates
+    temp = offsets
+    k = temp % interior_size + 1  # k in [1, N-2]
+    temp = temp // interior_size
+    j = temp % interior_size + 1  # j in [1, N-2]
+    i = temp // interior_size + 1  # i in [1, N-2]
     
-    # Calculate linear indices for 3D array access
-    center_idx = i * (N * N) + j * N + k
+    # Calculate 3D array indices
+    idx = i * N * N + j * N + k
     
-    # Load center values
-    B_center = tl.load(B_ptr + center_idx, mask=mask)
+    # Load central values
+    B_center = tl.load(B + idx, mask=mask)
     
-    # Load neighbors for i-dimension
-    B_ip1 = tl.load(B_ptr + center_idx + N * N, mask=mask)  # i+1
-    B_im1 = tl.load(B_ptr + center_idx - N * N, mask=mask)  # i-1
+    # Load neighbor values for stencil computation
+    B_i_plus = tl.load(B + idx + N * N, mask=mask)   # B[i+1][j][k]
+    B_i_minus = tl.load(B + idx - N * N, mask=mask)  # B[i-1][j][k]
+    B_j_plus = tl.load(B + idx + N, mask=mask)       # B[i][j+1][k]
+    B_j_minus = tl.load(B + idx - N, mask=mask)      # B[i][j-1][k]
+    B_k_plus = tl.load(B + idx + 1, mask=mask)       # B[i][j][k+1]
+    B_k_minus = tl.load(B + idx - 1, mask=mask)      # B[i][j][k-1]
     
-    # Load neighbors for j-dimension
-    B_jp1 = tl.load(B_ptr + center_idx + N, mask=mask)  # j+1
-    B_jm1 = tl.load(B_ptr + center_idx - N, mask=mask)  # j-1
-    
-    # Load neighbors for k-dimension
-    B_kp1 = tl.load(B_ptr + center_idx + 1, mask=mask)  # k+1
-    B_km1 = tl.load(B_ptr + center_idx - 1, mask=mask)  # k-1
-    
-    # Compute heat equation update
-    A_new = (0.125 * (B_ip1 - 2.0 * B_center + B_im1) +
-             0.125 * (B_jp1 - 2.0 * B_center + B_jm1) +
-             0.125 * (B_kp1 - 2.0 * B_center + B_km1) +
-             B_center)
+    # Compute stencil: 0.125 * second derivative + original value
+    result = (0.125 * (B_i_plus - 2.0 * B_center + B_i_minus) +
+              0.125 * (B_j_plus - 2.0 * B_center + B_j_minus) +
+              0.125 * (B_k_plus - 2.0 * B_center + B_k_minus) +
+              B_center)
     
     # Store result
-    tl.store(A_ptr + center_idx, A_new, mask=mask)
+    tl.store(A + idx, result, mask=mask)
 
 def heat_3d_triton(A, B, N, TSTEPS):
+    # Calculate grid dimensions
+    interior_size = N - 2
+    total_interior = interior_size * interior_size * interior_size
+    
     BLOCK_SIZE = 128
-    N_interior = N - 2
-    total_interior = N_interior * N_interior * N_interior
     grid = (triton.cdiv(total_interior, BLOCK_SIZE),)
     
+    # Time stepping loop in host code
     for t in range(1, TSTEPS + 1):
-        # Step 1: A -> B
-        heat_3d_kernel_step1[grid](A, B, N, BLOCK_SIZE)
+        # Phase 1: A -> B
+        heat_3d_phase1_kernel[grid](A, B, N, BLOCK_SIZE)
         
-        # Step 2: B -> A
-        heat_3d_kernel_step2[grid](A, B, N, BLOCK_SIZE)
+        # Phase 2: B -> A (kernel launch provides synchronization)
+        heat_3d_phase2_kernel[grid](A, B, N, BLOCK_SIZE)

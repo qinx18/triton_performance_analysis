@@ -11,13 +11,13 @@ import torch
 
 try:
     import importlib
-    _mod = importlib.import_module("polybench_results_scale8x.llm_triton_no_analysis.3mm.attempt4")
+    _mod = importlib.import_module("polybench_results_scale8x.llm_triton.3mm.attempt1")
     k3mm_triton = _mod.k3mm_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "lib3mm.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "lib3mm.so"
 
 def run_c_reference(A_c, B_c, C_c, D_c, E_c, F_c, G_c, NI, NJ, NK, NL, NM):
     lib = ctypes.CDLL(str(C_LIB_PATH))

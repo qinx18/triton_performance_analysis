@@ -3,99 +3,60 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def nussinov_kernel(seq_ptr, table_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Get program ID for the diagonal
-    diag_id = tl.program_id(0)
+def nussinov_kernel(seq_ptr, table_ptr, N: tl.constexpr):
+    # This kernel processes one diagonal at a time
+    # Each thread handles one (i,j) pair where j > i
     
-    # Process diagonals from bottom-right to top-left
-    for i_offset in range(N):
-        i = N - 1 - i_offset
+    for i_rev in range(N):
+        i = N - 1 - i_rev
         
-        # Calculate the diagonal start and length
-        diag_start = i + 1
-        diag_len = N - diag_start
-        
-        if diag_len <= 0:
-            continue
+        for j_offset in range(1, N - i):
+            j = i + j_offset
             
-        # Only process if this is the correct diagonal
-        if diag_id * BLOCK_SIZE >= diag_len:
-            continue
+            # Compute linear index for table[i][j]
+            idx = i * N + j
             
-        # Calculate j values for this block
-        j_offsets = tl.arange(0, BLOCK_SIZE)
-        j_vals = diag_start + diag_id * BLOCK_SIZE + j_offsets
-        j_mask = (diag_id * BLOCK_SIZE + j_offsets) < diag_len
-        
-        # Process each j in this block
-        for j_idx in range(BLOCK_SIZE):
-            if not j_mask[j_idx]:
-                continue
-                
-            j = diag_start + diag_id * BLOCK_SIZE + j_idx
-            if j >= N:
-                continue
-                
-            # Calculate table index
-            table_idx = i * N + j
+            # Initialize with current value
+            current_val = tl.load(table_ptr + idx)
             
-            # Load current value
-            current_val = tl.load(table_ptr + table_idx)
-            
-            # Update from left neighbor: table[i][j-1]
+            # if (j-1>=0) table[i][j] = max_score(table[i][j], table[i][j-1]);
             if j - 1 >= 0:
                 left_idx = i * N + (j - 1)
                 left_val = tl.load(table_ptr + left_idx)
                 current_val = tl.maximum(current_val, left_val)
             
-            # Update from bottom neighbor: table[i+1][j]
+            # if (i+1<N) table[i][j] = max_score(table[i][j], table[i+1][j]);
             if i + 1 < N:
-                bottom_idx = (i + 1) * N + j
-                bottom_val = tl.load(table_ptr + bottom_idx)
-                current_val = tl.maximum(current_val, bottom_val)
+                down_idx = (i + 1) * N + j
+                down_val = tl.load(table_ptr + down_idx)
+                current_val = tl.maximum(current_val, down_val)
             
-            # Update from diagonal: table[i+1][j-1] + match
+            # if (j-1>=0 && i+1<N)
             if j - 1 >= 0 and i + 1 < N:
                 diag_idx = (i + 1) * N + (j - 1)
                 diag_val = tl.load(table_ptr + diag_idx)
                 
-                if i < j - 1:
-                    # Load sequence values for matching
+                if i < j - 1:  # don't allow adjacent elements to bond
                     seq_i = tl.load(seq_ptr + i)
                     seq_j = tl.load(seq_ptr + j)
-                    match_score = tl.where((seq_i + seq_j) == 3, 1, 0)
-                    current_val = tl.maximum(current_val, diag_val + match_score)
+                    match_val = tl.where((seq_i + seq_j) == 3, 1, 0)
+                    current_val = tl.maximum(current_val, diag_val + match_val)
                 else:
                     current_val = tl.maximum(current_val, diag_val)
             
-            # Inner k loop: table[i][k] + table[k+1][j]
+            # for (k=i+1; k<j; k++)
             for k in range(i + 1, j):
-                left_k_idx = i * N + k
-                right_k_idx = (k + 1) * N + j
-                left_k_val = tl.load(table_ptr + left_k_idx)
-                right_k_val = tl.load(table_ptr + right_k_idx)
-                current_val = tl.maximum(current_val, left_k_val + right_k_val)
+                left_split_idx = i * N + k
+                right_split_idx = (k + 1) * N + j
+                left_split_val = tl.load(table_ptr + left_split_idx)
+                right_split_val = tl.load(table_ptr + right_split_idx)
+                split_sum = left_split_val + right_split_val
+                current_val = tl.maximum(current_val, split_sum)
             
             # Store the result
-            tl.store(table_ptr + table_idx, current_val)
+            tl.store(table_ptr + idx, current_val)
 
 def nussinov_triton(seq, table, N):
-    # Calculate maximum number of diagonals
-    max_diag_len = N - 1
-    BLOCK_SIZE = 32
-    
-    # Launch kernel for each i value sequentially
-    for i_offset in range(N):
-        i = N - 1 - i_offset
-        diag_start = i + 1
-        diag_len = N - diag_start
-        
-        if diag_len <= 0:
-            continue
-            
-        num_blocks = triton.cdiv(diag_len, BLOCK_SIZE)
-        
-        if num_blocks > 0:
-            nussinov_kernel[(num_blocks,)](
-                seq, table, N, BLOCK_SIZE
-            )
+    # Launch single thread since this is a sequential dynamic programming algorithm
+    grid = (1,)
+    nussinov_kernel[grid](seq, table, N)

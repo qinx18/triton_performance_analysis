@@ -1,80 +1,102 @@
 
-## PREVIOUS ATTEMPT HAS LOW PERFORMANCE - NEEDS BETTER PARALLELIZATION
+## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
 
-Your last attempt is CORRECT but has very low performance (speedup: 0.078772x).
-This indicates the code is NOT properly parallelized for GPU execution.
+Your last attempt produced incorrect numerical results.
 
-**CRITICAL ISSUE**: Your kernel is likely running sequentially instead of in parallel.
+**Error type**: Numerical error (values don't match)
+**Max error observed**: 2.583368e+00
 
-**Common parallelization mistakes to fix**:
-1. Using `grid=(1,)` with a single thread doing all work — this is SEQUENTIAL on GPU!
-2. Using scalar `tl.load`/`tl.store` in a Python for loop instead of vectorized block operations
-3. NOT using `tl.program_id(0)` to distribute work across GPU blocks
-4. Processing ALL elements in one block instead of splitting across multiple blocks
+Please fix the numerical computation. Common causes:
+- Incorrect loop bounds or indices
+- Wrong array access patterns (row-major vs column-major)
+- Missing or incorrect operations
+- Off-by-one errors
+- Cloning input arrays instead of modifying them in-place (the test checks the original tensors)
 
-**CORRECT parallel pattern** (each block handles different elements):
-```python
-@triton.jit
-def kernel(..., BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)                    # Get unique block ID
-    block_start = pid * BLOCK_SIZE            # Each block starts at different offset
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)  # Each block handles BLOCK_SIZE elements
-    mask = offsets < n_elements
-    # Load, compute, store for THIS block only - NO for loop over all elements!
-```
-
-**For 2D kernels**, parallelize the outer loop dimension:
-```python
-@triton.jit
-def kernel(..., N, BLOCK_SIZE: tl.constexpr):
-    row = tl.program_id(0)  # Each block handles one row
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    # Process row 'row' with vectorized column access
-```
-
-## LAST ATTEMPT (NEEDS PARALLELIZATION FIX):
+## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
 ```python
 import triton
 import triton.language as tl
 import torch
 
 @triton.jit
-def cholesky_kernel(A_ptr, N: tl.constexpr, stride: tl.constexpr):
-    for i in range(N):
-        # j < i case
-        for j in range(i):
-            # Compute A[i][j] -= A[i][k] * A[j][k] for k < j
-            acc = 0.0
-            for k in range(j):
-                i_idx = i * stride + k
-                j_idx = j * stride + k
-                a_ik = tl.load(A_ptr + i_idx)
-                a_jk = tl.load(A_ptr + j_idx)
-                acc += a_ik * a_jk
+def cholesky_kernel(A_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Each program handles one row
+    i = tl.program_id(0)
+    
+    if i >= N:
+        return
+    
+    # Process j < i (off-diagonal elements)
+    for j in range(i):
+        # Accumulate A[i][j] -= A[i][k] * A[j][k] for k < j
+        accumulator = 0.0
+        
+        # Vectorized computation for k < j
+        k_offsets = tl.arange(0, BLOCK_SIZE)
+        for k_start in range(0, j, BLOCK_SIZE):
+            k_indices = k_start + k_offsets
+            k_mask = (k_indices < j)
             
-            # Load current A[i][j], subtract accumulation, then divide by A[j][j]
-            ij_idx = i * stride + j
-            jj_idx = j * stride + j
-            a_ij = tl.load(A_ptr + ij_idx)
-            a_jj = tl.load(A_ptr + jj_idx)
-            a_ij = (a_ij - acc) / a_jj
-            tl.store(A_ptr + ij_idx, a_ij)
+            # Load A[i][k] and A[j][k]
+            a_i_k_offsets = i * N + k_indices
+            a_j_k_offsets = j * N + k_indices
+            
+            a_i_k = tl.load(A_ptr + a_i_k_offsets, mask=k_mask, other=0.0)
+            a_j_k = tl.load(A_ptr + a_j_k_offsets, mask=k_mask, other=0.0)
+            
+            # Accumulate products
+            products = a_i_k * a_j_k
+            accumulator += tl.sum(products)
         
-        # i == j case
-        acc = 0.0
-        for k in range(i):
-            ik_idx = i * stride + k
-            a_ik = tl.load(A_ptr + ik_idx)
-            acc += a_ik * a_ik
+        # Update A[i][j]
+        a_ij_offset = i * N + j
+        a_ij = tl.load(A_ptr + a_ij_offset)
+        a_ij -= accumulator
         
-        ii_idx = i * stride + i
-        a_ii = tl.load(A_ptr + ii_idx)
-        a_ii = tl.sqrt(a_ii - acc)
-        tl.store(A_ptr + ii_idx, a_ii)
+        # Load A[j][j] and divide
+        a_jj_offset = j * N + j
+        a_jj = tl.load(A_ptr + a_jj_offset)
+        a_ij /= a_jj
+        
+        # Store updated A[i][j]
+        tl.store(A_ptr + a_ij_offset, a_ij)
+    
+    # Process diagonal element A[i][i]
+    diagonal_accumulator = 0.0
+    
+    # Vectorized computation for k < i
+    k_offsets = tl.arange(0, BLOCK_SIZE)
+    for k_start in range(0, i, BLOCK_SIZE):
+        k_indices = k_start + k_offsets
+        k_mask = (k_indices < i)
+        
+        # Load A[i][k]
+        a_i_k_offsets = i * N + k_indices
+        a_i_k = tl.load(A_ptr + a_i_k_offsets, mask=k_mask, other=0.0)
+        
+        # Accumulate squares
+        squares = a_i_k * a_i_k
+        diagonal_accumulator += tl.sum(squares)
+    
+    # Update A[i][i]
+    a_ii_offset = i * N + i
+    a_ii = tl.load(A_ptr + a_ii_offset)
+    a_ii -= diagonal_accumulator
+    a_ii = tl.sqrt(a_ii)
+    
+    # Store updated A[i][i]
+    tl.store(A_ptr + a_ii_offset, a_ii)
 
 def cholesky_triton(A, N):
-    stride = A.stride(0)
-    cholesky_kernel[(1,)](A, N, stride)
+    BLOCK_SIZE = 128
+    
+    # Launch kernel with one program per row
+    grid = (N,)
+    
+    cholesky_kernel[grid](
+        A, N, BLOCK_SIZE
+    )
 ```
 
 
@@ -175,16 +197,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)

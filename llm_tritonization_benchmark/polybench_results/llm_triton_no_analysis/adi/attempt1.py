@@ -1,14 +1,10 @@
-import torch
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def adi_kernel(
-    p_ptr, q_ptr, u_ptr, v_ptr,
-    N: tl.constexpr, TSTEPS: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr
-):
-    # Calculate constants
+def adi_kernel(p_ptr, q_ptr, u_ptr, v_ptr, N: tl.constexpr, TSTEPS: tl.constexpr):
+    # Compute constants
     DX = 1.0 / N
     DY = 1.0 / N
     DT = 1.0 / TSTEPS
@@ -24,88 +20,118 @@ def adi_kernel(
     e = 1.0 + mul2
     f = d
     
-    # Time stepping loop
     for t in range(1, TSTEPS + 1):
         # Column Sweep
         for i in range(1, N - 1):
-            # Set boundary conditions
-            tl.store(v_ptr + 0 * N + i, 1.0)
-            tl.store(p_ptr + i * N + 0, 0.0)
-            v_0_i = tl.load(v_ptr + 0 * N + i)
-            tl.store(q_ptr + i * N + 0, v_0_i)
+            # v[0][i] = 1.0
+            v_idx = 0 * N + i
+            tl.store(v_ptr + v_idx, 1.0)
             
-            # Forward sweep
+            # p[i][0] = 0.0
+            p_idx = i * N + 0
+            tl.store(p_ptr + p_idx, 0.0)
+            
+            # q[i][0] = v[0][i]
+            q_idx = i * N + 0
+            v_val = tl.load(v_ptr + v_idx)
+            tl.store(q_ptr + q_idx, v_val)
+            
             for j in range(1, N - 1):
-                p_i_j_minus_1 = tl.load(p_ptr + i * N + (j - 1))
-                q_i_j_minus_1 = tl.load(q_ptr + i * N + (j - 1))
+                # p[i][j] = -c / (a*p[i][j-1]+b)
+                p_prev_idx = i * N + (j - 1)
+                p_prev = tl.load(p_ptr + p_prev_idx)
+                p_val = -c / (a * p_prev + b)
+                p_curr_idx = i * N + j
+                tl.store(p_ptr + p_curr_idx, p_val)
                 
-                u_j_i_minus_1 = tl.load(u_ptr + j * N + (i - 1))
-                u_j_i = tl.load(u_ptr + j * N + i)
-                u_j_i_plus_1 = tl.load(u_ptr + j * N + (i + 1))
+                # q[i][j] = (-d*u[j][i-1]+(1.0+2.0*d)*u[j][i] - f*u[j][i+1]-a*q[i][j-1])/(a*p[i][j-1]+b)
+                u_idx1 = j * N + (i - 1)
+                u_idx2 = j * N + i
+                u_idx3 = j * N + (i + 1)
+                u_val1 = tl.load(u_ptr + u_idx1)
+                u_val2 = tl.load(u_ptr + u_idx2)
+                u_val3 = tl.load(u_ptr + u_idx3)
                 
-                p_val = -c / (a * p_i_j_minus_1 + b)
-                q_val = (-d * u_j_i_minus_1 + (1.0 + 2.0 * d) * u_j_i - f * u_j_i_plus_1 - a * q_i_j_minus_1) / (a * p_i_j_minus_1 + b)
+                q_prev_idx = i * N + (j - 1)
+                q_prev = tl.load(q_ptr + q_prev_idx)
                 
-                tl.store(p_ptr + i * N + j, p_val)
-                tl.store(q_ptr + i * N + j, q_val)
+                q_val = (-d * u_val1 + (1.0 + 2.0 * d) * u_val2 - f * u_val3 - a * q_prev) / (a * p_prev + b)
+                q_curr_idx = i * N + j
+                tl.store(q_ptr + q_curr_idx, q_val)
             
-            # Set boundary condition
-            tl.store(v_ptr + (N - 1) * N + i, 1.0)
+            # v[N-1][i] = 1.0
+            v_end_idx = (N - 1) * N + i
+            tl.store(v_ptr + v_end_idx, 1.0)
             
-            # Backward sweep
-            for j_idx in range(N - 2):
-                j = N - 2 - j_idx
-                if j >= 1:
-                    p_i_j = tl.load(p_ptr + i * N + j)
-                    q_i_j = tl.load(q_ptr + i * N + j)
-                    v_j_plus_1_i = tl.load(v_ptr + (j + 1) * N + i)
-                    
-                    v_val = p_i_j * v_j_plus_1_i + q_i_j
-                    tl.store(v_ptr + j * N + i, v_val)
+            for j in range(N - 2, 0, -1):
+                # v[j][i] = p[i][j] * v[j+1][i] + q[i][j]
+                p_idx = i * N + j
+                v_next_idx = (j + 1) * N + i
+                q_idx = i * N + j
+                
+                p_val = tl.load(p_ptr + p_idx)
+                v_next = tl.load(v_ptr + v_next_idx)
+                q_val = tl.load(q_ptr + q_idx)
+                
+                v_val = p_val * v_next + q_val
+                v_curr_idx = j * N + i
+                tl.store(v_ptr + v_curr_idx, v_val)
         
         # Row Sweep
         for i in range(1, N - 1):
-            # Set boundary conditions
-            tl.store(u_ptr + i * N + 0, 1.0)
-            tl.store(p_ptr + i * N + 0, 0.0)
-            u_i_0 = tl.load(u_ptr + i * N + 0)
-            tl.store(q_ptr + i * N + 0, u_i_0)
+            # u[i][0] = 1.0
+            u_idx = i * N + 0
+            tl.store(u_ptr + u_idx, 1.0)
             
-            # Forward sweep
+            # p[i][0] = 0.0
+            p_idx = i * N + 0
+            tl.store(p_ptr + p_idx, 0.0)
+            
+            # q[i][0] = u[i][0]
+            q_idx = i * N + 0
+            u_val = tl.load(u_ptr + u_idx)
+            tl.store(q_ptr + q_idx, u_val)
+            
             for j in range(1, N - 1):
-                p_i_j_minus_1 = tl.load(p_ptr + i * N + (j - 1))
-                q_i_j_minus_1 = tl.load(q_ptr + i * N + (j - 1))
+                # p[i][j] = -f / (d*p[i][j-1]+e)
+                p_prev_idx = i * N + (j - 1)
+                p_prev = tl.load(p_ptr + p_prev_idx)
+                p_val = -f / (d * p_prev + e)
+                p_curr_idx = i * N + j
+                tl.store(p_ptr + p_curr_idx, p_val)
                 
-                v_i_minus_1_j = tl.load(v_ptr + (i - 1) * N + j)
-                v_i_j = tl.load(v_ptr + i * N + j)
-                v_i_plus_1_j = tl.load(v_ptr + (i + 1) * N + j)
+                # q[i][j] = (-a*v[i-1][j]+(1.0+2.0*a)*v[i][j] - c*v[i+1][j]-d*q[i][j-1])/(d*p[i][j-1]+e)
+                v_idx1 = (i - 1) * N + j
+                v_idx2 = i * N + j
+                v_idx3 = (i + 1) * N + j
+                v_val1 = tl.load(v_ptr + v_idx1)
+                v_val2 = tl.load(v_ptr + v_idx2)
+                v_val3 = tl.load(v_ptr + v_idx3)
                 
-                p_val = -f / (d * p_i_j_minus_1 + e)
-                q_val = (-a * v_i_minus_1_j + (1.0 + 2.0 * a) * v_i_j - c * v_i_plus_1_j - d * q_i_j_minus_1) / (d * p_i_j_minus_1 + e)
+                q_prev_idx = i * N + (j - 1)
+                q_prev = tl.load(q_ptr + q_prev_idx)
                 
-                tl.store(p_ptr + i * N + j, p_val)
-                tl.store(q_ptr + i * N + j, q_val)
+                q_val = (-a * v_val1 + (1.0 + 2.0 * a) * v_val2 - c * v_val3 - d * q_prev) / (d * p_prev + e)
+                q_curr_idx = i * N + j
+                tl.store(q_ptr + q_curr_idx, q_val)
             
-            # Set boundary condition
-            tl.store(u_ptr + i * N + (N - 1), 1.0)
+            # u[i][N-1] = 1.0
+            u_end_idx = i * N + (N - 1)
+            tl.store(u_ptr + u_end_idx, 1.0)
             
-            # Backward sweep
-            for j_idx in range(N - 2):
-                j = N - 2 - j_idx
-                if j >= 1:
-                    p_i_j = tl.load(p_ptr + i * N + j)
-                    q_i_j = tl.load(q_ptr + i * N + j)
-                    u_i_j_plus_1 = tl.load(u_ptr + i * N + (j + 1))
-                    
-                    u_val = p_i_j * u_i_j_plus_1 + q_i_j
-                    tl.store(u_ptr + i * N + j, u_val)
+            for j in range(N - 2, 0, -1):
+                # u[i][j] = p[i][j] * u[i][j+1] + q[i][j]
+                p_idx = i * N + j
+                u_next_idx = i * N + (j + 1)
+                q_idx = i * N + j
+                
+                p_val = tl.load(p_ptr + p_idx)
+                u_next = tl.load(u_ptr + u_next_idx)
+                q_val = tl.load(q_ptr + q_idx)
+                
+                u_val = p_val * u_next + q_val
+                u_curr_idx = i * N + j
+                tl.store(u_ptr + u_curr_idx, u_val)
 
 def adi_triton(p, q, u, v, N, TSTEPS):
-    BLOCK_SIZE = 1
-    
-    grid = (1,)
-    adi_kernel[grid](
-        p, q, u, v,
-        N, TSTEPS,
-        BLOCK_SIZE
-    )
+    adi_kernel[(1,)](p, q, u, v, N, TSTEPS)

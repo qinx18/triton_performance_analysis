@@ -7,23 +7,23 @@ def deriche_kernel(imgIn_ptr, imgOut_ptr, y2_ptr, yy1_ptr, alpha, H: tl.constexp
     # Calculate coefficients
     exp_neg_alpha = tl.exp(-alpha)
     exp_neg_2alpha = tl.exp(-2.0 * alpha)
-    exp_2alpha = tl.exp(2.0 * alpha)
+    exp_pos_2alpha = tl.exp(2.0 * alpha)
     
-    k = (1.0 - exp_neg_alpha) * (1.0 - exp_neg_alpha) / (1.0 + 2.0 * alpha * exp_neg_alpha - exp_2alpha)
+    k = (1.0 - exp_neg_alpha) * (1.0 - exp_neg_alpha) / (1.0 + 2.0 * alpha * exp_neg_alpha - exp_pos_2alpha)
     a1 = k
-    a5 = k
     a2 = k * exp_neg_alpha * (alpha - 1.0)
-    a6 = k * exp_neg_alpha * (alpha - 1.0)
     a3 = k * exp_neg_alpha * (alpha + 1.0)
-    a7 = k * exp_neg_alpha * (alpha + 1.0)
     a4 = -k * exp_neg_2alpha
-    a8 = -k * exp_neg_2alpha
-    b1 = tl.exp2(-alpha)
+    a5 = a1
+    a6 = a2
+    a7 = a3
+    a8 = a4
+    b1 = tl.math.pow(2.0, -alpha)
     b2 = -exp_neg_2alpha
     c1 = 1.0
     c2 = 1.0
     
-    # First pass: forward scan over rows
+    # First pass: forward scan along j dimension for each i
     for i in range(W):
         ym1 = 0.0
         ym2 = 0.0
@@ -37,15 +37,15 @@ def deriche_kernel(imgIn_ptr, imgOut_ptr, y2_ptr, yy1_ptr, alpha, H: tl.constexp
             ym2 = ym1
             ym1 = yy1_val
     
-    # Second pass: backward scan over rows
+    # Second pass: backward scan along j dimension for each i
     for i in range(W):
         yp1 = 0.0
         yp2 = 0.0
         xp1 = 0.0
         xp2 = 0.0
         for j in range(H):
-            j_idx = H - 1 - j
-            idx = i * H + j_idx
+            j_rev = H - 1 - j
+            idx = i * H + j_rev
             imgIn_val = tl.load(imgIn_ptr + idx)
             y2_val = a3 * xp1 + a4 * xp2 + b1 * yp1 + b2 * yp2
             tl.store(y2_ptr + idx, y2_val)
@@ -54,7 +54,7 @@ def deriche_kernel(imgIn_ptr, imgOut_ptr, y2_ptr, yy1_ptr, alpha, H: tl.constexp
             yp2 = yp1
             yp1 = y2_val
     
-    # Combine first two passes
+    # Third pass: combine results
     for i in range(W):
         for j in range(H):
             idx = i * H + j
@@ -63,7 +63,7 @@ def deriche_kernel(imgIn_ptr, imgOut_ptr, y2_ptr, yy1_ptr, alpha, H: tl.constexp
             imgOut_val = c1 * (yy1_val + y2_val)
             tl.store(imgOut_ptr + idx, imgOut_val)
     
-    # Third pass: forward scan over columns
+    # Fourth pass: forward scan along i dimension for each j
     for j in range(H):
         tm1 = 0.0
         ym1 = 0.0
@@ -77,15 +77,15 @@ def deriche_kernel(imgIn_ptr, imgOut_ptr, y2_ptr, yy1_ptr, alpha, H: tl.constexp
             ym2 = ym1
             ym1 = yy1_val
     
-    # Fourth pass: backward scan over columns
+    # Fifth pass: backward scan along i dimension for each j
     for j in range(H):
         tp1 = 0.0
         tp2 = 0.0
         yp1 = 0.0
         yp2 = 0.0
         for i in range(W):
-            i_idx = W - 1 - i
-            idx = i_idx * H + j
+            i_rev = W - 1 - i
+            idx = i_rev * H + j
             imgOut_val = tl.load(imgOut_ptr + idx)
             y2_val = a7 * tp1 + a8 * tp2 + b1 * yp1 + b2 * yp2
             tl.store(y2_ptr + idx, y2_val)
@@ -94,7 +94,7 @@ def deriche_kernel(imgIn_ptr, imgOut_ptr, y2_ptr, yy1_ptr, alpha, H: tl.constexp
             yp2 = yp1
             yp1 = y2_val
     
-    # Final combination
+    # Final pass: combine final results
     for i in range(W):
         for j in range(H):
             idx = i * H + j
@@ -105,7 +105,5 @@ def deriche_kernel(imgIn_ptr, imgOut_ptr, y2_ptr, yy1_ptr, alpha, H: tl.constexp
 
 def deriche_triton(imgIn, imgOut, y2, yy1, alpha, H, W):
     deriche_kernel[(1,)](
-        imgIn, imgOut, y2, yy1,
-        alpha,
-        H, W
+        imgIn, imgOut, y2, yy1, alpha, H, W
     )

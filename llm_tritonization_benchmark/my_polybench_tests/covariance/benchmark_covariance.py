@@ -15,7 +15,7 @@ except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libcovariance.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libcovariance.so"
 
 def run_c_reference(cov_c, data_c, mean_c, float_n, M, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

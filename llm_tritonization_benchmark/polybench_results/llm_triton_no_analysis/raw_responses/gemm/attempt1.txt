@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for gemm (Polybench)
-# Generated: 2026-03-05 05:24:08
+# Generated: 2026-03-18 14:50:00
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -100,16 +100,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -130,49 +134,46 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def gemm_kernel(A_ptr, B_ptr, C_ptr, alpha, beta, 
-                NI: tl.constexpr, NJ: tl.constexpr, NK: tl.constexpr,
-                BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    i = pid
+def gemm_kernel(A, B, C, alpha, beta, NI: tl.constexpr, NJ: tl.constexpr, NK: tl.constexpr, 
+                BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr):
+    pid_i = tl.program_id(0)
+    pid_j = tl.program_id(1)
     
-    if i >= NI:
-        return
+    block_start_i = pid_i * BLOCK_I
+    block_start_j = pid_j * BLOCK_J
     
-    # First loop: C[i][j] *= beta for j in range(NJ)
-    j_offsets = tl.arange(0, BLOCK_SIZE)
-    for j_start in range(0, NJ, BLOCK_SIZE):
-        j_indices = j_start + j_offsets
-        j_mask = j_indices < NJ
-        
-        c_offsets = i * NJ + j_indices
-        c_vals = tl.load(C_ptr + c_offsets, mask=j_mask)
-        c_vals = c_vals * beta
-        tl.store(C_ptr + c_offsets, c_vals, mask=j_mask)
+    offs_i = block_start_i + tl.arange(0, BLOCK_I)
+    offs_j = block_start_j + tl.arange(0, BLOCK_J)
     
-    # Second loop: C[i][j] += alpha * A[i][k] * B[k][j]
+    mask_i = offs_i < NI
+    mask_j = offs_j < NJ
+    
+    # Load and scale C[i, j] by beta
+    c_offs = offs_i[:, None] * NJ + offs_j[None, :]
+    mask_c = mask_i[:, None] & mask_j[None, :]
+    c_vals = tl.load(C + c_offs, mask=mask_c, other=0.0)
+    c_vals = c_vals * beta
+    
+    # Compute matrix multiplication: C += alpha * A * B
     for k in range(NK):
-        a_val = tl.load(A_ptr + i * NK + k)
+        a_offs = offs_i * NK + k
+        b_offs = k * NJ + offs_j
         
-        for j_start in range(0, NJ, BLOCK_SIZE):
-            j_indices = j_start + j_offsets
-            j_mask = j_indices < NJ
-            
-            b_offsets = k * NJ + j_indices
-            b_vals = tl.load(B_ptr + b_offsets, mask=j_mask)
-            
-            c_offsets = i * NJ + j_indices
-            c_vals = tl.load(C_ptr + c_offsets, mask=j_mask)
-            
-            c_vals = c_vals + alpha * a_val * b_vals
-            tl.store(C_ptr + c_offsets, c_vals, mask=j_mask)
+        a_vals = tl.load(A + a_offs, mask=mask_i, other=0.0)
+        b_vals = tl.load(B + b_offs, mask=mask_j, other=0.0)
+        
+        c_vals += alpha * a_vals[:, None] * b_vals[None, :]
+    
+    # Store result back to C
+    tl.store(C + c_offs, c_vals, mask=mask_c)
 
 def gemm_triton(A, B, C, alpha, beta, NI, NJ, NK):
-    BLOCK_SIZE = 64
-    grid = (triton.cdiv(NI, 1),)
+    BLOCK_I = 32
+    BLOCK_J = 32
+    
+    grid = (triton.cdiv(NI, BLOCK_I), triton.cdiv(NJ, BLOCK_J))
     
     gemm_kernel[grid](
-        A, B, C, alpha, beta,
-        NI, NJ, NK, BLOCK_SIZE
+        A, B, C, alpha, beta, NI, NJ, NK, BLOCK_I, BLOCK_J
     )
 ```

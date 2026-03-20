@@ -3,110 +3,120 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def gemver_kernel_1(A_ptr, u1_ptr, u2_ptr, v1_ptr, v2_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def gemver_phase1_kernel(A_ptr, u1_ptr, u2_ptr, v1_ptr, v2_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     # Phase 1: A[i][j] = A[i][j] + u1[i] * v1[j] + u2[i] * v2[j]
     row = tl.program_id(0)
     
-    if row < N:
-        u1_val = tl.load(u1_ptr + row)
-        u2_val = tl.load(u2_ptr + row)
+    # Load u1[row] and u2[row] once per row
+    u1_val = tl.load(u1_ptr + row)
+    u2_val = tl.load(u2_ptr + row)
+    
+    # Process columns in blocks
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    for col_start in range(0, N, BLOCK_SIZE):
+        cols = col_start + col_offsets
+        mask = cols < N
         
-        for col_start in range(0, N, BLOCK_SIZE):
-            col_offsets = tl.arange(0, BLOCK_SIZE) + col_start
-            col_mask = col_offsets < N
-            
-            # Load current A values
-            a_offsets = row * N + col_offsets
-            a_vals = tl.load(A_ptr + a_offsets, mask=col_mask)
-            
-            # Load v1 and v2 values
-            v1_vals = tl.load(v1_ptr + col_offsets, mask=col_mask)
-            v2_vals = tl.load(v2_ptr + col_offsets, mask=col_mask)
-            
-            # Update A values
-            new_a_vals = a_vals + u1_val * v1_vals + u2_val * v2_vals
-            
-            # Store back
-            tl.store(A_ptr + a_offsets, new_a_vals, mask=col_mask)
+        # Load vectors
+        v1_vals = tl.load(v1_ptr + cols, mask=mask)
+        v2_vals = tl.load(v2_ptr + cols, mask=mask)
+        
+        # Load A[row, cols]
+        a_idx = row * N + cols
+        a_vals = tl.load(A_ptr + a_idx, mask=mask)
+        
+        # Compute update
+        update = u1_val * v1_vals + u2_val * v2_vals
+        new_a_vals = a_vals + update
+        
+        # Store back
+        tl.store(A_ptr + a_idx, new_a_vals, mask=mask)
 
 @triton.jit
-def gemver_kernel_2(A_ptr, x_ptr, y_ptr, beta, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Phase 2: x[i] = x[i] + beta * A[j][i] * y[j]
+def gemver_phase2_kernel(A_ptr, x_ptr, y_ptr, beta, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Phase 2: x[i] = x[i] + beta * A[j][i] * y[j] (sum over j)
     col = tl.program_id(0)
     
-    if col < N:
-        x_val = tl.load(x_ptr + col)
+    # Load current x[col]
+    x_val = tl.load(x_ptr + col)
+    
+    # Process rows in blocks and accumulate
+    row_offsets = tl.arange(0, BLOCK_SIZE)
+    acc = 0.0
+    
+    for row_start in range(0, N, BLOCK_SIZE):
+        rows = row_start + row_offsets
+        mask = rows < N
         
-        for row_start in range(0, N, BLOCK_SIZE):
-            row_offsets = tl.arange(0, BLOCK_SIZE) + row_start
-            row_mask = row_offsets < N
-            
-            # Load A column values (A[j][i] = A[row][col])
-            a_offsets = row_offsets * N + col
-            a_vals = tl.load(A_ptr + a_offsets, mask=row_mask)
-            
-            # Load y values
-            y_vals = tl.load(y_ptr + row_offsets, mask=row_mask)
-            
-            # Accumulate
-            products = beta * a_vals * y_vals
-            x_val += tl.sum(tl.where(row_mask, products, 0.0))
+        # Load A[rows, col] and y[rows]
+        a_idx = rows * N + col
+        a_vals = tl.load(A_ptr + a_idx, mask=mask, other=0.0)
+        y_vals = tl.load(y_ptr + rows, mask=mask, other=0.0)
         
-        tl.store(x_ptr + col, x_val)
+        # Accumulate beta * A[j][col] * y[j]
+        acc += tl.sum(beta * a_vals * y_vals)
+    
+    # Update x[col]
+    new_x_val = x_val + acc
+    tl.store(x_ptr + col, new_x_val)
 
 @triton.jit
-def gemver_kernel_3(x_ptr, z_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def gemver_phase3_kernel(x_ptr, z_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     # Phase 3: x[i] = x[i] + z[i]
-    idx_start = tl.program_id(0) * BLOCK_SIZE
-    offsets = tl.arange(0, BLOCK_SIZE) + idx_start
+    pid = tl.program_id(0)
+    
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < N
     
     x_vals = tl.load(x_ptr + offsets, mask=mask)
     z_vals = tl.load(z_ptr + offsets, mask=mask)
     
-    result = x_vals + z_vals
-    tl.store(x_ptr + offsets, result, mask=mask)
+    new_x_vals = x_vals + z_vals
+    tl.store(x_ptr + offsets, new_x_vals, mask=mask)
 
 @triton.jit
-def gemver_kernel_4(A_ptr, w_ptr, x_ptr, alpha, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Phase 4: w[i] = w[i] + alpha * A[i][j] * x[j]
+def gemver_phase4_kernel(A_ptr, w_ptr, x_ptr, alpha, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Phase 4: w[i] = w[i] + alpha * A[i][j] * x[j] (sum over j)
     row = tl.program_id(0)
     
-    if row < N:
-        w_val = tl.load(w_ptr + row)
+    # Load current w[row]
+    w_val = tl.load(w_ptr + row)
+    
+    # Process columns in blocks and accumulate
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    acc = 0.0
+    
+    for col_start in range(0, N, BLOCK_SIZE):
+        cols = col_start + col_offsets
+        mask = cols < N
         
-        for col_start in range(0, N, BLOCK_SIZE):
-            col_offsets = tl.arange(0, BLOCK_SIZE) + col_start
-            col_mask = col_offsets < N
-            
-            # Load A row values
-            a_offsets = row * N + col_offsets
-            a_vals = tl.load(A_ptr + a_offsets, mask=col_mask)
-            
-            # Load x values
-            x_vals = tl.load(x_ptr + col_offsets, mask=col_mask)
-            
-            # Accumulate
-            products = alpha * a_vals * x_vals
-            w_val += tl.sum(tl.where(col_mask, products, 0.0))
+        # Load A[row, cols] and x[cols]
+        a_idx = row * N + cols
+        a_vals = tl.load(A_ptr + a_idx, mask=mask, other=0.0)
+        x_vals = tl.load(x_ptr + cols, mask=mask, other=0.0)
         
-        tl.store(w_ptr + row, w_val)
+        # Accumulate alpha * A[row][j] * x[j]
+        acc += tl.sum(alpha * a_vals * x_vals)
+    
+    # Update w[row]
+    new_w_val = w_val + acc
+    tl.store(w_ptr + row, new_w_val)
 
 def gemver_triton(A, u1, u2, v1, v2, w, x, y, z, alpha, beta, N):
-    BLOCK_SIZE = 128
+    BLOCK_SIZE = 64
     
-    # Phase 1: Update A matrix
+    # Phase 1: Update matrix A
     grid1 = (N,)
-    gemver_kernel_1[grid1](A, u1, u2, v1, v2, N, BLOCK_SIZE)
+    gemver_phase1_kernel[grid1](A, u1, u2, v1, v2, N, BLOCK_SIZE)
     
-    # Phase 2: Update x with A^T * y
+    # Phase 2: Update x with column reduction
     grid2 = (N,)
-    gemver_kernel_2[grid2](A, x, y, beta, N, BLOCK_SIZE)
+    gemver_phase2_kernel[grid2](A, x, y, beta, N, BLOCK_SIZE)
     
-    # Phase 3: Add z to x
+    # Phase 3: Add z to x (fused with phase 2 conceptually, but separate for clarity)
     grid3 = (triton.cdiv(N, BLOCK_SIZE),)
-    gemver_kernel_3[grid3](x, z, N, BLOCK_SIZE)
+    gemver_phase3_kernel[grid3](x, z, N, BLOCK_SIZE)
     
-    # Phase 4: Update w with A * x
+    # Phase 4: Update w with row reduction
     grid4 = (N,)
-    gemver_kernel_4[grid4](A, w, x, alpha, N, BLOCK_SIZE)
+    gemver_phase4_kernel[grid4](A, w, x, alpha, N, BLOCK_SIZE)

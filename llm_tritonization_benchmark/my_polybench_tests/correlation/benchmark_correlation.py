@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.correlation.attempt1 import correlation_triton
+    from polybench_results_scale8x.llm_triton.correlation.attempt2 import correlation_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libcorrelation.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libcorrelation.so"
 
 def run_c_reference(corr_c, data_c, mean_c, stddev_c, eps, float_n, M, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

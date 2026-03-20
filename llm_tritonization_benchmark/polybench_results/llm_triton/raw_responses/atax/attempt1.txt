@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for atax (Polybench)
-# Generated: 2026-03-06 06:13:58
+# Generated: 2026-03-18 16:54:42
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -84,6 +84,21 @@ grid = (1,)  # single kernel, both reductions fused
 **Key**: Iterate the ROW dimension (M) as the outer loop. Vectorize the COLUMN dimension (N) with `tl.arange()`. This ensures ALL loads from the 2D array are coalesced (stride-1).
 
 
+## Common Mistakes to AVOID
+
+1. **NEVER use Python for-loops to launch many small kernels.** If you have sequential dims `r, q` and parallel dim `p`, do NOT write `for r in range(NR): for q in range(NQ): kernel[grid](...)`. Instead, fuse them: `grid = (NR * NQ * cdiv(NP, BLOCK),)` and inside the kernel compute `r = pid // (NQ * NP_blocks)`, `q = (pid // NP_blocks) % NQ`, `p_start = (pid % NP_blocks) * BLOCK`.
+
+2. **NEVER write parallel kernels then call a serial fallback.** If you write tiled/vectorized phase kernels (e.g., `phase1_kernel`, `phase2_kernel`), the host function MUST call them. Do NOT add a serial `grid=(1,)` wrapper that ignores the parallel implementations.
+
+3. **Use `tl.dot()` for ALL matrix multiply and outer-product accumulations.** NEVER use scalar triple-nested loops (`for i: for j: for k: acc += a[i,k]*b[k,j]`) inside a Triton kernel. Tile with BLOCK_SIZE and use `acc += tl.dot(a_tile, b_tile)`.
+
+4. **For stencil kernels with `grid=(1,)` guidance: NEVER use multi-block grids.** If the analysis says `grid=(1,)`, do NOT use `grid=(triton.cdiv(N, BLOCK),)`. Multiple CTAs cannot synchronize between phases — CTA 0 may read stale values written by CTA 1. Use `BLOCK = triton.next_power_of_2(N)` so one CTA covers ALL elements.
+
+5. **Cap BLOCK_SIZE at 128 for vectorized dimensions** (except `grid=(1,)` kernels). Use `BLOCK = min(triton.next_power_of_2(N), 128)` and iterate in chunks with `for j_start in range(0, N, BLOCK)`. Large BLOCK sizes (256+) waste registers and kill GPU occupancy. Use BLOCK_SIZE = 64 for inner reduction loops.
+
+6. **Minimize kernel launches.** Fuse phases that share the same grid dimension into a SINGLE kernel (e.g., forward pass + backward pass + combine on the same row). Each kernel launch adds ~5-10μs overhead that dominates at small problem sizes.
+
+
 ## Array Information:
 - `A`: read-only
 - `tmp`: read-write
@@ -133,16 +148,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -163,41 +182,47 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def atax_kernel(A_ptr, x_ptr, y_ptr, tmp_ptr, 
-                M: tl.constexpr, N: tl.constexpr, BLOCK: tl.constexpr):
-    offsets = tl.arange(0, BLOCK)
-    mask = offsets < N
+def atax_kernel(A_ptr, x_ptr, y_ptr, tmp_ptr, M: tl.constexpr, N: tl.constexpr, BLOCK_N: tl.constexpr):
+    # This is a fused kernel that handles both reductions in a single pass
+    # Iterate over rows (M dimension) and vectorize columns (N dimension)
     
-    # Initialize y[j] = 0
-    y_acc = tl.zeros([BLOCK], dtype=tl.float32)
+    offsets_n = tl.arange(0, BLOCK_N)
+    mask_n = offsets_n < N
     
-    # Outer loop over rows (M dimension)
+    # Initialize y to zero
+    y_acc = tl.zeros([BLOCK_N], dtype=tl.float32)
+    
+    # Iterate over all rows
     for i in range(M):
-        # Load row A[i][:]
-        a_row = tl.load(A_ptr + i * N + offsets, mask=mask, other=0.0)
+        # Load row i of matrix A
+        a_row_ptr = A_ptr + i * N + offsets_n
+        a_row = tl.load(a_row_ptr, mask=mask_n, other=0.0)
         
         # Load x vector
-        x_vals = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+        x_vec = tl.load(x_ptr + offsets_n, mask=mask_n, other=0.0)
         
-        # Compute tmp[i] = sum(A[i][j] * x[j])
-        tmp_val = tl.sum(a_row * x_vals)
-        
-        # Store tmp[i]
+        # Compute tmp[i] = sum(A[i][j] * x[j]) - row reduction
+        tmp_val = tl.sum(a_row * x_vec)
         tl.store(tmp_ptr + i, tmp_val)
         
-        # Accumulate y[j] += A[i][j] * tmp[i]
+        # Accumulate y[j] += A[i][j] * tmp[i] - column accumulation
         y_acc += a_row * tmp_val
     
     # Store final y values
-    tl.store(y_ptr + offsets, y_acc, mask=mask)
+    tl.store(y_ptr + offsets_n, y_acc, mask=mask_n)
 
 def atax_triton(A, tmp, x, y, M, N):
-    BLOCK_SIZE = triton.next_power_of_2(N)
+    # Initialize y to zero
+    y.zero_()
     
+    # Use single block to handle all N elements
+    BLOCK_N = triton.next_power_of_2(N)
+    
+    # Single kernel launch with grid=(1,) to fuse both reductions
     grid = (1,)
     
     atax_kernel[grid](
         A, x, y, tmp,
-        M=M, N=N, BLOCK=BLOCK_SIZE
+        M=M, N=N, BLOCK_N=BLOCK_N
     )
 ```

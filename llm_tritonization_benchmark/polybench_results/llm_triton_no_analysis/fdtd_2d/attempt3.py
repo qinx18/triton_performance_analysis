@@ -7,61 +7,64 @@ def fdtd_2d_kernel(
     _fict_ptr, ex_ptr, ey_ptr, hz_ptr,
     NX: tl.constexpr, NY: tl.constexpr, TMAX: tl.constexpr
 ):
+    # Sequential execution of time steps
     for t in range(TMAX):
-        # Set ey[0][j] = _fict_[t] for all j
+        # Step 1: ey[0][j] = _fict_[t] for j = 0 to NY-1
         fict_val = tl.load(_fict_ptr + t)
         for j in range(NY):
-            ey_offset = 0 * NY + j
-            tl.store(ey_ptr + ey_offset, fict_val)
+            ey_idx = 0 * NY + j
+            tl.store(ey_ptr + ey_idx, fict_val)
         
-        # Update ey[i][j] for i from 1 to NX-1
+        # Step 2: ey[i][j] = ey[i][j] - 0.5*(hz[i][j]-hz[i-1][j])
         for i in range(1, NX):
             for j in range(NY):
-                ey_offset = i * NY + j
-                hz_offset = i * NY + j
-                hz_prev_offset = (i - 1) * NY + j
+                ey_idx = i * NY + j
+                hz_idx = i * NY + j
+                hz_prev_idx = (i - 1) * NY + j
                 
-                ey_val = tl.load(ey_ptr + ey_offset)
-                hz_val = tl.load(hz_ptr + hz_offset)
-                hz_prev_val = tl.load(hz_ptr + hz_prev_offset)
+                ey_val = tl.load(ey_ptr + ey_idx)
+                hz_val = tl.load(hz_ptr + hz_idx)
+                hz_prev_val = tl.load(hz_ptr + hz_prev_idx)
                 
-                new_ey_val = ey_val - 0.5 * (hz_val - hz_prev_val)
-                tl.store(ey_ptr + ey_offset, new_ey_val)
+                new_ey = ey_val - 0.5 * (hz_val - hz_prev_val)
+                tl.store(ey_ptr + ey_idx, new_ey)
         
-        # Update ex[i][j] for j from 1 to NY-1
+        # Step 3: ex[i][j] = ex[i][j] - 0.5*(hz[i][j]-hz[i][j-1])
         for i in range(NX):
             for j in range(1, NY):
-                ex_offset = i * NY + j
-                hz_offset = i * NY + j
-                hz_prev_offset = i * NY + (j - 1)
+                ex_idx = i * NY + j
+                hz_idx = i * NY + j
+                hz_prev_j_idx = i * NY + (j - 1)
                 
-                ex_val = tl.load(ex_ptr + ex_offset)
-                hz_val = tl.load(hz_ptr + hz_offset)
-                hz_prev_val = tl.load(hz_ptr + hz_prev_offset)
+                ex_val = tl.load(ex_ptr + ex_idx)
+                hz_val = tl.load(hz_ptr + hz_idx)
+                hz_prev_j_val = tl.load(hz_ptr + hz_prev_j_idx)
                 
-                new_ex_val = ex_val - 0.5 * (hz_val - hz_prev_val)
-                tl.store(ex_ptr + ex_offset, new_ex_val)
+                new_ex = ex_val - 0.5 * (hz_val - hz_prev_j_val)
+                tl.store(ex_ptr + ex_idx, new_ex)
         
-        # Update hz[i][j] for i from 0 to NX-2, j from 0 to NY-2
+        # Step 4: hz[i][j] = hz[i][j] - 0.7*(ex[i][j+1] - ex[i][j] + ey[i+1][j] - ey[i][j])
         for i in range(NX - 1):
             for j in range(NY - 1):
-                hz_offset = i * NY + j
-                ex_offset = i * NY + j
-                ex_next_offset = i * NY + (j + 1)
-                ey_offset = i * NY + j
-                ey_next_offset = (i + 1) * NY + j
+                hz_idx = i * NY + j
+                ex_idx = i * NY + j
+                ex_next_j_idx = i * NY + (j + 1)
+                ey_idx = i * NY + j
+                ey_next_i_idx = (i + 1) * NY + j
                 
-                hz_val = tl.load(hz_ptr + hz_offset)
-                ex_val = tl.load(ex_ptr + ex_offset)
-                ex_next_val = tl.load(ex_ptr + ex_next_offset)
-                ey_val = tl.load(ey_ptr + ey_offset)
-                ey_next_val = tl.load(ey_ptr + ey_next_offset)
+                hz_val = tl.load(hz_ptr + hz_idx)
+                ex_val = tl.load(ex_ptr + ex_idx)
+                ex_next_j = tl.load(ex_ptr + ex_next_j_idx)
+                ey_val = tl.load(ey_ptr + ey_idx)
+                ey_next_i = tl.load(ey_ptr + ey_next_i_idx)
                 
-                new_hz_val = hz_val - 0.7 * ((ex_next_val - ex_val) + (ey_next_val - ey_val))
-                tl.store(hz_ptr + hz_offset, new_hz_val)
+                new_hz = hz_val - 0.7 * (ex_next_j - ex_val + ey_next_i - ey_val)
+                tl.store(hz_ptr + hz_idx, new_hz)
 
 def fdtd_2d_triton(_fict_, ex, ey, hz, NX, NY, TMAX):
-    fdtd_2d_kernel[(1,)](
+    grid = (1,)
+    
+    fdtd_2d_kernel[grid](
         _fict_, ex, ey, hz,
-        NX=NX, NY=NY, TMAX=TMAX
+        NX, NY, TMAX
     )

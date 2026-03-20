@@ -3,59 +3,108 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def k2mm_kernel(A_ptr, B_ptr, C_ptr, D_ptr, tmp_ptr, alpha, beta, 
+def k2mm_kernel(A_ptr, B_ptr, C_ptr, D_ptr, tmp_ptr,
+                alpha, beta,
                 NI: tl.constexpr, NJ: tl.constexpr, NK: tl.constexpr, NL: tl.constexpr,
-                BLOCK_SIZE: tl.constexpr):
+                BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr, BLOCK_K: tl.constexpr, BLOCK_L: tl.constexpr):
     
-    # Get program ID
-    pid = tl.program_id(0)
+    # First stage: tmp[i][j] = alpha * A[i][k] * B[k][j]
+    pid_i = tl.program_id(0)
+    pid_j = tl.program_id(1)
     
-    # Calculate which output element this program handles
-    i = pid // NL
-    j = pid % NL
+    i_start = pid_i * BLOCK_I
+    j_start = pid_j * BLOCK_J
     
-    # Early exit if out of bounds
-    if i >= NI or j >= NL:
-        return
+    i_offsets = i_start + tl.arange(0, BLOCK_I)
+    j_offsets = j_start + tl.arange(0, BLOCK_J)
     
-    # First compute tmp[i][k] = alpha * sum(A[i][m] * B[m][k]) for all k in [0, NJ)
-    # We need tmp[i][k] for k in [0, NJ) to compute D[i][j]
+    i_mask = i_offsets < NI
+    j_mask = j_offsets < NJ
     
-    # Compute tmp values we need
-    for k in range(NJ):
-        tmp_val = 0.0
-        for m in range(NK):
-            a_idx = i * NK + m
-            b_idx = m * NJ + k
-            a_val = tl.load(A_ptr + a_idx)
-            b_val = tl.load(B_ptr + b_idx)
-            tmp_val += alpha * a_val * b_val
+    # Initialize tmp accumulator
+    tmp_acc = tl.zeros((BLOCK_I, BLOCK_J), dtype=tl.float32)
+    
+    # Compute tmp[i][j] = sum over k of alpha * A[i][k] * B[k][j]
+    for k in range(0, NK, BLOCK_K):
+        k_offsets = k + tl.arange(0, BLOCK_K)
+        k_mask = k_offsets < NK
         
-        # Store tmp[i][k]
-        tmp_idx = i * NJ + k
-        tl.store(tmp_ptr + tmp_idx, tmp_val)
+        # Load A[i][k]
+        A_offsets = i_offsets[:, None] * NK + k_offsets[None, :]
+        A_vals = tl.load(A_ptr + A_offsets, mask=i_mask[:, None] & k_mask[None, :], other=0.0)
+        
+        # Load B[k][j]
+        B_offsets = k_offsets[:, None] * NJ + j_offsets[None, :]
+        B_vals = tl.load(B_ptr + B_offsets, mask=k_mask[:, None] & j_mask[None, :], other=0.0)
+        
+        # Accumulate tmp[i][j] += alpha * A[i][k] * B[k][j]
+        tmp_acc += alpha * tl.dot(A_vals, B_vals)
     
-    # Now compute D[i][j] = beta * D[i][j] + sum(tmp[i][k] * C[k][j])
-    d_idx = i * NL + j
-    d_val = tl.load(D_ptr + d_idx)
-    d_val *= beta
+    # Store tmp results
+    tmp_offsets = i_offsets[:, None] * NJ + j_offsets[None, :]
+    tl.store(tmp_ptr + tmp_offsets, tmp_acc, mask=i_mask[:, None] & j_mask[None, :])
+
+@triton.jit
+def k2mm_second_stage_kernel(tmp_ptr, C_ptr, D_ptr, beta,
+                            NI: tl.constexpr, NJ: tl.constexpr, NL: tl.constexpr,
+                            BLOCK_I: tl.constexpr, BLOCK_L: tl.constexpr, BLOCK_J: tl.constexpr):
     
-    for k in range(NJ):
-        tmp_idx = i * NJ + k
-        c_idx = k * NL + j
-        tmp_val = tl.load(tmp_ptr + tmp_idx)
-        c_val = tl.load(C_ptr + c_idx)
-        d_val += tmp_val * c_val
+    # Second stage: D[i][j] = beta * D[i][j] + tmp[i][k] * C[k][j]
+    pid_i = tl.program_id(0)
+    pid_l = tl.program_id(1)
     
-    tl.store(D_ptr + d_idx, d_val)
+    i_start = pid_i * BLOCK_I
+    l_start = pid_l * BLOCK_L
+    
+    i_offsets = i_start + tl.arange(0, BLOCK_I)
+    l_offsets = l_start + tl.arange(0, BLOCK_L)
+    
+    i_mask = i_offsets < NI
+    l_mask = l_offsets < NL
+    
+    # Load and scale D[i][l] by beta
+    D_offsets = i_offsets[:, None] * NL + l_offsets[None, :]
+    D_vals = tl.load(D_ptr + D_offsets, mask=i_mask[:, None] & l_mask[None, :], other=0.0)
+    D_acc = beta * D_vals
+    
+    # Compute D[i][l] += sum over k of tmp[i][k] * C[k][l]
+    for k in range(0, NJ, BLOCK_J):
+        k_offsets = k + tl.arange(0, BLOCK_J)
+        k_mask = k_offsets < NJ
+        
+        # Load tmp[i][k]
+        tmp_offsets = i_offsets[:, None] * NJ + k_offsets[None, :]
+        tmp_vals = tl.load(tmp_ptr + tmp_offsets, mask=i_mask[:, None] & k_mask[None, :], other=0.0)
+        
+        # Load C[k][l]
+        C_offsets = k_offsets[:, None] * NL + l_offsets[None, :]
+        C_vals = tl.load(C_ptr + C_offsets, mask=k_mask[:, None] & l_mask[None, :], other=0.0)
+        
+        # Accumulate D[i][l] += tmp[i][k] * C[k][l]
+        D_acc += tl.dot(tmp_vals, C_vals)
+    
+    # Store final D results
+    tl.store(D_ptr + D_offsets, D_acc, mask=i_mask[:, None] & l_mask[None, :])
 
 def k2mm_triton(A, B, C, D, tmp, alpha, beta, NI, NJ, NK, NL):
-    # Grid size: one thread per output element in D
-    grid_size = NI * NL
-    BLOCK_SIZE = 1
+    BLOCK_I = 16
+    BLOCK_J = 16
+    BLOCK_K = 16
+    BLOCK_L = 16
     
-    k2mm_kernel[(grid_size,)](
-        A, B, C, D, tmp, alpha, beta,
-        NI=NI, NJ=NJ, NK=NK, NL=NL,
-        BLOCK_SIZE=BLOCK_SIZE
+    # First stage: compute tmp = alpha * A * B
+    grid_1 = (triton.cdiv(NI, BLOCK_I), triton.cdiv(NJ, BLOCK_J))
+    k2mm_kernel[grid_1](
+        A.data_ptr(), B.data_ptr(), C.data_ptr(), D.data_ptr(), tmp.data_ptr(),
+        alpha, beta,
+        NI, NJ, NK, NL,
+        BLOCK_I, BLOCK_J, BLOCK_K, BLOCK_L
+    )
+    
+    # Second stage: compute D = beta * D + tmp * C
+    grid_2 = (triton.cdiv(NI, BLOCK_I), triton.cdiv(NL, BLOCK_L))
+    k2mm_second_stage_kernel[grid_2](
+        tmp.data_ptr(), C.data_ptr(), D.data_ptr(), beta,
+        NI, NJ, NL,
+        BLOCK_I, BLOCK_L, BLOCK_J
     )

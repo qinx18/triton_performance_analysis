@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.gemm.attempt1 import gemm_triton
+    from polybench_results_scale8x.llm_triton.gemm.attempt1 import gemm_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libgemm.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libgemm.so"
 
 def run_c_reference(A_c, B_c, C_c, alpha, beta, NI, NJ, NK):
     lib = ctypes.CDLL(str(C_LIB_PATH))

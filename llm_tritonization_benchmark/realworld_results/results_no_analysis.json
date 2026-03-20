@@ -40,5 +40,33 @@
       "speedup": 3.610286
     },
     "final_attempt": 3
+  },
+  "spmv": {
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 2,
+    "final_error": {
+      "type": "numerical",
+      "message": "abs_error=2.051805e+00 rel_error=1.000000e+00",
+      "max_error": "2.051805e+00"
+    },
+    "benchmark": {
+      "c_ref_time_ms": 0.679467,
+      "triton_time_ms": 0.09345,
+      "speedup": 7.270947
+    },
+    "final_attempt": 2
+  },
+  "lj_force": {
+    "triton_generated": true,
+    "test_passed": true,
+    "attempts": 1,
+    "final_error": null,
+    "benchmark": {
+      "c_ref_time_ms": 1.809862,
+      "triton_time_ms": 0.078695,
+      "speedup": 22.998327
+    },
+    "final_attempt": 1
   }
 }

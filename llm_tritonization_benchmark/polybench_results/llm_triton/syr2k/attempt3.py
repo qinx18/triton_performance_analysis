@@ -3,74 +3,63 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def syr2k_kernel(A_ptr, B_ptr, C_ptr, alpha, beta, M: tl.constexpr, N: tl.constexpr, BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr):
-    # Get program IDs
+def syr2k_kernel(
+    A_ptr, B_ptr, C_ptr,
+    alpha, beta,
+    M: tl.constexpr, N: tl.constexpr,
+    BLOCK_I: tl.constexpr, BLOCK_J: tl.constexpr
+):
     pid_i = tl.program_id(0)
     pid_j = tl.program_id(1)
     
-    # Compute block boundaries
-    block_i_start = pid_i * BLOCK_I
-    block_j_start = pid_j * BLOCK_J
+    i_start = pid_i * BLOCK_I
+    j_start = pid_j * BLOCK_J
     
-    # Create offset ranges
-    i_offsets = tl.arange(0, BLOCK_I)
-    j_offsets = tl.arange(0, BLOCK_J)
+    i_offsets = i_start + tl.arange(0, BLOCK_I)
+    j_offsets = j_start + tl.arange(0, BLOCK_J)
     
-    # Compute actual indices
-    i_indices = block_i_start + i_offsets
-    j_indices = block_j_start + j_offsets
-    
-    # Create 2D indices for this block
-    i_idx = i_indices[:, None]
-    j_idx = j_indices[None, :]
-    
-    # Mask for valid indices and triangular condition (j <= i)
-    valid_mask = (i_idx < N) & (j_idx < N) & (j_idx <= i_idx)
-    
-    # Scale C[i][j] by beta
-    c_indices = i_idx * N + j_idx
-    c_vals = tl.load(C_ptr + c_indices, mask=valid_mask, other=0.0)
-    c_vals = c_vals * beta
-    tl.store(C_ptr + c_indices, c_vals, mask=valid_mask)
-    
-    # Main computation loop over k
-    for k in range(M):
-        # Create masks for A and B loads
-        a_j_mask = (j_idx < N) & (j_idx <= i_idx) & (i_idx < N)
-        b_i_mask = (i_idx < N) & (j_idx <= i_idx) & (j_idx < N)
-        b_j_mask = (j_idx < N) & (j_idx <= i_idx) & (i_idx < N)
-        a_i_mask = (i_idx < N) & (j_idx <= i_idx) & (j_idx < N)
-        
-        # Load A[j][k] and B[i][k]
-        a_indices_j = j_idx * M + k
-        b_indices_i = i_idx * M + k
-        b_indices_j = j_idx * M + k
-        a_indices_i = i_idx * M + k
-        
-        a_vals_j = tl.load(A_ptr + a_indices_j, mask=a_j_mask, other=0.0)
-        b_vals_i = tl.load(B_ptr + b_indices_i, mask=b_i_mask, other=0.0)
-        b_vals_j = tl.load(B_ptr + b_indices_j, mask=b_j_mask, other=0.0)
-        a_vals_i = tl.load(A_ptr + a_indices_i, mask=a_i_mask, other=0.0)
-        
-        # Compute the update: A[j][k]*alpha*B[i][k] + B[j][k]*alpha*A[i][k]
-        update = a_vals_j * alpha * b_vals_i + b_vals_j * alpha * a_vals_i
-        
-        # Update C[i][j]
-        c_vals = c_vals + update
-    
-    # Store final result
-    tl.store(C_ptr + c_indices, c_vals, mask=valid_mask)
+    for i_idx in range(BLOCK_I):
+        i = i_start + i_idx
+        if i < N:
+            # Only process j <= i
+            j_mask = (j_offsets <= i) & (j_offsets < N)
+            
+            # Phase 1: C[i][j] *= beta
+            c_ptrs = C_ptr + i * N + j_offsets
+            c_vals = tl.load(c_ptrs, mask=j_mask, other=0.0)
+            c_vals = c_vals * beta
+            tl.store(c_ptrs, c_vals, mask=j_mask)
+            
+            # Phase 2: accumulate over k
+            for k in range(M):
+                # Load A[j][k] and B[j][k] for valid j indices
+                a_j_ptrs = A_ptr + j_offsets * M + k
+                b_j_ptrs = B_ptr + j_offsets * M + k
+                
+                a_j_vals = tl.load(a_j_ptrs, mask=j_mask, other=0.0)
+                b_j_vals = tl.load(b_j_ptrs, mask=j_mask, other=0.0)
+                
+                # Load A[i][k] and B[i][k] (scalars)
+                a_i_val = tl.load(A_ptr + i * M + k)
+                b_i_val = tl.load(B_ptr + i * M + k)
+                
+                # Compute update: A[j][k]*alpha*B[i][k] + B[j][k]*alpha*A[i][k]
+                update = a_j_vals * alpha * b_i_val + b_j_vals * alpha * a_i_val
+                
+                # Load current C[i][j], add update, store back
+                c_vals = tl.load(c_ptrs, mask=j_mask, other=0.0)
+                c_vals = c_vals + update
+                tl.store(c_ptrs, c_vals, mask=j_mask)
 
 def syr2k_triton(A, B, C, alpha, beta, M, N):
-    # Block sizes
-    BLOCK_I = 32
-    BLOCK_J = 32
+    BLOCK_I = min(triton.next_power_of_2(N), 32)
+    BLOCK_J = min(triton.next_power_of_2(N), 128)
     
-    # Grid dimensions
-    grid_i = triton.cdiv(N, BLOCK_I)
-    grid_j = triton.cdiv(N, BLOCK_J)
+    grid = (triton.cdiv(N, BLOCK_I), triton.cdiv(N, BLOCK_J))
     
-    # Launch kernel
-    syr2k_kernel[(grid_i, grid_j)](
-        A, B, C, alpha, beta, M, N, BLOCK_I, BLOCK_J
+    syr2k_kernel[grid](
+        A, B, C,
+        alpha, beta,
+        M, N,
+        BLOCK_I, BLOCK_J
     )

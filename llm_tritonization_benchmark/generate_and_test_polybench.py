@@ -100,6 +100,7 @@ MAX_ATTEMPTS = 10
 OUTPUT_DIR = "polybench_results"
 ENABLE_ANALYSIS = True
 SIZE_SCALE = 1  # Default: use original SMALL_DATASET sizes
+USE_OMP = False  # When True, compile C reference with OpenMP for multi-threaded baseline
 
 # Kernels requiring higher tolerance due to long sequential dependency chains.
 # These are algorithmically correct but FP32 rounding diverges between CPU and GPU
@@ -114,6 +115,9 @@ HIGHER_TOLERANCE_KERNELS = {
     # lu: Pivotless LU on 120x120 diag-dominant matrix. 120 sequential row updates,
     # each with inner products of length up to 120. FP32 error compounds to ~2-4 absolute.
     'lu': {'atol': 5.0, 'rtol': 0.05},
+    # gemm: Single GEMM (C = alpha*A*B + beta*C). tl.dot() accumulation order
+    # differs from CPU sequential dot product, causing ~0.05 abs error.
+    'gemm': {'atol': 0.1, 'rtol': 0.005},
     # 2mm: Two chained GEMMs (tmp=alpha*A*B, D+=beta*tmp*C). tl.dot() accumulation order
     # differs from CPU sequential dot product, causing ~5 abs error at 8x scale.
     '2mm': {'atol': 6.0, 'rtol': 0.005},
@@ -406,7 +410,7 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                     section += "there are no cross-CTA race conditions. Process BOTH phases "
                     section += f"(all `{par_dim}` ranges) within the `{seq_dim}` loop. "
                     section += "No cloning needed.\n"
-                    section += f"\n**CRITICAL: Vectorize `{par_dim}`**: Use `BLOCK_SIZE = triton.next_power_of_2(N)` "
+                    section += f"\n**CRITICAL: Vectorize `{par_dim}`**: Use `BLOCK_SIZE = min(triton.next_power_of_2(N), 128)` "
                     section += f"and `{par_dim}_offsets = tl.arange(0, BLOCK_SIZE)` to process ALL `{par_dim}` "
                     section += "values simultaneously. Do NOT use a scalar `for` loop over "
                     section += f"`{par_dim}` — use **masked vector operations** instead. "
@@ -491,8 +495,8 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                         )
                         if _seq_is_reduction:
                             section += (f"  - **Reduction on `{seq_dim}`**: vectorize with `tl.arange()` "
-                                        f"and reduce with `tl.sum()`. Use **BLOCK_SIZE >= 128** for the "
-                                        f"`{seq_dim}` dimension to maximize memory throughput.\n")
+                                        f"and reduce with `tl.sum()`. Use **BLOCK_SIZE = 64** for the "
+                                        f"`{seq_dim}` dimension to balance throughput and occupancy.\n")
                 # Fix 7: When 1 valid dim + 2+ sequential dims, fuse sequential dims into grid
                 # and vectorize the parallel dim inside each program.
                 # IMPORTANT: Do NOT put the parallel dim in the grid — when the main array
@@ -500,7 +504,16 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                 # (r,q) would race: one writes A[r][q][p1] while another reads A[r][q][s=p1].
                 all_dims = par_result.get('dims', [])
                 valid_dim_names_set = {o['parallel_dim'] for o in valid_opts}
-                seq_dim_names = [d for d in all_dims if d not in valid_dim_names_set]
+                # Exclude timestep/sequential-context dims from fusable sequential dims
+                # (timesteps must stay in Python host code, not fused into grid)
+                _seq_context_dim_set = {
+                    o['parallel_dim'] for o in par_result['options']
+                    if not o['valid'] and any('sequential context' in iss.lower()
+                                              for iss in o.get('issues', []))
+                }
+                seq_dim_names = [d for d in all_dims
+                                 if d not in valid_dim_names_set
+                                 and d not in _seq_context_dim_set]
                 n_seq_dims = len(seq_dim_names)
                 if len(valid_opts) == 1 and n_seq_dims >= 2:
                     par_dim_name = valid_opts[0]['parallel_dim']
@@ -517,7 +530,7 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                         section += f"def wrapper({', '.join(sorted(arrays.keys()))}, ...):\n"
                         for arr in rw_arrs:
                             section += f"    {arr}_copy = {arr}.clone()  # Read from copy\n"
-                        section += f"    BLOCK = triton.next_power_of_2({par_dim_name.upper()})\n"
+                        section += f"    BLOCK = min(triton.next_power_of_2({par_dim_name.upper()}), 128)\n"
                         section += f"    grid = ({seq_upper},)\n"
                         section += f"    kernel[grid]({', '.join(rw_arrs[0] + ', ' + rw_arrs[0] + '_copy' if len(rw_arrs) == 1 else '...')}, ...)\n"
                         section += f"```\n"
@@ -572,11 +585,57 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                     section += f"\n**Both `{valid_dim_names[0]}` and `{valid_dim_names[1]}` are freely parallelizable.** "
                     section += "Use a 2D grid to parallelize both simultaneously for best GPU occupancy.\n"
                     # Detect GEMM accumulation pattern for freely-parallelizable 2D kernels
-                    if has_2d and re.search(r'\w+\[.*?\]\[.*?\]\s*\+=\s*\w+\[.*?\]\[.*?\]\s*\*\s*\w+\[.*?\]\[.*?\]', loop_code):
-                        section += ("\n**Matrix Multiply Pattern**: Use `tl.dot()` for the inner reduction loop:\n"
-                                    "- 2D grid: `(cdiv(M, BLOCK_M), cdiv(N, BLOCK_N))` with BLOCK_M=BLOCK_N=BLOCK_K=16\n"
-                                    "- Each CTA accumulates a BLOCK_M x BLOCK_N output tile: `acc += tl.dot(a_tile, b_tile)`\n"
-                                    "- `tl.dot()` uses tensor cores for ~10x faster accumulation vs scalar loops\n")
+                    # Match: C[i][j] += A[i][k] * B[k][j]  OR  C[i][j] += alpha * A[i][k] * B[k][j]
+                    _matmul_re = (r'\w+\[.*?\]\[.*?\]\s*\+=\s*'
+                                  r'(?:\w+\s*\*\s*)?'  # optional scalar multiplier (alpha *)
+                                  r'\w+\[.*?\]\[.*?\]\s*\*\s*\w+\[.*?\]\[.*?\]')
+                    if has_2d and re.search(_matmul_re, loop_code):
+                        # Check if problem sizes are large enough for 2D tiled matmul
+                        _dim_values = [params.get(d, 0) for d in params]
+                        _max_dim = max(_dim_values) if _dim_values else 0
+                        if _max_dim >= 128:
+                            section += ("\n**Matrix Multiply Pattern**: Use `tl.dot()` for the inner reduction loop.\n"
+                                        "**CRITICAL**: Do NOT use scalar k-loop accumulation. Use tiled matmul:\n"
+                                        "```python\n"
+                                        "BLOCK_M, BLOCK_N, BLOCK_K = 32, 32, 32\n"
+                                        "grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))\n"
+                                        "@triton.jit\n"
+                                        "def matmul_kernel(C_ptr, A_ptr, B_ptr, M, N, K, ...):\n"
+                                        "    pid_m = tl.program_id(0)\n"
+                                        "    pid_n = tl.program_id(1)\n"
+                                        "    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)\n"
+                                        "    for k in range(0, K, BLOCK_K):\n"
+                                        "        a = tl.load(A_ptr + ...)  # [BLOCK_M, BLOCK_K] tile\n"
+                                        "        b = tl.load(B_ptr + ...)  # [BLOCK_K, BLOCK_N] tile\n"
+                                        "        acc += tl.dot(a, b)\n"
+                                        "    # If scalar multiplier (alpha): acc = alpha * acc\n"
+                                        "    tl.store(C_ptr + ..., acc, ...)\n"
+                                        "```\n"
+                                        "Use BLOCK_M=BLOCK_N=BLOCK_K=32 (not 16) for sufficient GPU occupancy.\n")
+                        else:
+                            # Small matrices: 1D row-parallel is faster than 2D tiled matmul
+                            # because grid=(M,) gives more CTAs than grid=(M/32, N/32)
+                            section += ("\n**Matrix Multiply Pattern (small problem size)**:\n"
+                                        "With dimensions < 128, use a **1D row-parallel** strategy for maximum GPU occupancy:\n"
+                                        "```python\n"
+                                        "grid = (M,)  # one CTA per output row\n"
+                                        "@triton.jit\n"
+                                        "def matmul_kernel(C_ptr, A_ptr, B_ptr, M, N, K, alpha, beta, BLOCK_N: tl.constexpr):\n"
+                                        "    row = tl.program_id(0)\n"
+                                        "    # Scale existing C row by beta\n"
+                                        "    col_offs = tl.arange(0, BLOCK_N)\n"
+                                        "    mask = col_offs < N\n"
+                                        "    c_row = tl.load(C_ptr + row * N + col_offs, mask=mask)\n"
+                                        "    c_row = beta * c_row\n"
+                                        "    # Accumulate A[row,:] @ B into c_row\n"
+                                        "    for k in range(K):\n"
+                                        "        a_val = tl.load(A_ptr + row * K + k)\n"
+                                        "        b_row = tl.load(B_ptr + k * N + col_offs, mask=mask)\n"
+                                        "        c_row += alpha * a_val * b_row\n"
+                                        "    tl.store(C_ptr + row * N + col_offs, c_row, mask=mask)\n"
+                                        "```\n"
+                                        "Use `BLOCK_N = min(triton.next_power_of_2(N), 128)` to cover the row in chunks for good occupancy.\n"
+                                        "This gives M CTAs (one per row) instead of ceil(M/32)*ceil(N/32) with 2D tiling.\n")
                     # Multi-phase stencil kernels: sequential timestep + 2+ valid spatial dims
                     # Detect sequential timestep dim: either from options (LLVM) or from
                     # dims list minus options (PET N-D, where t is excluded entirely)
@@ -614,17 +673,20 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                         else:
                             _total_valid_dims = len(valid_opts)
 
-                        # At large sizes (8x+), 2D stencils benefit from multi-CTA;
-                        # at small sizes (1x), grid=(1,) avoids launch overhead.
-                        _stencil_multi_cta_threshold = 2 if SIZE_SCALE >= 4 else 3
-                        if _total_valid_dims >= _stencil_multi_cta_threshold:
+                        # 2D+ stencils: ALWAYS use multi-CTA with Python t-loop.
+                        # Kernel launch between phases acts as synchronization barrier.
+                        # Even at small N, N² elements justify multi-CTA parallelism
+                        # (a single CTA wastes 81/82 SMs on RTX 3090).
+                        # 1D stencils (handled separately below) use grid=(1,) since
+                        # N elements don't justify multi-CTA overhead.
+                        if _total_valid_dims >= 2:
                             section += f"\n**CRITICAL: Timestep/phase structure**: The `{t_dim}` loop must be in "
                             section += "**Python host code**, NOT inside the Triton kernel.\n"
                             section += f"Do NOT put `for {t_dim} in range(...)` inside the Triton kernel — there is no "
                             section += "global synchronization between timesteps within a single kernel launch, "
                             section += "which causes **race conditions** on shared arrays.\n"
                             section += "\n**Use at most 2 kernels per timestep**. Fuse independent phases "
-                            section += "into a single kernel.\n"
+                            section += "into a single kernel when they write to different arrays.\n"
                             section += "\n**Parallelize ALL spatial dimensions**: Flatten all spatial dimensions "
                             section += "into a single 1D index. Each CTA processes a block of elements from the "
                             section += "flattened space, recovering multi-dim coordinates from the linear index.\n"
@@ -645,9 +707,55 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                             section += "i = flat_idx // N_COLS + 1\n"
                             section += "mask = (i < N - 1) & (j < N - 1)  # boundary check\n"
                             section += "```\n"
-                            section += "\n**Do NOT use `grid=(1,)`** for 2D stencils — at large N, a single CTA "
-                            section += "iterates over hundreds of tiles sequentially, wasting GPU parallelism. "
-                            section += "Two kernel launches per timestep (one per phase) is correct and fast.\n"
+                            section += "\n**Do NOT use `grid=(1,)`** — a single CTA wastes GPU parallelism. "
+                            section += "Kernel launches between phases provide synchronization, so "
+                            section += "multi-CTA is both correct and fast.\n"
+                # Fix 12: 1 valid spatial dim + timestep + recurrence on other dim
+                # (e.g., ADI: i parallel, j has recurrence, t timestep)
+                # Detect timestep dim for 1-valid-dim case
+                _seq_ctx_for_sweep = [
+                    o for o in par_result['options']
+                    if not o['valid'] and any('sequential context' in iss.lower()
+                                              for iss in o.get('issues', []))
+                ]
+                _recurrence_dims = [
+                    o for o in par_result['options']
+                    if not o['valid'] and any('Dependencies carried' in iss
+                                              for iss in o.get('issues', []))
+                ]
+                if (len(valid_opts) == 1 and _seq_ctx_for_sweep and _recurrence_dims
+                        and par_result.get('n_write_arrays', 0) >= 2):
+                    _t_dim = _seq_ctx_for_sweep[0]['parallel_dim']
+                    par_dim = valid_opts[0]['parallel_dim']
+                    section += f"\n**Tridiagonal/IIR sweep pattern**: `{par_dim}` is parallelizable, "
+                    section += f"but the other spatial dimension has sequential recurrence "
+                    section += f"(e.g., `x[j]` depends on `x[j-1]`).\n\n"
+                    section += f"**Use `grid=({par_dim.upper()}-2,)` — ONE CTA per {par_dim}-index** "
+                    section += f"(NOT `grid=(cdiv(N, BLOCK),)` with a for-loop inside each CTA).\n"
+                    section += f"Each CTA runs the full sequential sweep for its row/column.\n\n"
+                    section += "```python\n"
+                    section += f"for {_t_dim} in range(TSTEPS):  # timestep loop in Python\n"
+                    section += f"    sweep1_kernel[({par_dim.upper()}-2,)](...)\n"
+                    section += f"    sweep2_kernel[({par_dim.upper()}-2,)](...)\n"
+                    section += "```\n\n"
+                    section += "Inside each kernel:\n"
+                    section += "```python\n"
+                    section += "@triton.jit\n"
+                    section += f"def sweep_kernel(...):\n"
+                    section += f"    {par_dim} = tl.program_id(0) + 1  # One CTA per {par_dim}, skip boundary\n"
+                    section += f"    # Forward sweep: scalar for-loop over recurrence dim\n"
+                    section += f"    for j in range(1, N-1):\n"
+                    section += f"        # Tridiagonal/IIR computation using scalar loads\n"
+                    section += f"        ...\n"
+                    section += f"    # Backward sweep: scalar for-loop in reverse\n"
+                    section += f"    for j in range(N-2, 0, -1):\n"
+                    section += f"        ...\n"
+                    section += "```\n\n"
+                    section += "**IMPORTANT**: Do NOT use BLOCK_SIZE with a for-loop over blocks "
+                    section += "inside each CTA. Each CTA handles exactly ONE row/column. "
+                    section += f"`grid=({par_dim.upper()}-2,)` gives {par_dim.upper()}-2 CTAs "
+                    section += "for maximum GPU occupancy.\n"
+
                 # When some dims are invalid due to cross-phase deps, provide
                 # targeted guidance based on whether phases write distinct arrays
                 cross_phase_invalids = [
@@ -670,12 +778,10 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                     if _cp_n_write >= 2 and not _has_write_conflict:
                         # Independent phases writing different arrays, no write conflicts
                         if len(valid_opts) == 1 and not par_result.get('has_2d_arrays', False):
-                            # 1D stencil (e.g., jacobi_1d): only 1 valid spatial dim, small N
-                            # Use grid=(1,) with SCALAR for-loops to avoid:
-                            # (a) kernel launch overhead (80 launches for split approach)
-                            # (b) vectorized store-then-load cache staleness
+                            # 1D stencil (e.g., jacobi_1d): grid=(1,) with barriers
+                            # N elements don't justify multi-CTA overhead
                             par_dim = valid_opts[0]['parallel_dim']
-                            section += f"\n**CRITICAL**: Use `grid=(1,)` with the `{seq_dims[0]}` loop and both phases "
+                            section += f"\n**CRITICAL**: Use `grid=(1,)` with the `{seq_dims[0]}` loop and ALL phases "
                             section += "INSIDE a single kernel. Insert `tl.debug_barrier()` between phases "
                             section += "to flush stores before the next phase reads the same array.\n"
                             section += f"\n**MANDATORY REQUIREMENTS:**\n"
@@ -708,31 +814,15 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                             section += "vectorized stores are visible to subsequent vectorized loads. "
                             section += "Without it, loads may read stale L1 cache data.\n"
                             section += "\n**WARNING: Do NOT split phases into separate kernel launches.** "
-                            section += "At larger problem sizes, launching 2 kernels per timestep × TSTEPS timesteps "
-                            section += "creates massive launch overhead (e.g., 80 launches for TSTEPS=40). "
+                            section += f"Launching multiple kernels per timestep × {seq_dims[0].upper()} timesteps "
+                            section += "creates massive launch overhead. "
                             section += "Keep ALL timesteps and ALL phases inside a SINGLE kernel with `grid=(1,)`. "
                             section += "Use `tl.debug_barrier()` between every phase boundary to ensure "
                             section += "stores from phase 1 are visible to loads in phase 2.\n"
-                            section += "\n**WARNING: Do NOT use `grid=(triton.cdiv(N, BLOCK),)` or any multi-block grid.** "
+                            section += "\n**WARNING: Do NOT use multi-block grids.** "
                             section += "Multiple CTAs cannot synchronize between phases — CTA 0 may execute Phase 2 "
                             section += "while CTA 1 is still in Phase 1, reading stale values from the boundary. "
-                            section += "Only `grid=(1,)` guarantees correctness for stencils with overlapping read/write halos. "
-                            section += "Use `BLOCK = triton.next_power_of_2(N)` so the single CTA covers ALL elements.\n"
-                            section += "\n**SELF-CHECK before submitting**: Count the `tl.debug_barrier()` calls "
-                            section += "in your code. There MUST be exactly 2 per timestep iteration:\n"
-                            section += "1. One BEFORE Phase 1 loads (at the start of the loop body)\n"
-                            section += "2. One AFTER Phase 1 stores and BEFORE Phase 2 loads\n"
-                            section += "\nIf you restructure the code (e.g., using for-loops over blocks), "
-                            section += "the barriers must STILL appear between every Phase 1 store and Phase 2 load:\n"
-                            section += "```python\n"
-                            section += "for t in range(TSTEPS):\n"
-                            section += "    tl.debug_barrier()\n"
-                            section += "    # ... Phase 1: load A, store B ...\n"
-                            section += "    tl.debug_barrier()  # <-- THIS LINE IS MANDATORY\n"
-                            section += "    # ... Phase 2: load B, store A ...\n"
-                            section += "```\n"
-                            section += "Without these barriers, loads read STALE L1 CACHE DATA and produce "
-                            section += "abs_error ~0.1-0.2. This is the #1 cause of numerical errors in stencil kernels.\n"
+                            section += "Only `grid=(1,)` guarantees correctness for stencils with overlapping read/write halos.\n"
                         else:
                             # 2D+ problem (e.g., 3mm: E=A*B, F=C*D, G=E*F)
                             # → split into separate kernels, each CAN parallelize both dims
@@ -742,8 +832,11 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                             section += "from Python. Within each kernel, parallelize **BOTH** dimensions "
                             section += "using a 2D grid — kernel launch barriers resolve the cross-phase "
                             section += "dependencies.\n"
-                            # Detect GEMM accumulation: out[i][j] += lhs[i][k] * rhs[k][j]
-                            if re.search(r'\w+\[.*?\]\[.*?\]\s*\+=\s*\w+\[.*?\]\[.*?\]\s*\*\s*\w+\[.*?\]\[.*?\]', loop_code):
+                            # Detect GEMM accumulation: out[i][j] += [alpha *] lhs[i][k] * rhs[k][j]
+                            _matmul_re2 = (r'\w+\[.*?\]\[.*?\]\s*\+=\s*'
+                                           r'(?:\w+\s*\*\s*)?'
+                                           r'\w+\[.*?\]\[.*?\]\s*\*\s*\w+\[.*?\]\[.*?\]')
+                            if re.search(_matmul_re2, loop_code):
                                 section += ("\n**Matrix Multiply Pattern**: Use `tl.dot()` for the inner reduction:\n"
                                             "- Grid: `(cdiv(M, BLOCK_M), cdiv(N, BLOCK_N))` per phase kernel\n"
                                             "- Each CTA: load A[BLOCK_M, BLOCK_K] and B[BLOCK_K, BLOCK_N] tiles, "
@@ -851,12 +944,12 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                     section += "Split into **separate Triton kernels** — one per top-level `for` loop — "
                     section += "and parallelize the spatial dimensions within each kernel. "
                     section += "Kernel launch barriers handle cross-phase deps.\n\n"
-                    section += ("For each kernel, use `grid=(cdiv(N, BLOCK),)` with BLOCK >= 128. "
+                    section += ("For each kernel, use `grid=(N,)` with one CTA per row. "
                                "Within each kernel:\n"
                                "- For phases computing row reductions (e.g., `y[i] += A[i][j] * x[j]`): "
                                "parallelize rows with `grid=(N,)`, vectorize columns with `tl.arange()`\n"
                                "- For inner reduction loops: use `tl.sum()` over vectorized products\n"
-                               "- Use **BLOCK_SIZE >= 128** for column/reduction dimensions\n"
+                               "- Use **BLOCK_SIZE = 64** for column/reduction dimensions\n"
                                "- **Fuse element-wise phases** (e.g., `x[i] = x[i] + z[i]`) into the "
                                "preceding or following reduction kernel to minimize launch count. "
                                "Only split when phases have true data dependencies between them.\n")
@@ -970,6 +1063,69 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
                                "Use **BLOCK_SIZE >= 64** for inner-loop vectorization.\n")
                     analysis_sections.append(section)
 
+            # Fix 10: When scalar expansion is present AND cross-phase deps exist
+            # AND no valid parallelization option, the phases should be split into
+            # separate kernels with row/column-parallel execution.
+            # (e.g., deriche: IIR recurrence along j, rows i are independent)
+            if (not any(o['valid'] for o in par_result['options'])
+                    and any('Cross-phase' in iss
+                            for o in par_result['options']
+                            for iss in o.get('issues', []))):
+                section = "\n## Multi-Phase Row/Column-Parallel Execution\n\n"
+                section += "**Each phase (top-level `for` loop) is independently parallelizable.**\n\n"
+                section += "**CRITICAL: Minimize kernel launches by FUSING phases that share the same grid.**\n"
+                section += "Fuse forward pass, backward pass, AND element-wise combination into a SINGLE kernel per direction.\n"
+                section += "This gives **2 kernel launches** (horizontal + vertical), NOT 6.\n\n"
+                section += "**For each fused direction kernel**:\n"
+                section += "- The OUTER loop dimension becomes the grid: `grid = (OUTER_DIM,)`\n"
+                section += "- One CTA per row (or column). Run forward IIR, backward IIR, and combination "
+                section += "ALL within the same CTA — they operate on the same row/column and can share data.\n"
+                section += "- Scalar variables (after expansion) become per-CTA registers — "
+                section += "no array allocation needed.\n\n"
+                section += "**Example** for a fused horizontal kernel (forward + backward + combine):\n"
+                section += "```python\n"
+                section += "@triton.jit\n"
+                section += "def horiz_kernel(imgOut_ptr, imgIn_ptr, yy1_ptr, y2_ptr,\n"
+                section += "                 a1, a2, a3, a4, b1, b2, c1, H: tl.constexpr, W: tl.constexpr):\n"
+                section += "    row = tl.program_id(0)  # One CTA per row\n"
+                section += "    # --- Forward pass ---\n"
+                section += "    ym1 = 0.0; ym2 = 0.0; xm1 = 0.0\n"
+                section += "    for j in range(H):\n"
+                section += "        val = tl.load(imgIn_ptr + row * H + j)\n"
+                section += "        out = a1 * val + a2 * xm1 + b1 * ym1 + b2 * ym2\n"
+                section += "        tl.store(yy1_ptr + row * H + j, out)\n"
+                section += "        xm1 = val; ym2 = ym1; ym1 = out\n"
+                section += "    # --- Backward pass ---\n"
+                section += "    yp1 = 0.0; yp2 = 0.0; xp1 = 0.0; xp2 = 0.0\n"
+                section += "    for j in range(H-1, -1, -1):\n"
+                section += "        val = tl.load(imgIn_ptr + row * H + j)\n"
+                section += "        out = a3 * xp1 + a4 * xp2 + b1 * yp1 + b2 * yp2\n"
+                section += "        tl.store(y2_ptr + row * H + j, out)\n"
+                section += "        xp2 = xp1; xp1 = val; yp2 = yp1; yp1 = out\n"
+                section += "    # --- Combine ---\n"
+                section += "    for j in range(H):\n"
+                section += "        idx = row * H + j\n"
+                section += "        imgOut = c1 * (tl.load(yy1_ptr + idx) + tl.load(y2_ptr + idx))\n"
+                section += "        tl.store(imgOut_ptr + idx, imgOut)\n"
+                section += "grid = (W,)  # W rows processed in parallel\n"
+                section += "```\n\n"
+                section += "Similarly fuse vertical forward + backward + combine into a SINGLE kernel with `grid = (H,)`.\n\n"
+                section += "**IMPORTANT**: Do NOT use `grid=(1,)`. Each row/column is independent — "
+                section += "use multi-CTA parallelism.\n\n"
+                section += "**Coefficient computation**: Compute ALL coefficients (a1, a2, b1, b2, etc.) "
+                section += "in the **Python wrapper** using `import math; math.exp(...)`, NOT `torch.exp()` "
+                section += "or `tl.exp()`. Pass them as plain Python floats to the kernel.\n"
+                section += "```python\n"
+                section += "import math\n"
+                section += "def wrapper(imgIn, imgOut, ..., alpha, H, W):\n"
+                section += "    k = (1-math.exp(-alpha))**2 / (1+2*alpha*math.exp(-alpha)-math.exp(2*alpha))\n"
+                section += "    a1 = k; a2 = k*math.exp(-alpha)*(alpha-1); ...\n"
+                section += "    b1 = 2.0**(-alpha); b2 = -math.exp(-2*alpha)\n"
+                section += "    horiz_kernel[(W,)](imgOut, imgIn, yy1, y2, a1, a2, a3, a4, b1, b2, c1, H, W)\n"
+                section += "    vert_kernel[(H,)](imgOut, yy1, y2, a5, a6, a7, a8, b1, b2, c2, H, W)\n"
+                section += "```\n"
+                analysis_sections.append(section)
+
         if reduction_result and reduction_result.get('is_reduction'):
             if HAS_REDUCTION and build_reduction_instructions:
                 try:
@@ -1009,6 +1165,10 @@ def build_polybench_prompt(kernel_name: str, func_spec: dict) -> str:
 3. **Use `tl.dot()` for ALL matrix multiply and outer-product accumulations.** NEVER use scalar triple-nested loops (`for i: for j: for k: acc += a[i,k]*b[k,j]`) inside a Triton kernel. Tile with BLOCK_SIZE and use `acc += tl.dot(a_tile, b_tile)`.
 
 4. **For stencil kernels with `grid=(1,)` guidance: NEVER use multi-block grids.** If the analysis says `grid=(1,)`, do NOT use `grid=(triton.cdiv(N, BLOCK),)`. Multiple CTAs cannot synchronize between phases — CTA 0 may read stale values written by CTA 1. Use `BLOCK = triton.next_power_of_2(N)` so one CTA covers ALL elements.
+
+5. **Cap BLOCK_SIZE at 128 for vectorized dimensions** (except `grid=(1,)` kernels). Use `BLOCK = min(triton.next_power_of_2(N), 128)` and iterate in chunks with `for j_start in range(0, N, BLOCK)`. Large BLOCK sizes (256+) waste registers and kill GPU occupancy. Use BLOCK_SIZE = 64 for inner reduction loops.
+
+6. **Minimize kernel launches.** Fuse phases that share the same grid dimension into a SINGLE kernel (e.g., forward pass + backward pass + combine on the same row). Each kernel launch adds ~5-10μs overhead that dominates at small problem sizes.
 """
         analysis_sections.append(anti_patterns)
 
@@ -1072,16 +1232,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -1202,7 +1366,8 @@ def generate_correctness_test(kernel_name: str, func_spec: dict, attempt: int = 
     else:
         import_block = f"from {OUTPUT_DIR}.{llm_subdir}.{kernel_name}.attempt{attempt} import {func_id}_triton"
 
-    c_lib_subdir = f"polybench_libs_scale{SIZE_SCALE}x" if SIZE_SCALE > 1 else "polybench_libs"
+    omp_suffix = "_omp" if USE_OMP else ""
+    c_lib_subdir = f"polybench_libs_scale{SIZE_SCALE}x{omp_suffix}" if SIZE_SCALE > 1 else f"polybench_libs{omp_suffix}"
 
     test_code = f'''#!/usr/bin/env python3
 """Correctness test for {kernel_name} (Polybench) - attempt {attempt}"""
@@ -1560,7 +1725,8 @@ def generate_benchmark_test(kernel_name: str, func_spec: dict, attempt: int = 1)
     else:
         import_block = f"from {OUTPUT_DIR}.{llm_subdir}.{kernel_name}.attempt{attempt} import {func_id}_triton"
 
-    c_lib_subdir = f"polybench_libs_scale{SIZE_SCALE}x" if SIZE_SCALE > 1 else "polybench_libs"
+    omp_suffix = "_omp" if USE_OMP else ""
+    c_lib_subdir = f"polybench_libs_scale{SIZE_SCALE}x{omp_suffix}" if SIZE_SCALE > 1 else f"polybench_libs{omp_suffix}"
 
     benchmark_code = f'''#!/usr/bin/env python3
 """Performance Benchmark for {kernel_name} (Polybench)"""
@@ -1909,6 +2075,31 @@ def run_test(kernel_name: str, test_file: Path) -> Tuple[bool, dict]:
         return False, {'type': 'exception', 'message': str(e)}
 
 
+def _add_omp_pragma_to_outermost_loop(source: str) -> str:
+    """Add #pragma omp parallel for before the outermost for-loop in the scop region."""
+    lines = source.split('\n')
+    result = []
+    in_scop = False
+    pragma_added = False
+    for line in lines:
+        stripped = line.strip()
+        if '#pragma scop' in stripped:
+            in_scop = True
+        elif '#pragma endscop' in stripped:
+            in_scop = False
+            pragma_added = False  # reset for next scop
+        # Add OMP pragma before first for-loop in scop region
+        if in_scop and not pragma_added and stripped.startswith('for'):
+            indent = line[:len(line) - len(line.lstrip())]
+            result.append(f'{indent}#pragma omp parallel for')
+            pragma_added = True
+        result.append(line)
+    # Add omp.h include if not present
+    if '#pragma omp' in '\n'.join(result) and '#include <omp.h>' not in source:
+        result.insert(0, '#include <omp.h>')
+    return '\n'.join(result)
+
+
 def compile_c_at_scale(kernel_name: str, params: dict) -> Optional[str]:
     """Compile C kernel with overridden size defines for scaled sizes. Returns .so path or None."""
     import tempfile
@@ -1916,7 +2107,11 @@ def compile_c_at_scale(kernel_name: str, params: dict) -> Optional[str]:
     c_file = Path(POLYBENCH_KERNELS_DIR) / f"{c_name}.c"
     if not c_file.exists():
         return None
-    lib_dir = Path("c_reference") / f"polybench_libs_scale{SIZE_SCALE}x"
+    omp_suffix = "_omp" if USE_OMP else ""
+    if SIZE_SCALE > 1:
+        lib_dir = Path("c_reference") / f"polybench_libs_scale{SIZE_SCALE}x{omp_suffix}"
+    else:
+        lib_dir = Path("c_reference") / f"polybench_libs{omp_suffix}"
     lib_dir.mkdir(parents=True, exist_ok=True)
     so_file = lib_dir / f"lib{c_name}.so"
     if so_file.exists():
@@ -1933,14 +2128,21 @@ def compile_c_at_scale(kernel_name: str, params: dict) -> Optional[str]:
             if len(parts) >= 2 and parts[1] in param_names:
                 continue  # skip this #define, will use -D flag instead
         filtered.append(line)
+    modified_source = '\n'.join(filtered)
+    # Add OpenMP pragma if enabled
+    if USE_OMP:
+        modified_source = _add_omp_pragma_to_outermost_loop(modified_source)
     # Write modified source to temp file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as tmp:
-        tmp.write('\n'.join(filtered))
+        tmp.write(modified_source)
         tmp_path = tmp.name
     d_flags = [f"-D{k}={v}" for k, v in params.items()]
+    if USE_OMP:
+        cc_flags = ["gcc", "-shared", "-fPIC", "-O2", "-fopenmp", "-march=native"]
+    else:
+        cc_flags = ["/usr/local/bin/clang", "-shared", "-fPIC", "-O2"]
     result = subprocess.run(
-        ["/usr/local/bin/clang", "-shared", "-fPIC", "-O2"] + d_flags +
-        ["-o", str(so_file), tmp_path, "-lm"],
+        cc_flags + d_flags + ["-o", str(so_file), tmp_path, "-lm"],
         capture_output=True, text=True, timeout=30
     )
     os.unlink(tmp_path)
@@ -2039,12 +2241,12 @@ def process_kernel(kernel_name: str, func_spec: dict) -> dict:
                 }
                 continue
 
-            # Compile C reference at scaled sizes if needed
-            if SIZE_SCALE > 1 and attempt == 1:
+            # Compile C reference at scaled sizes or with OMP if needed
+            if (SIZE_SCALE > 1 or USE_OMP) and attempt == 1:
                 params = get_kernel_params(kernel_name)
                 so_path = compile_c_at_scale(kernel_name, params)
                 if not so_path:
-                    print(f"  WARNING: C compilation at scale {SIZE_SCALE}x failed")
+                    print(f"  WARNING: C compilation failed")
 
             # Generate and run test
             test_code = generate_correctness_test(kernel_name, func_spec, attempt)
@@ -2153,6 +2355,13 @@ def benchmark_passed_kernels(kernel_names: list = None):
     print(f"Benchmarking {len(to_benchmark)} passed kernels")
     print("=" * 70)
 
+    # Pre-compile C libraries with OMP if needed
+    if USE_OMP or SIZE_SCALE > 1:
+        print("Compiling C references...")
+        for kernel_name in to_benchmark:
+            params = get_kernel_params(kernel_name)
+            compile_c_at_scale(kernel_name, params)
+
     bench_results = {}
     for i, (kernel_name, attempt) in enumerate(sorted(to_benchmark.items()), 1):
         func_spec = POLYBENCH_FUNCTIONS[kernel_name]
@@ -2211,12 +2420,21 @@ def benchmark_passed_kernels(kernel_names: list = None):
 
 def main():
     """Main Polybench pipeline."""
-    global ENABLE_ANALYSIS, SIZE_SCALE, OUTPUT_DIR
+    global ENABLE_ANALYSIS, SIZE_SCALE, OUTPUT_DIR, USE_OMP
 
     # Check for --no-analysis flag
     if '--no-analysis' in sys.argv:
         sys.argv.remove('--no-analysis')
         ENABLE_ANALYSIS = False
+
+    # Check for --omp flag (multi-threaded C reference)
+    if '--omp' in sys.argv:
+        sys.argv.remove('--omp')
+        USE_OMP = True
+        import multiprocessing
+        omp_threads = multiprocessing.cpu_count()
+        os.environ['OMP_NUM_THREADS'] = str(omp_threads)
+        print(f"OpenMP enabled: C reference will use {omp_threads} threads")
 
     # Check for --size-scale flag
     if '--size-scale' in sys.argv:

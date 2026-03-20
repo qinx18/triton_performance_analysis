@@ -4,76 +4,62 @@ import torch
 
 @triton.jit
 def nussinov_kernel(seq_ptr, table_ptr, N: tl.constexpr, i: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Each block processes a chunk of j values for row i
     pid = tl.program_id(0)
-    
     j_start = (i + 1) + pid * BLOCK_SIZE
-    j_offsets = tl.arange(0, BLOCK_SIZE)
-    j_vals = j_start + j_offsets
-    j_mask = (j_vals < N) & (j_vals > i)
     
-    # Load current table values
-    table_indices = i * N + j_vals
-    current_vals = tl.load(table_ptr + table_indices, mask=j_mask, other=0)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    j_offsets = j_start + offsets
+    mask = j_offsets < N
     
-    # Update from left neighbor: table[i][j-1]
-    left_mask = j_mask & ((j_vals - 1) >= 0)
-    left_indices = i * N + (j_vals - 1)
-    left_vals = tl.load(table_ptr + left_indices, mask=left_mask, other=0)
-    current_vals = tl.where(left_mask, tl.maximum(current_vals, left_vals), current_vals)
-    
-    # Update from bottom neighbor: table[i+1][j]
-    bottom_mask = j_mask & ((i + 1) < N)
-    bottom_indices = (i + 1) * N + j_vals
-    bottom_vals = tl.load(table_ptr + bottom_indices, mask=bottom_mask, other=0)
-    current_vals = tl.where(bottom_mask, tl.maximum(current_vals, bottom_vals), current_vals)
-    
-    # Update from diagonal: table[i+1][j-1] + match
-    diag_mask = j_mask & ((j_vals - 1) >= 0) & ((i + 1) < N)
-    diag_indices = (i + 1) * N + (j_vals - 1)
-    diag_vals = tl.load(table_ptr + diag_indices, mask=diag_mask, other=0)
-    
-    # Calculate match scores
-    seq_i = tl.load(seq_ptr + i)
-    seq_j_vals = tl.load(seq_ptr + j_vals, mask=j_mask, other=0)
-    match_scores = tl.where((seq_i + seq_j_vals) == 3, 1, 0)
-    
-    # Apply diagonal update with match consideration
-    no_adjacent_mask = diag_mask & (i < (j_vals - 1))
-    adjacent_mask = diag_mask & (i >= (j_vals - 1))
-    
-    diag_with_match = diag_vals + match_scores
-    current_vals = tl.where(no_adjacent_mask, tl.maximum(current_vals, diag_with_match), current_vals)
-    current_vals = tl.where(adjacent_mask, tl.maximum(current_vals, diag_vals), current_vals)
-    
-    # Inner k loop: table[i][k] + table[k+1][j]
-    k_start = i + 1
-    k_end = N
-    
-    # Iterate through k values in chunks
-    for k in range(k_start, k_end):
-        k_mask = j_mask & (k < j_vals) & (k < N)
-        if k < N:
-            left_k_indices = i * N + k
-            right_k_indices = (k + 1) * N + j_vals
+    for block_j in range(BLOCK_SIZE):
+        j = j_start + block_j
+        # Use conditional to avoid break
+        if j < N:
+            idx = i * N + j
+            current_val = tl.load(table_ptr + idx)
             
-            left_k_val = tl.load(table_ptr + left_k_indices)
-            right_k_vals = tl.load(table_ptr + right_k_indices, mask=k_mask, other=0)
+            # if (j-1>=0) table[i][j] = max_score(table[i][j], table[i][j-1]);
+            if j - 1 >= 0:
+                left_idx = i * N + (j - 1)
+                left_val = tl.load(table_ptr + left_idx)
+                current_val = tl.maximum(current_val, left_val)
             
-            k_sum = left_k_val + right_k_vals
-            current_vals = tl.where(k_mask, tl.maximum(current_vals, k_sum), current_vals)
-    
-    # Store results
-    tl.store(table_ptr + table_indices, current_vals, mask=j_mask)
+            # if (i+1<N) table[i][j] = max_score(table[i][j], table[i+1][j]);
+            if i + 1 < N:
+                down_idx = (i + 1) * N + j
+                down_val = tl.load(table_ptr + down_idx)
+                current_val = tl.maximum(current_val, down_val)
+            
+            # if (j-1>=0 && i+1<N)
+            if (j - 1 >= 0) & (i + 1 < N):
+                diag_idx = (i + 1) * N + (j - 1)
+                diag_val = tl.load(table_ptr + diag_idx)
+                
+                if i < j - 1:  # don't allow adjacent elements to bond
+                    seq_i = tl.load(seq_ptr + i)
+                    seq_j = tl.load(seq_ptr + j)
+                    match_val = tl.where((seq_i + seq_j) == 3, 1, 0)
+                    current_val = tl.maximum(current_val, diag_val + match_val)
+                else:
+                    current_val = tl.maximum(current_val, diag_val)
+            
+            # for (k=i+1; k<j; k++)
+            for k in range(i + 1, j):
+                left_split_idx = i * N + k
+                right_split_idx = (k + 1) * N + j
+                left_split_val = tl.load(table_ptr + left_split_idx)
+                right_split_val = tl.load(table_ptr + right_split_idx)
+                split_sum = left_split_val + right_split_val
+                current_val = tl.maximum(current_val, split_sum)
+            
+            tl.store(table_ptr + idx, current_val)
 
 def nussinov_triton(seq, table, N):
     BLOCK_SIZE = 32
     
-    # Process i from N-1 down to 0
-    for i in range(N-1, -1, -1):
-        j_range = N - (i + 1)
+    for i in range(N - 1, -1, -1):
+        j_range = N - (i + 1)  # number of valid j values for this i
         if j_range > 0:
-            num_blocks = triton.cdiv(j_range, BLOCK_SIZE)
-            
-            nussinov_kernel[(num_blocks,)](
-                seq, table, N, i, BLOCK_SIZE
-            )
+            grid = (triton.cdiv(j_range, BLOCK_SIZE),)
+            nussinov_kernel[grid](seq, table, N, i, BLOCK_SIZE)

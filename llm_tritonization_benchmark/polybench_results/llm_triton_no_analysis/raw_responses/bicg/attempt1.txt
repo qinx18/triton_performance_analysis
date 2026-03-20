@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for bicg (Polybench)
-# Generated: 2026-03-05 05:17:45
+# Generated: 2026-03-18 14:42:11
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -105,16 +105,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)
@@ -136,56 +140,62 @@ import torch
 
 @triton.jit
 def bicg_kernel(A_ptr, p_ptr, q_ptr, r_ptr, s_ptr, M: tl.constexpr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Initialize s[i] = 0 for all i < M
-    s_offsets = tl.arange(0, BLOCK_SIZE)
-    for s_block_start in range(0, M, BLOCK_SIZE):
-        s_current_offsets = s_block_start + s_offsets
-        s_mask = s_current_offsets < M
-        tl.store(s_ptr + s_current_offsets, 0.0, mask=s_mask)
+    pid = tl.program_id(0)
     
-    # Main nested loops
-    for i in range(N):
-        # q[i] = 0.0
-        tl.store(q_ptr + i, 0.0)
+    if pid == 0:
+        # Initialize s array to zero
+        s_offsets = tl.arange(0, BLOCK_SIZE)
+        for block_start in range(0, M, BLOCK_SIZE):
+            current_s_offsets = block_start + s_offsets
+            s_mask = current_s_offsets < M
+            tl.store(s_ptr + current_s_offsets, 0.0, mask=s_mask)
+    
+    # Process rows of A matrix
+    row_id = pid
+    if row_id < N:
+        # Initialize q[i] to 0.0
+        tl.store(q_ptr + row_id, 0.0)
         
-        # Load r[i] once for this iteration
-        r_i = tl.load(r_ptr + i)
+        # Load r[i] once
+        r_val = tl.load(r_ptr + row_id)
         
-        # Process matrix row A[i] in blocks
-        j_offsets = tl.arange(0, BLOCK_SIZE)
-        q_i_acc = 0.0
+        # Process columns in blocks
+        col_offsets = tl.arange(0, BLOCK_SIZE)
+        q_acc = 0.0
         
-        for j_block_start in range(0, M, BLOCK_SIZE):
-            j_current_offsets = j_block_start + j_offsets
-            j_mask = j_current_offsets < M
+        for block_start in range(0, M, BLOCK_SIZE):
+            current_col_offsets = block_start + col_offsets
+            col_mask = current_col_offsets < M
             
-            # Load A[i][j] values for current block
-            A_indices = i * M + j_current_offsets
-            A_vals = tl.load(A_ptr + A_indices, mask=j_mask, other=0.0)
+            # Load A[i][j] values
+            a_indices = row_id * M + current_col_offsets
+            a_vals = tl.load(A_ptr + a_indices, mask=col_mask, other=0.0)
             
-            # Load p[j] values for current block
-            p_vals = tl.load(p_ptr + j_current_offsets, mask=j_mask, other=0.0)
+            # Load p[j] values
+            p_vals = tl.load(p_ptr + current_col_offsets, mask=col_mask, other=0.0)
             
             # Load current s[j] values
-            s_vals = tl.load(s_ptr + j_current_offsets, mask=j_mask, other=0.0)
+            s_vals = tl.load(s_ptr + current_col_offsets, mask=col_mask, other=0.0)
             
             # Update s[j] = s[j] + r[i] * A[i][j]
-            s_new = s_vals + r_i * A_vals
-            tl.store(s_ptr + j_current_offsets, s_new, mask=j_mask)
+            new_s_vals = s_vals + r_val * a_vals
+            tl.store(s_ptr + current_col_offsets, new_s_vals, mask=col_mask)
             
             # Accumulate q[i] += A[i][j] * p[j]
-            q_i_acc += tl.sum(A_vals * p_vals, axis=0)
+            q_acc = q_acc + tl.sum(a_vals * p_vals, axis=0)
         
         # Store final q[i] value
-        q_i_current = tl.load(q_ptr + i)
-        tl.store(q_ptr + i, q_i_current + q_i_acc)
+        q_final = tl.load(q_ptr + row_id) + q_acc
+        tl.store(q_ptr + row_id, q_final)
 
 def bicg_triton(A, p, q, r, s, M, N):
     BLOCK_SIZE = 64
     
-    # Launch kernel with single program instance
-    bicg_kernel[(1,)](
-        A, p, q, r, s, 
+    # Launch N+1 programs: one for initialization, N for processing rows
+    grid = (N + 1,)
+    
+    bicg_kernel[grid](
+        A, p, q, r, s,
         M=M, N=N, BLOCK_SIZE=BLOCK_SIZE
     )
 ```

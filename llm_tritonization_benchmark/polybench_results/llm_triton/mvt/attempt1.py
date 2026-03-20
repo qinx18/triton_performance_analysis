@@ -3,50 +3,76 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def mvt_kernel(A_ptr, x1_ptr, x2_ptr, y_1_ptr, y_2_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    i = pid
-    
-    if i >= N:
-        return
+def mvt_kernel(
+    A_ptr, x1_ptr, x2_ptr, y_1_ptr, y_2_ptr,
+    N: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    # Get program ID
+    pid = tl.program_id(axis=0)
     
     # First loop: x1[i] = x1[i] + A[i][j] * y_1[j]
-    j_offsets = tl.arange(0, BLOCK_SIZE)
-    x1_acc = tl.load(x1_ptr + i)
-    
-    for j_block in range(0, N, BLOCK_SIZE):
-        j_idx = j_block + j_offsets
-        mask = j_idx < N
+    if pid < N:
+        i = pid
         
-        A_offsets = i * N + j_idx
-        A_vals = tl.load(A_ptr + A_offsets, mask=mask, other=0.0)
-        y_1_vals = tl.load(y_1_ptr + j_idx, mask=mask, other=0.0)
+        # Load initial x1[i] value
+        x1_val = tl.load(x1_ptr + i)
         
-        x1_acc += tl.sum(A_vals * y_1_vals)
-    
-    tl.store(x1_ptr + i, x1_acc)
+        # Vectorized reduction over j dimension
+        j_offsets = tl.arange(0, BLOCK_SIZE)
+        
+        for j_start in range(0, N, BLOCK_SIZE):
+            j_idx = j_start + j_offsets
+            j_mask = j_idx < N
+            
+            # Load A[i][j] values
+            A_offsets = i * N + j_idx
+            A_vals = tl.load(A_ptr + A_offsets, mask=j_mask, other=0.0)
+            
+            # Load y_1[j] values
+            y_1_vals = tl.load(y_1_ptr + j_idx, mask=j_mask, other=0.0)
+            
+            # Accumulate A[i][j] * y_1[j]
+            products = A_vals * y_1_vals
+            x1_val += tl.sum(products)
+        
+        # Store updated x1[i]
+        tl.store(x1_ptr + i, x1_val)
     
     # Second loop: x2[i] = x2[i] + A[j][i] * y_2[j]
-    x2_acc = tl.load(x2_ptr + i)
-    
-    for j_block in range(0, N, BLOCK_SIZE):
-        j_idx = j_block + j_offsets
-        mask = j_idx < N
+    if pid < N:
+        i = pid
         
-        A_offsets = j_idx * N + i
-        A_vals = tl.load(A_ptr + A_offsets, mask=mask, other=0.0)
-        y_2_vals = tl.load(y_2_ptr + j_idx, mask=mask, other=0.0)
+        # Load initial x2[i] value
+        x2_val = tl.load(x2_ptr + i)
         
-        x2_acc += tl.sum(A_vals * y_2_vals)
-    
-    tl.store(x2_ptr + i, x2_acc)
+        # Vectorized reduction over j dimension
+        j_offsets = tl.arange(0, BLOCK_SIZE)
+        
+        for j_start in range(0, N, BLOCK_SIZE):
+            j_idx = j_start + j_offsets
+            j_mask = j_idx < N
+            
+            # Load A[j][i] values (transposed access)
+            A_offsets = j_idx * N + i
+            A_vals = tl.load(A_ptr + A_offsets, mask=j_mask, other=0.0)
+            
+            # Load y_2[j] values
+            y_2_vals = tl.load(y_2_ptr + j_idx, mask=j_mask, other=0.0)
+            
+            # Accumulate A[j][i] * y_2[j]
+            products = A_vals * y_2_vals
+            x2_val += tl.sum(products)
+        
+        # Store updated x2[i]
+        tl.store(x2_ptr + i, x2_val)
 
 def mvt_triton(A, x1, x2, y_1, y_2, N):
-    BLOCK_SIZE = 128
-    grid = (triton.cdiv(N, 1),)
+    BLOCK_SIZE = 64
+    grid = (N,)
     
     mvt_kernel[grid](
         A, x1, x2, y_1, y_2,
         N=N,
-        BLOCK_SIZE=BLOCK_SIZE
+        BLOCK_SIZE=BLOCK_SIZE,
     )

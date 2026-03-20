@@ -13,5 +13,15 @@
     "c_ref_time_ms": 182.169996,
     "triton_time_ms": 123.960277,
     "speedup": 1.469584
+  },
+  "spmv": {
+    "c_ref_time_ms": 0.713338,
+    "triton_time_ms": 0.079723,
+    "speedup": 8.947681
+  },
+  "lj_force": {
+    "c_ref_time_ms": 2.034639,
+    "triton_time_ms": 0.078804,
+    "speedup": 25.818941
   }
 }

@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.cholesky.attempt1 import cholesky_triton
+    from polybench_results_scale8x.llm_triton.cholesky.attempt1 import cholesky_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libcholesky.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libcholesky.so"
 
 def run_c_reference(A_c, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

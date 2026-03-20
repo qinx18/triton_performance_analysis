@@ -166,6 +166,8 @@ KERNELS_DIR = "/home/qinxiao/workspace/pet/isl_analysis/kernels"
 # C reference is pre-compiled in c_reference/tsvc_all_reference.py
 
 MAX_ATTEMPTS = 10
+USE_OMP = False  # When True, compile C reference with OpenMP
+BENCHMARK_DATA_SIZE = None  # Override: "32MB", "3200MB", or None for default (32K/256)
 
 # Functions requiring higher tolerance due to numerical accumulation patterns
 # These functions have recurrence relations where values grow exponentially,
@@ -2318,7 +2320,18 @@ def generate_benchmark_test(func_name: str, func_spec: dict, attempt: int = 1) -
     available_arrays = array_names
     available_scalars = all_scalar_names
 
-    if has_2d:
+    if BENCHMARK_DATA_SIZE:
+        # User-specified data size per array
+        size_map = {
+            '32MB': (8_000_000, 2828),    # 32MB/4B = 8M (1D), sqrt(32M/4) ≈ 2828 (2D)
+            '3200MB': (800_000_000, 28284),  # 3200MB/4B = 800M (1D), sqrt(800M/4) ≈ 28284 (2D)
+        }
+        if BENCHMARK_DATA_SIZE in size_map:
+            n_1d, n_2d = size_map[BENCHMARK_DATA_SIZE]
+            benchmark_size = n_2d if has_2d else n_1d
+        else:
+            benchmark_size = int(BENCHMARK_DATA_SIZE)
+    elif has_2d:
         benchmark_size = 256
     else:
         benchmark_size = 32000
@@ -2718,10 +2731,36 @@ def process_function(func_name: str, func_spec: dict) -> dict:
 
 def main():
     """Main automation pipeline."""
+    global USE_OMP, BENCHMARK_DATA_SIZE
+
+    # Check for --omp flag (multi-threaded C reference)
+    if '--omp' in sys.argv:
+        sys.argv.remove('--omp')
+        USE_OMP = True
+        import multiprocessing
+        omp_threads = multiprocessing.cpu_count()
+        os.environ['OMP_NUM_THREADS'] = str(omp_threads)
+        os.environ['TSVC_USE_OMP'] = '1'
+        # Reload the C reference to pick up the OMP library
+        import importlib
+        from c_reference import tsvc_all_reference
+        importlib.reload(tsvc_all_reference)
+        print(f"OpenMP enabled: C reference will use {omp_threads} threads")
+
+    # Check for --data-size flag (benchmark array size: 32MB, 3200MB)
+    if '--data-size' in sys.argv:
+        idx = sys.argv.index('--data-size')
+        BENCHMARK_DATA_SIZE = sys.argv[idx + 1]
+        sys.argv.pop(idx)  # remove flag
+        sys.argv.pop(idx)  # remove value
+        print(f"Benchmark data size: {BENCHMARK_DATA_SIZE} per array")
+
     print("=" * 70)
     print("Integrated Generation and Testing Pipeline")
     print(f"Total functions available: {len(TSVC_FUNCTIONS)}")
     print(f"Max attempts per function: {MAX_ATTEMPTS}")
+    if BENCHMARK_DATA_SIZE:
+        print(f"Data size: {BENCHMARK_DATA_SIZE}")
     print("=" * 70)
 
     if not client:

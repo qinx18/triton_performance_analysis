@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.gramschmidt.attempt1 import gramschmidt_triton
+    from polybench_results_scale8x.llm_triton.gramschmidt.attempt1 import gramschmidt_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libgramschmidt.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libgramschmidt.so"
 
 def run_c_reference(A_c, Q_c, R_c, M, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

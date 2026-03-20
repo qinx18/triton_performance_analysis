@@ -1,51 +1,52 @@
+import torch
 import triton
 import triton.language as tl
-import torch
 
 @triton.jit
-def trisolv_kernel(L_ptr, b_ptr, x_ptr, row_to_process: tl.constexpr, N: tl.constexpr, stride_L: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    # Initialize x[row] = b[row]
-    b_val = tl.load(b_ptr + row_to_process)
-    x_val = b_val
+def trisolv_kernel(L_ptr, b_ptr, x_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
     
-    # Compute sum of L[row][j] * x[j] for j < row using vectorized loads
-    col_offsets = tl.arange(0, BLOCK_SIZE)
+    # Each block processes a chunk of rows
+    row_start = pid * BLOCK_SIZE
+    row_offsets = row_start + tl.arange(0, BLOCK_SIZE)
+    row_mask = row_offsets < N
     
-    for block_start in range(0, row_to_process, BLOCK_SIZE):
-        current_cols = block_start + col_offsets
-        mask = current_cols < row_to_process
+    # Load b values for this block of rows
+    b_vals = tl.load(b_ptr + row_offsets, mask=row_mask)
+    
+    # Initialize x values
+    x_vals = b_vals
+    
+    # Process each column j < row_start (fully computed columns)
+    for j in range(row_start):
+        x_j = tl.load(x_ptr + j)
+        L_offsets = row_offsets * N + j
+        L_vals = tl.load(L_ptr + L_offsets, mask=row_mask)
+        x_vals = x_vals - L_vals * x_j
+    
+    # Process rows within this block sequentially
+    for local_i in range(BLOCK_SIZE):
+        global_i = row_start + local_i
+        if global_i >= N:
+            break
+            
+        # Get current x value for this row
+        x_i = tl.load(b_ptr + global_i)
         
-        # Load L[row][j] values
-        L_ptrs = L_ptr + row_to_process * stride_L + current_cols
-        L_vals = tl.load(L_ptrs, mask=mask, other=0.0)
+        # Subtract contributions from all previous rows
+        for j in range(global_i):
+            L_ij = tl.load(L_ptr + global_i * N + j)
+            x_j = tl.load(x_ptr + j)
+            x_i = x_i - L_ij * x_j
         
-        # Load x[j] values
-        x_ptrs = x_ptr + current_cols
-        x_vals = tl.load(x_ptrs, mask=mask, other=0.0)
+        # Divide by diagonal element
+        L_ii = tl.load(L_ptr + global_i * N + global_i)
+        x_i = x_i / L_ii
         
-        # Compute partial sum
-        products = L_vals * x_vals
-        partial_sum = tl.sum(products)
-        x_val = x_val - partial_sum
-    
-    # Divide by diagonal element L[row][row]
-    L_diag = tl.load(L_ptr + row_to_process * stride_L + row_to_process)
-    x_val = x_val / L_diag
-    
-    # Store result
-    tl.store(x_ptr + row_to_process, x_val)
+        # Store result
+        tl.store(x_ptr + global_i, x_i)
 
 def trisolv_triton(L, b, x, N):
-    BLOCK_SIZE = 64
-    
-    # Process each row sequentially to maintain dependency
-    for i in range(N):
-        # Launch kernel for current row
-        grid = (1,)
-        trisolv_kernel[grid](
-            L, b, x,
-            row_to_process=i,
-            N=N,
-            stride_L=L.stride(0),
-            BLOCK_SIZE=BLOCK_SIZE
-        )
+    BLOCK_SIZE = 32
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    trisolv_kernel[grid](L, b, x, N, BLOCK_SIZE)

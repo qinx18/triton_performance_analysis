@@ -1,5 +1,5 @@
 # LLM-Generated Triton Implementation for lud (Rodinia)
-# Generated: 2026-03-05 17:30:45
+# Generated: 2026-03-18 17:17:43
 # Model: claude-sonnet-4-20250514
 
 ================================================================================
@@ -158,43 +158,46 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def lud_kernel(A_ptr, N: tl.constexpr, stride: tl.constexpr):
+def lud_kernel(A, N: tl.constexpr):
     i = tl.program_id(0)
     
-    # First loop: for j in range(i)
+    # First loop: j < i
     for j in range(i):
-        # Inner loop: for k in range(j)
+        # Inner k loop: k < j
         sum_val = 0.0
         for k in range(j):
-            a_ik = tl.load(A_ptr + i * stride + k)
-            a_kj = tl.load(A_ptr + k * stride + j)
+            a_ik = tl.load(A + i * N + k)
+            a_kj = tl.load(A + k * N + j)
             sum_val += a_ik * a_kj
         
-        # A[i][j] -= sum_val
-        a_ij = tl.load(A_ptr + i * stride + j)
-        a_ij = a_ij - sum_val
+        # Load A[i][j] and subtract sum
+        a_ij = tl.load(A + i * N + j)
+        a_ij -= sum_val
         
-        # A[i][j] /= A[j][j]
-        a_jj = tl.load(A_ptr + j * stride + j)
-        a_ij = a_ij / a_jj
-        tl.store(A_ptr + i * stride + j, a_ij)
+        # Divide by A[j][j]
+        a_jj = tl.load(A + j * N + j)
+        a_ij /= a_jj
+        
+        # Store result
+        tl.store(A + i * N + j, a_ij)
     
-    # Second loop: for j in range(i, N)
+    # Second loop: j >= i
     for j in range(i, N):
-        # Inner loop: for k in range(i)
+        # Inner k loop: k < i
         sum_val = 0.0
         for k in range(i):
-            a_ik = tl.load(A_ptr + i * stride + k)
-            a_kj = tl.load(A_ptr + k * stride + j)
+            a_ik = tl.load(A + i * N + k)
+            a_kj = tl.load(A + k * N + j)
             sum_val += a_ik * a_kj
         
-        # A[i][j] -= sum_val
-        a_ij = tl.load(A_ptr + i * stride + j)
-        a_ij = a_ij - sum_val
-        tl.store(A_ptr + i * stride + j, a_ij)
+        # Load A[i][j] and subtract sum
+        a_ij = tl.load(A + i * N + j)
+        a_ij -= sum_val
+        
+        # Store result
+        tl.store(A + i * N + j, a_ij)
 
 def lud_triton(A, N):
-    stride = A.stride(0)
     grid = (N,)
-    lud_kernel[grid](A, N, stride)
+    lud_kernel[grid](A, N)
 ```

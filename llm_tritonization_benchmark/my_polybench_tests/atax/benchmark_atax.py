@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.atax.attempt2 import atax_triton
+    from polybench_results_scale8x.llm_triton.atax.attempt1 import atax_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libatax.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libatax.so"
 
 def run_c_reference(A_c, tmp_c, x_c, y_c, M, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

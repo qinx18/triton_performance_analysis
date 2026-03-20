@@ -3,110 +3,59 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def seidel_2d_kernel(A_ptr, N: tl.constexpr, TSTEPS: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
+def seidel_2d_kernel(A_ptr, N: tl.constexpr, TSTEPS: tl.constexpr):
+    # Get program IDs for 2D grid
+    i = tl.program_id(0) + 1  # i ranges from 1 to N-2
+    j = tl.program_id(1) + 1  # j ranges from 1 to N-2
     
-    # Calculate which (i, j) pair this program handles
-    total_elements = (N - 2) * (N - 2)
-    block_start = pid * BLOCK_SIZE
+    # Check bounds
+    if i >= N - 1:
+        return
+    if j >= N - 1:
+        return
     
-    offsets = tl.arange(0, BLOCK_SIZE)
-    element_ids = block_start + offsets
-    mask = element_ids < total_elements
-    
-    # Convert linear element_id to (i, j) coordinates
-    i_coords = (element_ids // (N - 2)) + 1
-    j_coords = (element_ids % (N - 2)) + 1
-    
+    # Time stepping loop
     for t in range(TSTEPS):
-        # For each timestep, we need to synchronize updates
-        # Load all neighbor values at the current timestep
-        idx_center = i_coords * N + j_coords
+        # Calculate linear indices for 9-point stencil
+        idx_center = i * N + j
+        idx_top_left = (i - 1) * N + (j - 1)
+        idx_top = (i - 1) * N + j
+        idx_top_right = (i - 1) * N + (j + 1)
+        idx_left = i * N + (j - 1)
+        idx_right = i * N + (j + 1)
+        idx_bottom_left = (i + 1) * N + (j - 1)
+        idx_bottom = (i + 1) * N + j
+        idx_bottom_right = (i + 1) * N + (j + 1)
         
-        idx_i_minus_1_j_minus_1 = (i_coords - 1) * N + (j_coords - 1)
-        idx_i_minus_1_j = (i_coords - 1) * N + j_coords
-        idx_i_minus_1_j_plus_1 = (i_coords - 1) * N + (j_coords + 1)
+        # Load all 9 stencil values
+        val_top_left = tl.load(A_ptr + idx_top_left)
+        val_top = tl.load(A_ptr + idx_top)
+        val_top_right = tl.load(A_ptr + idx_top_right)
+        val_left = tl.load(A_ptr + idx_left)
+        val_center = tl.load(A_ptr + idx_center)
+        val_right = tl.load(A_ptr + idx_right)
+        val_bottom_left = tl.load(A_ptr + idx_bottom_left)
+        val_bottom = tl.load(A_ptr + idx_bottom)
+        val_bottom_right = tl.load(A_ptr + idx_bottom_right)
         
-        idx_i_j_minus_1 = i_coords * N + (j_coords - 1)
-        idx_i_j = i_coords * N + j_coords
-        idx_i_j_plus_1 = i_coords * N + (j_coords + 1)
+        # Compute average of 9 values
+        result = (val_top_left + val_top + val_top_right +
+                 val_left + val_center + val_right +
+                 val_bottom_left + val_bottom + val_bottom_right) / 9.0
         
-        idx_i_plus_1_j_minus_1 = (i_coords + 1) * N + (j_coords - 1)
-        idx_i_plus_1_j = (i_coords + 1) * N + j_coords
-        idx_i_plus_1_j_plus_1 = (i_coords + 1) * N + (j_coords + 1)
-        
-        # Load all 9 values
-        val_i_minus_1_j_minus_1 = tl.load(A_ptr + idx_i_minus_1_j_minus_1, mask=mask)
-        val_i_minus_1_j = tl.load(A_ptr + idx_i_minus_1_j, mask=mask)
-        val_i_minus_1_j_plus_1 = tl.load(A_ptr + idx_i_minus_1_j_plus_1, mask=mask)
-        
-        val_i_j_minus_1 = tl.load(A_ptr + idx_i_j_minus_1, mask=mask)
-        val_i_j = tl.load(A_ptr + idx_i_j, mask=mask)
-        val_i_j_plus_1 = tl.load(A_ptr + idx_i_j_plus_1, mask=mask)
-        
-        val_i_plus_1_j_minus_1 = tl.load(A_ptr + idx_i_plus_1_j_minus_1, mask=mask)
-        val_i_plus_1_j = tl.load(A_ptr + idx_i_plus_1_j, mask=mask)
-        val_i_plus_1_j_plus_1 = tl.load(A_ptr + idx_i_plus_1_j_plus_1, mask=mask)
-        
-        # Compute the average
-        result = (val_i_minus_1_j_minus_1 + val_i_minus_1_j + val_i_minus_1_j_plus_1 +
-                 val_i_j_minus_1 + val_i_j + val_i_j_plus_1 +
-                 val_i_plus_1_j_minus_1 + val_i_plus_1_j + val_i_plus_1_j_plus_1) / 9.0
-        
-        # Store the result and synchronize before next timestep
-        tl.store(A_ptr + idx_center, result, mask=mask)
+        # Store result back
+        tl.store(A_ptr + idx_center, result)
 
 def seidel_2d_triton(A, N, TSTEPS):
-    for t in range(TSTEPS):
-        BLOCK_SIZE = 256
-        total_elements = (N - 2) * (N - 2)
-        grid_size = triton.cdiv(total_elements, BLOCK_SIZE)
-        
-        # Process one timestep at a time to ensure proper synchronization
-        @triton.jit
-        def single_step_kernel(A_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-            pid = tl.program_id(0)
-            
-            total_elements = (N - 2) * (N - 2)
-            block_start = pid * BLOCK_SIZE
-            
-            offsets = tl.arange(0, BLOCK_SIZE)
-            element_ids = block_start + offsets
-            mask = element_ids < total_elements
-            
-            i_coords = (element_ids // (N - 2)) + 1
-            j_coords = (element_ids % (N - 2)) + 1
-            
-            idx_center = i_coords * N + j_coords
-            
-            idx_i_minus_1_j_minus_1 = (i_coords - 1) * N + (j_coords - 1)
-            idx_i_minus_1_j = (i_coords - 1) * N + j_coords
-            idx_i_minus_1_j_plus_1 = (i_coords - 1) * N + (j_coords + 1)
-            
-            idx_i_j_minus_1 = i_coords * N + (j_coords - 1)
-            idx_i_j = i_coords * N + j_coords
-            idx_i_j_plus_1 = i_coords * N + (j_coords + 1)
-            
-            idx_i_plus_1_j_minus_1 = (i_coords + 1) * N + (j_coords - 1)
-            idx_i_plus_1_j = (i_coords + 1) * N + j_coords
-            idx_i_plus_1_j_plus_1 = (i_coords + 1) * N + (j_coords + 1)
-            
-            val_i_minus_1_j_minus_1 = tl.load(A_ptr + idx_i_minus_1_j_minus_1, mask=mask)
-            val_i_minus_1_j = tl.load(A_ptr + idx_i_minus_1_j, mask=mask)
-            val_i_minus_1_j_plus_1 = tl.load(A_ptr + idx_i_minus_1_j_plus_1, mask=mask)
-            
-            val_i_j_minus_1 = tl.load(A_ptr + idx_i_j_minus_1, mask=mask)
-            val_i_j = tl.load(A_ptr + idx_i_j, mask=mask)
-            val_i_j_plus_1 = tl.load(A_ptr + idx_i_j_plus_1, mask=mask)
-            
-            val_i_plus_1_j_minus_1 = tl.load(A_ptr + idx_i_plus_1_j_minus_1, mask=mask)
-            val_i_plus_1_j = tl.load(A_ptr + idx_i_plus_1_j, mask=mask)
-            val_i_plus_1_j_plus_1 = tl.load(A_ptr + idx_i_plus_1_j_plus_1, mask=mask)
-            
-            result = (val_i_minus_1_j_minus_1 + val_i_minus_1_j + val_i_minus_1_j_plus_1 +
-                     val_i_j_minus_1 + val_i_j + val_i_j_plus_1 +
-                     val_i_plus_1_j_minus_1 + val_i_plus_1_j + val_i_plus_1_j_plus_1) / 9.0
-            
-            tl.store(A_ptr + idx_center, result, mask=mask)
-        
-        single_step_kernel[(grid_size,)](A, N, BLOCK_SIZE)
+    # Ensure A is contiguous
+    A = A.contiguous()
+    
+    # Launch 2D grid covering interior points [1, N-2] x [1, N-2]
+    grid = (N - 2, N - 2)
+    
+    # Launch kernel
+    seidel_2d_kernel[grid](
+        A, N, TSTEPS
+    )
+    
+    return A

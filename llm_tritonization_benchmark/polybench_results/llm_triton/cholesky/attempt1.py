@@ -4,10 +4,11 @@ import torch
 
 @triton.jit
 def cholesky_kernel(A_ptr, N: tl.constexpr):
+    # Sequential Cholesky decomposition
     for i in range(N):
         # j < i case
         for j in range(i):
-            # Inner k loop: A[i][j] -= A[i][k] * A[j][k]
+            # Accumulate A[i][j] -= A[i][k] * A[j][k] for k < j
             for k in range(j):
                 i_k_offset = i * N + k
                 j_k_offset = j * N + k
@@ -30,7 +31,7 @@ def cholesky_kernel(A_ptr, N: tl.constexpr):
             a_i_j = a_i_j / a_j_j
             tl.store(A_ptr + i_j_offset, a_i_j)
         
-        # i == j case
+        # i == j case (diagonal)
         for k in range(i):
             i_k_offset = i * N + k
             i_i_offset = i * N + i
@@ -48,4 +49,6 @@ def cholesky_kernel(A_ptr, N: tl.constexpr):
         tl.store(A_ptr + i_i_offset, a_i_i)
 
 def cholesky_triton(A, N):
-    cholesky_kernel[(1,)](A, N)
+    # Launch single thread block for sequential execution
+    grid = (1,)
+    cholesky_kernel[grid](A, N)

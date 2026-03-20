@@ -1,61 +1,73 @@
 
-## PREVIOUS ATTEMPT FAILED - NUMERICAL ERROR
+## PREVIOUS ATTEMPT FAILED - MISSING tl.debug_barrier()
 
-Your last attempt produced incorrect numerical results.
+Your code will produce WRONG NUMERICAL RESULTS because it is missing `tl.debug_barrier()` calls.
 
-**Error type**: Numerical error (values don't match)
-**Max error observed**: 1.465651e-01
+**Root cause**: In a single-CTA stencil kernel (`grid=(1,)`), vectorized `tl.store()` writes go to
+L1 cache. A subsequent `tl.load()` from overlapping addresses reads STALE cache data unless
+`tl.debug_barrier()` is inserted between the store and load.
 
-Please fix the numerical computation. Common causes:
-- Incorrect loop bounds or indices
-- Wrong array access patterns (row-major vs column-major)
-- Missing or incorrect operations
-- Off-by-one errors
-- Cloning input arrays instead of modifying them in-place (the test checks the original tensors)
+**YOU MUST add `tl.debug_barrier()` calls**. Without them, abs_error will be ~0.1-0.2.
 
-## LAST ATTEMPT (DO NOT REPEAT THE SAME MISTAKES):
+Here is EXACTLY where to place them:
 ```python
-import torch
+for t in range(TSTEPS):
+    tl.debug_barrier()  # <-- ADD THIS
+    # Phase 1: load A, compute, store B
+    a_left = tl.load(A_ptr + offsets - 1, mask=mask)
+    ...
+    tl.store(B_ptr + offsets, b_val, mask=mask)
+
+    tl.debug_barrier()  # <-- ADD THIS (between Phase 1 stores and Phase 2 loads)
+
+    # Phase 2: load B, compute, store A
+    b_left = tl.load(B_ptr + offsets - 1, mask=mask)
+    ...
+    tl.store(A_ptr + offsets, a_val, mask=mask)
+```
+
+**DO NOT remove or skip `tl.debug_barrier()`.** It is NOT optional — it is REQUIRED for correctness.
+Keep `grid=(1,)` — do NOT switch to multi-block grid.
+
+## LAST ATTEMPT (MISSING BARRIERS — ADD THEM):
+```python
 import triton
 import triton.language as tl
+import torch
 
 @triton.jit
-def jacobi_1d_kernel(A, B, N: tl.constexpr, TSTEPS: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_SIZE)
+def jacobi_1d_kernel(A_ptr, B_ptr, N: tl.constexpr, TSTEPS: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    # Get program ID
+    pid = tl.program_id(0)
+    
+    # Calculate block start and offsets
+    block_start = pid * BLOCK_SIZE
+    offsets = tl.arange(0, BLOCK_SIZE) + block_start
+    
+    # Mask for valid indices (1 to N-2 inclusive)
+    mask = (offsets >= 1) & (offsets < N - 1)
     
     for t in range(TSTEPS):
-        # First loop: B[i] = 0.33333 * (A[i-1] + A[i] + A[i+1])
-        for block_start in range(1, N - 1, BLOCK_SIZE):
-            current_offsets = block_start + offsets
-            mask = (current_offsets >= 1) & (current_offsets < N - 1)
-            
-            a_prev = tl.load(A + current_offsets - 1, mask=mask)
-            a_curr = tl.load(A + current_offsets, mask=mask)
-            a_next = tl.load(A + current_offsets + 1, mask=mask)
-            
-            b_val = 0.33333 * (a_prev + a_curr + a_next)
-            tl.store(B + current_offsets, b_val, mask=mask)
+        # First step: B[i] = 0.33333 * (A[i-1] + A[i] + A[i+1])
+        a_left = tl.load(A_ptr + offsets - 1, mask=mask)
+        a_center = tl.load(A_ptr + offsets, mask=mask)
+        a_right = tl.load(A_ptr + offsets + 1, mask=mask)
+        b_new = 0.33333 * (a_left + a_center + a_right)
+        tl.store(B_ptr + offsets, b_new, mask=mask)
         
-        # Second loop: A[i] = 0.33333 * (B[i-1] + B[i] + B[i+1])
-        for block_start in range(1, N - 1, BLOCK_SIZE):
-            current_offsets = block_start + offsets
-            mask = (current_offsets >= 1) & (current_offsets < N - 1)
-            
-            b_prev = tl.load(B + current_offsets - 1, mask=mask)
-            b_curr = tl.load(B + current_offsets, mask=mask)
-            b_next = tl.load(B + current_offsets + 1, mask=mask)
-            
-            a_val = 0.33333 * (b_prev + b_curr + b_next)
-            tl.store(A + current_offsets, a_val, mask=mask)
+        # Second step: A[i] = 0.33333 * (B[i-1] + B[i] + B[i+1])
+        b_left = tl.load(B_ptr + offsets - 1, mask=mask)
+        b_center = tl.load(B_ptr + offsets, mask=mask)
+        b_right = tl.load(B_ptr + offsets + 1, mask=mask)
+        a_new = 0.33333 * (b_left + b_center + b_right)
+        tl.store(A_ptr + offsets, a_new, mask=mask)
 
 def jacobi_1d_triton(A, B, N, TSTEPS):
     BLOCK_SIZE = 128
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
     
-    jacobi_1d_kernel[(1,)](
-        A, B, 
-        N=N, 
-        TSTEPS=TSTEPS,
-        BLOCK_SIZE=BLOCK_SIZE
+    jacobi_1d_kernel[grid](
+        A, B, N, TSTEPS, BLOCK_SIZE
     )
 ```
 
@@ -147,16 +159,20 @@ for block_start in range(0, n, BLOCK_SIZE):
     current_offsets = block_start + offsets
 ```
 
-**NEVER use scalar indexing inside @triton.jit kernel:**
+**Prefer vectorized access over scalar indexing inside @triton.jit kernel:**
 ```python
-# WRONG
+# WRONG — scalar indexing into a Triton tensor
 for i in range(BLOCK_SIZE):
     val = tensor[i]
 
-# CORRECT
+# CORRECT — vectorized load
 mask = offsets < n_elements
 vals = tl.load(ptr + offsets, mask=mask)
 ```
+**Exception**: For variable-length inner reductions (e.g., neighbor traversal),
+scalar `for` loops with `tl.load`/`tl.store` on pointers are correct.
+Store results directly with `tl.store(ptr + idx, val)` — do NOT use
+`tl.where(arange == idx, val, vec)` which is O(BLOCK_SIZE) per element.
 
 **NEVER use non-existent Triton functions:**
 - Use Python operators: `a * b`, `a / b`, `a + b` (not `tl.mul`, `tl.div`, `tl.add`)

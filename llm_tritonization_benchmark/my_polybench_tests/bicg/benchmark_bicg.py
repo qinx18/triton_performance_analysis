@@ -10,12 +10,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import torch
 
 try:
-    from polybench_results_scale8x.llm_triton_no_analysis.bicg.attempt1 import bicg_triton
+    from polybench_results_scale8x.llm_triton.bicg.attempt1 import bicg_triton
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x" / "libbicg.so"
+C_LIB_PATH = Path(__file__).parent.parent.parent / "c_reference" / "polybench_libs_scale8x_omp" / "libbicg.so"
 
 def run_c_reference(A_c, p_c, q_c, r_c, s_c, M, N):
     lib = ctypes.CDLL(str(C_LIB_PATH))

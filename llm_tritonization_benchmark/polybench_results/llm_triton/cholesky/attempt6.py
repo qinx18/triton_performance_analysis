@@ -1,47 +1,62 @@
 import triton
 import triton.language as tl
 import torch
+import math
 
 @triton.jit
-def cholesky_kernel(A_ptr, N: tl.constexpr):
-    row = tl.program_id(0)
-    
-    if row >= N:
-        return
-    
-    # Process row 'row' of the Cholesky decomposition
-    # First handle j < row case
-    for j in range(row):
-        # Compute A[row][j] -= sum(A[row][k] * A[j][k] for k in range(j))
-        sum_val = 0.0
-        for k in range(j):
-            a_row_k = tl.load(A_ptr + row * N + k)
-            a_j_k = tl.load(A_ptr + j * N + k)
-            sum_val += a_row_k * a_j_k
+def cholesky_kernel(A_ptr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    for i in range(N):
+        # Phase 1: j < i case
+        for j in range(i):
+            # Initialize A[i][j] accumulator
+            acc = tl.load(A_ptr + i * N + j)
+            
+            # Reduce over k < j
+            k_offsets = tl.arange(0, BLOCK_SIZE)
+            for k_start in range(0, j, BLOCK_SIZE):
+                k_mask = (k_start + k_offsets) < j
+                
+                # Load A[i][k] values
+                i_k_ptrs = A_ptr + i * N + k_start + k_offsets
+                i_k_vals = tl.load(i_k_ptrs, mask=k_mask, other=0.0)
+                
+                # Load A[j][k] values  
+                j_k_ptrs = A_ptr + j * N + k_start + k_offsets
+                j_k_vals = tl.load(j_k_ptrs, mask=k_mask, other=0.0)
+                
+                # Accumulate products
+                products = i_k_vals * j_k_vals
+                acc -= tl.sum(products)
+            
+            # Divide by A[j][j]
+            diagonal_val = tl.load(A_ptr + j * N + j)
+            acc /= diagonal_val
+            
+            # Store result
+            tl.store(A_ptr + i * N + j, acc)
         
-        # Load current A[row][j], subtract sum, divide by A[j][j]
-        a_row_j = tl.load(A_ptr + row * N + j)
-        a_row_j -= sum_val
-        a_j_j = tl.load(A_ptr + j * N + j)
-        a_row_j /= a_j_j
-        tl.store(A_ptr + row * N + j, a_row_j)
-    
-    # Handle diagonal case (i == j, row == row)
-    # Compute A[row][row] -= sum(A[row][k] * A[row][k] for k in range(row))
-    sum_val = 0.0
-    for k in range(row):
-        a_row_k = tl.load(A_ptr + row * N + k)
-        sum_val += a_row_k * a_row_k
-    
-    # Load A[row][row], subtract sum, take square root
-    a_row_row = tl.load(A_ptr + row * N + row)
-    a_row_row -= sum_val
-    a_row_row = tl.sqrt(a_row_row)
-    tl.store(A_ptr + row * N + row, a_row_row)
+        # Phase 2: i == j case (diagonal)
+        diagonal_acc = tl.load(A_ptr + i * N + i)
+        
+        # Reduce over k < i
+        k_offsets = tl.arange(0, BLOCK_SIZE)
+        for k_start in range(0, i, BLOCK_SIZE):
+            k_mask = (k_start + k_offsets) < i
+            
+            # Load A[i][k] values
+            i_k_ptrs = A_ptr + i * N + k_start + k_offsets
+            i_k_vals = tl.load(i_k_ptrs, mask=k_mask, other=0.0)
+            
+            # Accumulate squares
+            squares = i_k_vals * i_k_vals
+            diagonal_acc -= tl.sum(squares)
+        
+        # Take square root and store
+        diagonal_acc = tl.sqrt(diagonal_acc)
+        tl.store(A_ptr + i * N + i, diagonal_acc)
 
 def cholesky_triton(A, N):
-    # Launch one block per row, but process sequentially
-    for i in range(N):
-        cholesky_kernel[(1,)](A, N)
-        # Process one row at a time to maintain dependencies
-        cholesky_kernel[(1,)](A, N)
+    BLOCK_SIZE = 64
+    
+    grid = (1,)
+    cholesky_kernel[grid](A, N, BLOCK_SIZE)
