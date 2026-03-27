@@ -1,0 +1,236 @@
+\documentclass[sigconf]{acmart}
+
+\input{preamble}
+
+\begin{document}
+
+\title{Augmenting LLM Code Translation with Compiler Analysis for C to Triton Kernel Generation}
+
+\author{Xiao Qin}
+\affiliation{
+  \institution{University of Leeds}
+  \city{Leeds}
+  \country{United Kingdom}
+}
+\email{ppnh4382@leeds.ac.uk}
+
+\author{Chunwei Xia}
+\affiliation{
+  \institution{University of Leeds}
+  \city{Leeds}
+  \country{United Kingdom}
+}
+
+\author{Zheng Wang}
+\affiliation{
+  \institution{University of Leeds}
+  \city{Leeds}
+  \country{United Kingdom}
+}
+
+
+
+
+\begin{abstract}
+Emerging programming models like Triton enable developers to better exploit modern accelerators, but translating legacy code to Triton remains challenging. While Large Language Models (LLMs) show promise for code translation, they often generate incorrect or suboptimal implementations due to a lack of precise parallelization reasoning.
+%
+We present \sysname, a compiler-assisted LLM framework for translating C loop nests to Triton kernels. \sysname extracts parallelization properties using compiler-based analysis, and encodes them as structured constraints and guidance in the LLM prompt, enabling correct and performance-aware parallel code synthesis.
+%
+Across PolyBench/C and TSVC kernels, \sysname achieves near-perfect correctness (100\% and 99\%), improving over LLM-only baselines. On TSVC at realistic data sizes, the generated Triton kernels achieve 1.02$\times$ median performance vs.\ OpenMP GPU offloading compiled by NVIDIA's production compiler on the same GPU, demonstrating that LLM-generated code can match compiler quality. We further demonstrate generalization on Rodinia and ECP proxy applications. These results show that integrating compiler analysis into LLM-based translation enables both correct and high-performance parallel code generation.
+
+
+% Emerging programming models like Trition allow programs to take advantage of parallel computing hardware,  but translating legacy code to Trition remains a challenge. Large language models (LLMs) can transpile between programming langguages,  but without
+% understanding parallelization constraints they frequently produce
+% incorrect or inefficient implementations.  We present \sysname, a
+% system that extracts parallelization properties from C loop nests
+% using polyhedral analysis (\pet) and LLVM's dependence analysis, then
+% encodes them as structured natural-language guidance in the LLM prompt.
+% On 30 Polybench/C kernels, \sysname achieves 100\% correctness
+% (vs.\ 93\% without analysis) with 2.15$\times$ median speedup over
+% single-threaded C, rising to 30.73$\times$ at 8$\times$ problem sizes.
+% On 151 TSVC loop kernels, \sysname passes 150/151 (99\%);
+% at 32\,MB per array, the generated GPU kernels achieve 46$\times$
+% median speedup over single-threaded C and 9$\times$ over
+% 80-thread OpenMP.
+% The approach generalizes to 8 application kernels from Rodinia and
+% ECP proxy applications, achieving up to 25.8$\times$ speedup.
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+  <concept>
+    <concept_id>10011007.10011006.10011041</concept_id>
+    <concept_desc>Software and its engineering~Compilers</concept_desc>
+    <concept_significance>500</concept_significance>
+  </concept>
+  <concept>
+    <concept_id>10010147.10010169.10010170</concept_id>
+    <concept_desc>Computing methodologies~Parallel computing methodologies</concept_desc>
+    <concept_significance>300</concept_significance>
+  </concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Software and its engineering~Compilers}
+\ccsdesc[300]{Computing methodologies~Parallel computing methodologies}
+
+\keywords{LLM code generation, GPU kernels, Triton, polyhedral analysis}
+
+\maketitle
+
+%% ===================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Accelerators such as GPUs are now essential for high-performance scientific computing, yet much existing software is still written in legacy C code that is not designed for parallel execution on modern accelerators. Translating these legacy programs to accelerator-friendly implementations is challenging, as it requires identifying parallelism, restructuring computation, and managing synchronization, tasks that require expertise in programming models and hardware.
+
+
+Emerging programming models such as Triton~\cite{tillet2019triton} simplify GPU programming by providing higher-level abstractions for writing efficient kernels. However, mapping legacy C code to Triton still requires careful reasoning about loop-level parallelism, data dependencies, and execution order. Developers must determine which loop dimensions can be safely parallelized, how memory accesses should be organized, and when synchronization is required - decisions that are subtle and error-prone in practice.
+
+
+Large Language Models (LLMs) have recently shown promise in code translation, including generating GPU kernels from high-level descriptions~\cite{chen2024chatgpt, ouyang2024kernelbench}. However, LLMs lack precise reasoning about program semantics, especially data dependencies. As a result, they often produce incorrect or inefficient code, including unsafe parallelization that leads to data races, suboptimal kernel structures, and missing synchronization.
+
+
+In this paper, we present \sysname, a system that augments LLM-based translation with compiler analysis. \sysname extracts parallelization properties from C loop nests using polyhedral analysis (\pet)~\cite{verdoolaege2012polyhedral} and LLVM dependence analysis~\cite{llvm}, and encodes them as structured guidance in the LLM prompt. This allows the model to generate correct and performance-aware Triton code without requiring it to perform dependence analysis itself. 
+
+We evaluate \sysname on a diverse set of benchmarks and application kernels on a multi-core CPU and an NVIDIA 4090 GPU. Across Polybench/C and TSVC loop kernels, \sysname achieves near-perfect correctness (100\% and 99\%, respectively), significantly improving over LLM-only baselines, while delivering substantial speedups - up to 46$\times$ over single-threaded C and parallel OpenMP implementations. We further demonstrate generalization on kernels from Rodinia and ECP proxy applications, achieving up to 25.8$\times$ speedup. These results show that integrating compiler analysis into LLM-based translation enables both reliable and high-performance code generation. This paper makes the following contributions:
+
+\begin{itemize}
+\item Aa compiler-assisted LLM framework for translating legacy C loop nests to Triton, combining compiler-based analysis with structured prompt guidance.
+\item A method for encoding compiler-derived parallelization constraints as structured inputs to LLMs, enabling correct and performance-aware code generation.
+\item Empirical results show that integrating compiler analysis with LLMs improves both correctness and performance.
+\end{itemize}
+
+
+\input{approach}
+\input{setup}
+\input{results}
+
+
+%% ===================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{LLM Code Generation for GPUs.}
+Chen et al.~\cite{chen2024chatgpt} evaluate ChatGPT on CUDA kernel
+generation, finding frequent correctness issues including data races and
+incorrect memory management.
+KernelBench~\cite{ouyang2024kernelbench} benchmarks LLM-generated
+Triton/CUDA on 250 tasks, reporting 20--40\% functional correctness
+without guidance.  Our work differs fundamentally: rather than relying
+on the LLM's implicit knowledge of parallelism, we provide explicit
+compiler-derived constraints, achieving 100\% correctness on
+Polybench/C and 99\% on TSVC.
+
+\paragraph{Polyhedral Compilation and Auto-Scheduling.}
+Polyhedral frameworks such as Pluto~\cite{bondhugula2008pluto} and
+PPCG~\cite{verdoolaege2013ppcg} automatically generate parallel code
+from affine loop nests.  PPCG targets CUDA directly but is limited to
+affine programs and produces low-level code that lacks Triton's
+block-level optimizations (automatic memory coalescing, shared memory
+tiling).  TVM~\cite{chen2018tvm} and Halide~\cite{ragan2013halide}
+use auto-scheduling with learned cost models for tensor operations.
+\sysname is complementary: rather than replacing the compiler,
+it uses polyhedral analysis to extract \emph{what} parallelism is
+safe, then delegates the \emph{how} to the LLM, which can handle
+non-affine constructs, irregular access patterns, and high-level
+Triton abstractions that polyhedral compilers cannot target directly.
+
+
+%% ===================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+We have presented \sysname, a system that combines compiler-based analysis with LLM-based kernel generation for accelerators. By translating parallelization constraints, dependence information, and memory access patterns into structured prompts, \sysname enables LLMs to generate correct and efficient Triton kernels from C programs.
+
+\sysname achieves near-perfect correctness (30/30 PolyBench/C, 150/151 TSVC) and generates Triton code that matches production compiler quality: on TSVC at 32\,MB, LLM-generated Triton achieves 1.02$\times$ median vs.\ OpenMP GPU offloading (\texttt{nvc}) on the same GPU. It generalizes to 8 application kernels from Rodinia and ECP proxy apps.
+Ablation results show that analysis-guided prompting is essential for correctness, preventing failures and exposing latent race conditions in unguided generation. Future work includes extending to non-affine programs and integrating autotuning for parameter selection.
+
+%% ===================================================================
+%% References
+\bibliographystyle{ACM-Reference-Format}
+\begin{thebibliography}{99}
+
+\bibitem{tillet2019triton}
+P.~Tillet, H.~T. Kung, and D.~Cox.
+\newblock Triton: An intermediate language and compiler for tiled neural
+  network computations.
+\newblock In \emph{Proc. MAPL}, 2019.
+
+\bibitem{chen2024chatgpt}
+Y.~Chen, S.~Huang, D.~Zheng, et~al.
+\newblock {ChatGPT} for {CUDA} programming: Evaluating {LLM}-generated {GPU}
+  code.
+\newblock \emph{arXiv preprint arXiv:2404.12000}, 2024.
+
+\bibitem{ouyang2024kernelbench}
+A.~Ouyang, S.~Zheng, et~al.
+\newblock {KernelBench}: Can {LLMs} write efficient {GPU} kernels?
+\newblock \emph{arXiv preprint arXiv:2404.12489}, 2024.
+
+\bibitem{verdoolaege2012polyhedral}
+S.~Verdoolaege and T.~Grosser.
+\newblock Polyhedral extraction tool.
+\newblock In \emph{Proc. IMPACT}, 2012.
+
+\bibitem{llvm}
+C.~Lattner and V.~Adve.
+\newblock {LLVM}: A compilation framework for lifelong program analysis \&
+  transformation.
+\newblock In \emph{Proc. CGO}, 2004.
+
+\bibitem{polybench}
+L.-N. Pouchet.
+\newblock Polybench/C: The polyhedral benchmark suite, version 4.2.1.
+\newblock \url{https://web.cs.ucla.edu/~pouchet/software/polybench/}, 2016.
+
+\bibitem{anthropic2025claude}
+Anthropic.
+\newblock Claude {Sonnet} 4 model card.
+\newblock \url{https://www.anthropic.com/claude}, 2025.
+
+\bibitem{verdoolaege2010isl}
+S.~Verdoolaege.
+\newblock isl: An integer set library for the polyhedral model.
+\newblock In \emph{Proc. ICMS}, 2010.
+
+\bibitem{chen2018tvm}
+T.~Chen, T.~Moreau, Z.~Jiang, et~al.
+\newblock {TVM}: An automated end-to-end optimizing compiler for deep
+  learning.
+\newblock In \emph{Proc. OSDI}, 2018.
+
+\bibitem{ragan2013halide}
+J.~Ragan-Kelley, C.~Barnes, A.~Adams, et~al.
+\newblock Halide: A language and compiler for optimizing parallelism,
+  locality, and recomputation in image processing pipelines.
+\newblock In \emph{Proc. PLDI}, 2013.
+
+\bibitem{bondhugula2008pluto}
+U.~Bondhugula, A.~Hartono, J.~Ramanujam, and P.~Sadayappan.
+\newblock A practical automatic polyhedral parallelizer and locality
+  optimizer.
+\newblock In \emph{Proc. PLDI}, 2008.
+
+\bibitem{verdoolaege2013ppcg}
+S.~Verdoolaege, J.~Carlos~Juega, A.~Cohen, et~al.
+\newblock Polyhedral parallel code generation for {CUDA}.
+\newblock \emph{ACM TACO}, 9(4), 2013.
+
+\bibitem{che2009rodinia}
+S.~Che, M.~Boyer, J.~Meng, et~al.
+\newblock Rodinia: A benchmark suite for heterogeneous computing.
+\newblock In \emph{Proc. IISWC}, 2009.
+
+\bibitem{heroux2009mantevo}
+M.~A.~Heroux, D.~W.~Doerfler, P.~S.~Crozier, et~al.
+\newblock Improving performance via mini-applications.
+\newblock Sandia National Laboratories Technical Report SAND2009-5574, 2009.
+
+\bibitem{callahan1988tsvc}
+D.~Callahan, J.~Dongarra, and D.~Levine.
+\newblock Vectorizing compilers: A test suite and results.
+\newblock In \emph{Proc. Supercomputing}, 1988.
+
+\end{thebibliography}
+
+\end{document}

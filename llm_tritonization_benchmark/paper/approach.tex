@@ -1,0 +1,69 @@
+\section{Our Approach}
+\label{sec:method}
+\input{workflow}
+
+\sysname is implemented in approximately 14K lines of Python, using \pet/isl for polyhedral analysis and LLVM~17 for fallback dependence analysis.
+Figure~\ref{fig:pipeline} depicts the workflow of \sysname using \texttt{gemm} as a running example. Given the source program (i.e., a C source file in this work), \sysname automatically identifies optimisation candidates and translates them into the target language (i.e., Triton kernels in this work). The \sysname pipeline consists of five stages: loop nest extraction, static analysis, prompt construction, LLM-based generation, and iterative refinement, described as follows. 
+\subsection{Loop Nest Extraction}
+The current implementation of \sysname targets loop-level code translation. It leverages \pet's Static Control Part (SCoP) detection~\cite{verdoolaege2012polyhedral} to identify affine loop nests suitable for transformation. It scans each function and selects regions where loop bounds and memory accesses are affine in loop iterators and parameters, requiring no manual annotations.
+For example, for \texttt{gemm} in Figure~\ref{fig:pipeline} , \pet extracts a SCoP covering the full loop nest and produces a polyhedral representation including iteration domains, access relations, and loop schedules. This representation provides a precise and structured basis for subsequent dependence analysis.
+
+\subsection{Static Analysis}
+\sysname performs dependence-driven analysis to derive constraints that govern correct parallelization and code generation. It first identifies parallelizable loop dimensions with explicit validity conditions. In \texttt{gemm}, both \texttt{i} and \texttt{j} are parallelizable since updates to \texttt{C[i][j]} do not introduce cross-iteration conflicts. It then computes write-after-read (WAR) dependences using exact polyhedral analysis to determine whether in-place updates are safe. For \texttt{gemm}, no WAR dependences are present. Finally, it detects multi-phase computation patterns. In this case, beta scaling and matrix multiplication form two phases that share the array \texttt{C}, which affects kernel structuring.
+When polyhedral analysis is not applicable (e.g., due to non-affine accesses), \sysname falls back to LLVM's \texttt{DependenceAnalysis} to conservatively infer dependence-carrying loops.
+
+\subsection{Prompt Construction}
+\sysname translates analysis results into structured guidance that constrains LLM generation. This step bridges compiler analysis and neural code synthesis. The guidance encodes: (i) valid and invalid parallelization choices with explicit mapping to execution grids, (ii) dependence-aware update strategies (in-place, clone, or sequential), (iii) phase decomposition for correctness, (iv) reduction patterns mapped to Triton primitives (e.g., \texttt{tl.sum()}, \texttt{tl.dot()}), and (v) required synchronization for cross-iteration or cross-phase dependences. This structured representation reduces ambiguity in the prompt and steers the LLM toward semantically correct and performant implementations.
+
+\subsection{Generation and Iterative Refinement}
+
+Given the constructed prompt, \sysname invokes the LLM (Claude Sonnet~4~\cite{anthropic2025claude} in this work) to generate the target code. The generated kernel is validated against the source program (compiled by LLVM in our case) using identical test inputs and FP32 tolerance checks. On validation failure, \sysname classifies the error and issues a targeted retry prompt. This process repeats for up to a fixed number of attempts (10 in this work), with a context reset after the sixth attempt to mitigate error accumulation.
+
+
+
+
+
+% \paragraph{Static Analysis.}
+% \pet{} extracts a polyhedral representation from which we compute:
+% (a)~\emph{parallelizable dimensions} with validity constraints---for
+% \texttt{gemm}, both \texttt{i} and \texttt{j} are valid since
+% \texttt{C[i][j]} is a same-location read/write;
+% (b)~\emph{WAR dependences} via exact polyhedral dependence
+% analysis---\texttt{gemm} has none, so in-place update is safe;
+% (c)~\emph{multi-phase decomposition}---the beta-scaling and
+% matrix-multiply are two phases sharing array~\texttt{C}.
+% When \pet{} cannot handle a construct (e.g., non-affine subscripts),
+% we fall back to LLVM's \texttt{DependenceAnalysis} pass, parsing
+% direction vectors to determine which loop levels carry dependences.
+
+% \paragraph{Prompt Construction.}
+% Analysis results are translated into five categories of structured
+% natural-language guidance appended to the LLM prompt:
+
+% \emph{Parallelization}: Each dimension is classified as valid,
+% invalid (with reason), or reduction-safe.  For \texttt{gemm}:
+% ``\emph{Parallelize \texttt{j}: \texttt{grid=(NI,)},
+% vectorize with \texttt{BLOCK=min(next\_pow2(NJ),\allowbreak128)}.}''
+
+% \emph{WAR dependences}: No WAR (in-place), WAR with clone
+% (\texttt{A.clone()}), or sequential (\texttt{grid=(1,)}).
+
+% \emph{Multi-phase split}: Cross-phase write conflicts trigger
+% splitting into separate kernel launches.
+
+% \emph{Reductions}: Mapped to \texttt{tl.sum()}/\texttt{tl.dot()}.
+
+% \emph{Stencil barriers}: Cross-phase data dependences within
+% a CTA trigger \texttt{tl.debug\_barrier()} insertion.
+
+% \paragraph{Generation and Refinement.}
+% The prompt is sent to Claude Sonnet~4~\cite{anthropic2025claude}.
+% Generated code is tested against a C reference (\texttt{-O0})
+% on identical random inputs, compared element-wise with FP32
+% tolerances.  On failure, the system classifies the error and
+% constructs a targeted retry prompt (up to 10~attempts, with a
+% context reset at attempt~6).
+
+% \sysname is implemented in $\sim$14,000 lines of Python.
+% The analysis frontend uses \pet{}/isl~\cite{verdoolaege2010isl}
+% and LLVM~17 for fallback dependence analysis.

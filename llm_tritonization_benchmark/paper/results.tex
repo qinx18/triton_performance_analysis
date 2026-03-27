@@ -1,0 +1,195 @@
+%% ===================================================================
+\section{Experimental Results}
+\label{sec:eval}
+
+
+\subsection{Polybench/C (30 Kernels)}
+
+\begin{table}[t]
+  \caption{Polybench/C results.  WA = with analysis, NA = no analysis.}
+  \label{tab:results_1x}
+  \centering\small
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{Metric} & \textbf{WA} & \textbf{NA} \\
+    \midrule
+    Pass rate              & 30/30 (100\%) & 28/30 (93\%) \\
+    Median speedup         & 2.15$\times$  & 1.06$\times$ \\
+    Mean speedup           & 3.44$\times$  & 1.52$\times$ \\
+    Kernels $>1\times$     & 20/30         & 14/28         \\
+    \midrule
+    \multicolumn{3}{l}{\emph{Head-to-head (28 common):}} \\
+    WA wins ($>$10\% faster) & \multicolumn{2}{c}{12} \\
+    NA wins ($>$10\% faster) & \multicolumn{2}{c}{6 (3 race conditions)}  \\
+    Ties (within 10\%)       & \multicolumn{2}{c}{10}  \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:results_1x} summarizes results at standard
+(1$\times$) problem sizes.  All 30 kernels pass with analysis
+guidance; without it, two stencil kernels fail due to
+parallelizing dimensions with carried dependences.
+The 2.15$\times$ median speedup is limited by Polybench's
+small defaults ($N$\,=\,60--120), where GPU launch overhead
+dominates.  Compute-bound kernels show strong speedups
+(\texttt{heat\_3d}: 12.36$\times$, \texttt{deriche}:
+7.44$\times$, \texttt{covariance}: 7.40$\times$).
+
+Of 6 apparent NA wins, 3 (\texttt{lu}, \texttt{ludcmp}, \texttt{bicg})
+contain confirmed race conditions---the NA code uses
+\texttt{grid=(N,)} for LU decomposition where row~$i$ reads from
+row~$k$ ($k<i$) that may not yet be computed by its CTA, producing up
+to $10^{33}$ variation across runs.  The remaining 3 NA wins reflect
+nondeterministic LLM code quality, not structural differences.
+
+\paragraph{Scaling.}
+
+\begin{table}[t]
+  \caption{Polybench scaling: 1$\times$ to 8$\times$ problem sizes
+    ($N$: 60$\to$480, matrices: 120$\to$960).
+    ``ST'' = single-threaded C; ``OMP'' = 80-thread OpenMP.}
+  \label{tab:results_8x}
+  \centering\small
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Metric} & \textbf{1$\times$} & \textbf{8$\times$ (ST)} & \textbf{8$\times$ (OMP)} \\
+    \midrule
+    Pass rate          & 30/30        & 30/30         & 30/30        \\
+    Benchmarked        & 30           & 25$^*$        & 25$^*$       \\
+    Median speedup     & 2.15$\times$ & 30.73$\times$ & 8.57$\times$ \\
+    Kernels $>1\times$ & 20/30        & 21/25         & 20/25        \\
+    \bottomrule
+    \multicolumn{4}{l}{\scriptsize $^*$5 sequential kernels timeout during benchmark.}
+  \end{tabular}
+\end{table}
+
+At 8$\times$ sizes (Table~\ref{tab:results_8x}), median speedup
+rises to 30.73$\times$ over single-threaded C.  Against 80-thread
+OpenMP, the GPU still achieves 8.57$\times$ median, confirming
+genuine advantage beyond CPU parallelism.  Five sequential kernels
+time out during benchmark (\texttt{grid=(1,)}).
+
+\paragraph{Guidance Impact.}
+
+\begin{table}[t]
+  \caption{Impact of analysis-triggered guidance categories.
+    ``Before'' and ``After'' are speedups at 1$\times$ sizes
+    except where noted.}
+  \label{tab:guidance_fixes}
+  \centering\small
+  \begin{tabular}{llcc}
+    \toprule
+    \textbf{Guidance} & \textbf{Kernel} & \textbf{Before} & \textbf{After} \\
+    \midrule
+    Multi-phase split      & correlation & 0.19$\times$ & 2.50$\times$ \\
+    WAR sequential         & nussinov    & FAIL          & PASS         \\
+    Triangular grid        & lud$^\dagger$ & 0.14$\times$ & 13.18$\times$ \\
+    Fused reductions       & bicg        & 1.04$\times$ & 3.51$\times$ \\
+    Stencil barriers       & jacobi\_1d  & 0.13$\times$ & 1.78$\times$ \\
+    IIR phase fusion       & deriche     & 0.28$\times$ & 7.19$\times$ \\
+    Tridiag.\ sweep        & adi         & 0.24$\times$ & 2.27$\times$ \\
+    \bottomrule
+    \multicolumn{4}{l}{\scriptsize $^\dagger$Rodinia benchmark.}
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:guidance_fixes} shows the impact of individual
+guidance categories, each triggered by analysis properties
+(e.g., cross-phase dependences, triangular patterns).
+The largest gains come from multi-phase decomposition
+(correlation: 13$\times$) and triangular grid
+(lud: 94$\times$).
+
+\paragraph{Limitations.}
+Ten kernels achieve $<$1$\times$ at standard sizes: five are
+inherently sequential (loop-carried dependences limit parallelism),
+and two (\texttt{jacobi\_2d}, \texttt{fdtd\_2d}) suffer from
+kernel launch overhead at small $N$---at 8$\times$ sizes they reach
+36.82$\times$ and 15.43$\times$.
+
+
+\subsection{TSVC (151 Kernels)}
+\label{sec:tsvc}
+
+We apply \sysname to 151 TSVC~\cite{callahan1988tsvc} kernels
+covering linear traversals, reductions, indirect addressing,
+and loop-carried dependences.
+
+\begin{table}[t]
+  \caption{TSVC results at three data sizes.  ``ST'' = single-threaded
+    C (\texttt{-O2}), ``OMP'' = OpenMP C (\texttt{-O2 -fopenmp},
+    80~threads). Pass rate: 150/151 (99.3\%).}
+  \label{tab:tsvc}
+  \centering\small
+  \begin{tabular}{lcc}
+    \toprule
+    & \textbf{32\,MB} & \textbf{3200\,MB} \\
+    \midrule
+    Per-array size     & 32\,MB & 3.2\,GB \\
+    Parallelizable$^*$ & 27/150 & 15/150  \\
+    \midrule
+    Tri/ST median      & 67.1$\times$ & 73.2$\times$ \\
+    Tri/OMP CPU median & 10.7$\times$ & 14.2$\times$ \\
+    Tri/OMP GPU median & 1.02$\times$ & ---           \\
+    \bottomrule
+    \multicolumn{3}{l}{\scriptsize $^*$Serial/2D kernels excluded at large sizes.}
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:tsvc} shows results at realistic data sizes.
+\sysname passes 150/151 (99.3\%), 120 on first attempt.
+At 32\,MB, LLM-generated Triton achieves 67$\times$ (ST)
+and 10.7$\times$ (80-thread OMP CPU).  Crucially, Triton
+achieves \textbf{1.02$\times$ vs.\ OpenMP GPU offloading}
+(\texttt{nvc~-mp=gpu}) on the \emph{same} GPU, showing the
+LLM produces code matching a production compiler.
+
+
+\subsection{Application Kernels}
+\label{sec:realworld}
+
+\begin{table}[t]
+  \caption{Application kernel results.  ``---'' = NA failed all attempts.}
+  \label{tab:realworld}
+  \centering\small
+  \begin{tabular}{llcc}
+    \toprule
+    \textbf{Source} & \textbf{Kernel} & \textbf{WA} & \textbf{NA} \\
+    \midrule
+    Rodinia & SRAD       & 24.86$\times$ & 3.50$\times$ \\
+    Rodinia & lud        & 13.18$\times$ & 15.52$\times$ \\
+    Rodinia & gaussian   & 3.35$\times$  & 3.61$\times$ \\
+    Rodinia & lavaMD     & 1.47$\times$  & 0.56$\times$ \\
+    Rodinia & hotspot    & 1.05$\times$  & 1.22$\times$ \\
+    Rodinia & pathfinder & 0.11$\times$  & --- \\
+    \midrule
+    miniMD  & LJ force   & 25.82$\times$ & 23.00$\times$ \\
+    miniFE  & SpMV       & 8.95$\times$  & 7.27$\times$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+To evaluate generalization beyond synthetic benchmarks, we apply
+\sysname to 6 Rodinia kernels~\cite{che2009rodinia} and 2 ECP proxy
+application kernels~\cite{heroux2009mantevo}---CSR sparse matrix-vector
+multiply (SpMV) from miniFE and Lennard-Jones force computation from
+miniMD (Table~\ref{tab:realworld}).  All 8 pass correctness with
+analysis guidance (6 on the first attempt).
+
+SRAD (24.9$\times$) has three computational phases per iteration;
+the analysis detects cross-phase dependences and recommends splitting
+into separate kernels with parallel grids, yielding 7.1$\times$
+improvement over the NA baseline (3.5$\times$).
+The LJ force kernel from miniMD computes pairwise forces using a full
+neighbor list; the outer loop over atoms is embarrassingly parallel.
+With analysis guidance the LLM iterates only actual neighbors
+(25.8$\times$), while the NA version wastes cycles on padded entries
+(23.0$\times$).
+lavaMD improves from 0.56$\times$ (NA) to 1.47$\times$ (WA) as
+analysis identifies the parallelizable particle dimension, while the
+NA baseline fails with type-mismatch errors on 4 of 5 attempts.
+SpMV achieves 8.95$\times$ with analysis vs.\ 7.27$\times$ without,
+as guidance helps select better block sizes for the row-parallel pattern.
+For lud and hotspot, both versions produce near-identical Triton
+times; the speedup differences reflect C reference timing variance.

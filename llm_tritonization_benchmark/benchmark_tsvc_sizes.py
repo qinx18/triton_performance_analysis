@@ -68,6 +68,8 @@ lib_st = ctypes.CDLL("{root}/c_reference/libtsvc_all.so")
 lib_omp = None
 if use_omp and os.path.exists("{root}/c_reference/libtsvc_all_omp.so"):
     lib_omp = ctypes.CDLL("{root}/c_reference/libtsvc_all_omp.so")
+# OMP GPU loaded in separate process (conflicts with torch CUDA)
+lib_omp_gpu = None
 
 # Setup function signatures
 from c_reference.tsvc_all_reference import _setup_functions
@@ -166,6 +168,67 @@ print("RESULT:" + json.dumps(result))
 '''
 
 
+OMP_GPU_SCRIPT = '''
+import ctypes, numpy as np, time, os, sys, json
+os.environ['LD_LIBRARY_PATH'] = '/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/compilers/lib:/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/lib64:' + os.environ.get('LD_LIBRARY_PATH', '')
+sys.path.insert(0, "{root}")
+sys.path.append("{root}/utilities")
+from tsvc_functions_db import TSVC_FUNCTIONS
+from c_reference import tsvc_all_reference as ref
+
+func_name = sys.argv[1]
+N = int(sys.argv[2])
+has_2d = sys.argv[3] == '1'
+
+lib_gpu = ctypes.CDLL("{root}/c_reference/libtsvc_all_omp_gpu.so")
+for name in dir(ref._lib):
+    if name.endswith('_kernel'):
+        try:
+            src = getattr(ref._lib, name)
+            dst = getattr(lib_gpu, name)
+            dst.argtypes = src.argtypes
+            dst.restype = src.restype
+        except: pass
+
+func_spec = TSVC_FUNCTIONS.get(func_name, {{}})
+arrays = func_spec.get('arrays', {{}})
+np_arrays = {{}}
+for arr_name in arrays:
+    if arr_name in ('aa','bb','cc','tt'): np_arrays[arr_name] = np.random.randn(N,N).astype(np.float32)
+    elif arr_name == 'flat_2d_array': np_arrays[arr_name] = np.random.randn(N*N).astype(np.float32)
+    elif arr_name == 'indx': np_arrays[arr_name] = np.random.randint(0,max(1,N//2),size=N).astype(np.int32)
+    else: np_arrays[arr_name] = np.random.randn(N).astype(np.float32)
+
+try:
+    c_func = getattr(lib_gpu, f'{{func_name}}_kernel')
+except: print("RESULT_GPU:null"); sys.exit(0)
+
+args = []
+for arr_name in np_arrays:
+    arr = np_arrays[arr_name]
+    if arr.dtype == np.int32: args.append(arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int)))
+    elif arr.ndim == 2: args.append(np.ascontiguousarray(arr.flatten()).ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+    else: args.append(arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+args.append(ctypes.c_int(N if not has_2d else N*N))
+if has_2d: args.append(ctypes.c_int(N))
+
+try:
+    c_func(*args)  # warmup (includes device init)
+    c_func(*args)  # second warmup
+    t0 = time.perf_counter()
+    c_func(*args)
+    t1 = time.perf_counter() - t0
+    if t1 > 5: print(f"RESULT_GPU:{{t1*1000}}"); sys.exit(0)
+    iters = min(10, max(3, int(5.0/max(t1,1e-6))))
+    s = time.perf_counter()
+    for _ in range(iters): c_func(*args)
+    ms = (time.perf_counter()-s)/iters*1000
+    print(f"RESULT_GPU:{{ms}}")
+except Exception as e:
+    print(f"RESULT_GPU:null")
+'''
+
+
 def run_kernel_benchmark(func_name, N, has_2d, use_omp, omp_threads, timeout=60):
     """Run a single kernel benchmark in a subprocess with timeout."""
     script = WORKER_SCRIPT.format(root=str(ROOT), omp_threads=str(omp_threads))
@@ -186,6 +249,30 @@ def run_kernel_benchmark(func_name, N, has_2d, use_omp, omp_threads, timeout=60)
     return {'c_st_ms': None, 'c_omp_ms': None, 'triton_ms': None}
 
 
+def run_omp_gpu_benchmark(func_name, N, has_2d, timeout=90):
+    """Run OMP GPU benchmark as standalone executable (avoids CUDA conflicts)."""
+    exe = ROOT / 'c_reference' / 'omp_gpu_bench' / f'bench_{func_name}'
+    if not exe.exists():
+        return None
+    env = {**os.environ,
+           'LD_LIBRARY_PATH': '/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/compilers/lib:'
+                               '/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/lib64:'
+                               + os.environ.get('LD_LIBRARY_PATH', '')}
+    args = [str(exe), str(N)]
+    if has_2d:
+        args.append(str(N))  # len_2d
+    try:
+        result = subprocess.run(args, capture_output=True, text=True,
+                                timeout=timeout, env=env)
+        for line in result.stdout.strip().split('\n'):
+            if line.startswith('TIME_MS:'):
+                val = line[8:]
+                return float(val) if val != 'null' else None
+    except (subprocess.TimeoutExpired, Exception):
+        return None
+    return None
+
+
 def main():
     sizes_to_test = ['32KB', '32MB']
     args = sys.argv[1:]
@@ -202,9 +289,15 @@ def main():
 
     import multiprocessing
     n_threads = multiprocessing.cpu_count()
+    os.environ['OMP_NUM_THREADS'] = str(n_threads)
+    # NVIDIA HPC SDK libraries for OMP GPU offloading
+    nvhpc_lib = '/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/compilers/lib'
+    nvhpc_cuda = '/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/lib64'
+    os.environ['LD_LIBRARY_PATH'] = f"{nvhpc_lib}:{nvhpc_cuda}:" + os.environ.get('LD_LIBRARY_PATH', '')
     omp_avail = (ROOT / 'c_reference' / 'libtsvc_all_omp.so').exists()
+    omp_gpu_avail = (ROOT / 'c_reference' / 'libtsvc_all_omp_gpu.so').exists()
 
-    print(f"CPU: {n_threads} threads | OMP library: {'yes' if omp_avail else 'no'}")
+    print(f"CPU: {n_threads} threads | OMP CPU: {'yes' if omp_avail else 'no'} | OMP GPU: {'yes' if omp_gpu_avail else 'no'}")
 
     # Get passed kernels
     results = json.load(open(ROOT / 'test29' / 'results.json'))
@@ -253,22 +346,30 @@ def main():
             c_omp = r.get('c_omp_ms')
             tr = r.get('triton_ms')
 
+            # OMP GPU in separate process (CUDA conflict with torch)
+            c_omp_gpu = None
+            if omp_gpu_avail and fn not in SERIAL_KERNELS:
+                c_omp_gpu = run_omp_gpu_benchmark(fn, N, has_2d, timeout)
+
             parts = []
             if r.get('timeout'):
                 parts.append('TIMEOUT')
             else:
                 if c_st is not None: parts.append(f"C_ST={c_st:.3f}ms")
                 if c_omp is not None: parts.append(f"C_OMP={c_omp:.3f}ms")
+                if c_omp_gpu is not None: parts.append(f"OMP_GPU={c_omp_gpu:.3f}ms")
                 if tr is not None: parts.append(f"Triton={tr:.3f}ms")
-                if c_st and tr and tr > 0: parts.append(f"GPU/ST={c_st/tr:.2f}x")
-                if c_omp and tr and tr > 0: parts.append(f"GPU/OMP={c_omp/tr:.2f}x")
+                if c_st and tr and tr > 0: parts.append(f"Tri/ST={c_st/tr:.2f}x")
+                if c_omp_gpu and tr and tr > 0: parts.append(f"Tri/OMP_GPU={c_omp_gpu/tr:.2f}x")
 
             print(f"  {' | '.join(parts)}")
 
             size_results[fn] = {
-                'c_st_ms': c_st, 'c_omp_ms': c_omp, 'triton_ms': tr, 'N': N,
+                'c_st_ms': c_st, 'c_omp_ms': c_omp, 'c_omp_gpu_ms': c_omp_gpu,
+                'triton_ms': tr, 'N': N,
                 'speedup_vs_st': c_st / tr if c_st and tr and tr > 0 else None,
                 'speedup_vs_omp': c_omp / tr if c_omp and tr and tr > 0 else None,
+                'speedup_vs_omp_gpu': c_omp_gpu / tr if c_omp_gpu and tr and tr > 0 else None,
             }
             benchmarked += 1
 
@@ -279,19 +380,26 @@ def main():
                     if v.get('speedup_vs_st') and v['speedup_vs_st'] > 0.001]
         valid_omp = [v['speedup_vs_omp'] for v in size_results.values()
                      if v.get('speedup_vs_omp') and v['speedup_vs_omp'] > 0.001]
+        valid_omp_gpu = [v['speedup_vs_omp_gpu'] for v in size_results.values()
+                         if v.get('speedup_vs_omp_gpu') and v['speedup_vs_omp_gpu'] > 0.001]
 
         print(f"\n  --- {size_label} Summary ---")
         print(f"  Benchmarked: {benchmarked} kernels (of {len(passed)} passed)")
         if valid_st:
-            print(f"  GPU vs C single-thread: "
+            print(f"  Triton vs C single-thread: "
                   f"median={statistics.median(valid_st):.2f}x, "
                   f"mean={statistics.mean(valid_st):.2f}x, "
                   f">1x: {sum(1 for s in valid_st if s > 1)}/{len(valid_st)}")
         if valid_omp:
-            print(f"  GPU vs C OpenMP ({n_threads}t): "
+            print(f"  Triton vs C OpenMP CPU ({n_threads}t): "
                   f"median={statistics.median(valid_omp):.2f}x, "
                   f"mean={statistics.mean(valid_omp):.2f}x, "
                   f">1x: {sum(1 for s in valid_omp if s > 1)}/{len(valid_omp)}")
+        if valid_omp_gpu:
+            print(f"  Triton vs OMP GPU offload: "
+                  f"median={statistics.median(valid_omp_gpu):.2f}x, "
+                  f"mean={statistics.mean(valid_omp_gpu):.2f}x, "
+                  f">1x: {sum(1 for s in valid_omp_gpu if s > 1)}/{len(valid_omp_gpu)}")
 
     # Save
     out = ROOT / 'test29' / 'benchmark_sizes_results.json'
