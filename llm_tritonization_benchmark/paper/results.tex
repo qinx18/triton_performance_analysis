@@ -36,7 +36,7 @@ dominates.  Compute-bound kernels show strong speedups
 (\texttt{heat\_3d}: 12.36$\times$, \texttt{deriche}:
 7.44$\times$, \texttt{covariance}: 7.40$\times$).
 
-In the head-to-head comparison (Table~\ref{tab:results_1x}), 6 of 28 common kernels appear faster without analysis guidance. However, 3 of these are \emph{false wins}: the unguided LLM parallelizes loop dimensions that carry data dependences, producing code that runs faster but computes incorrect results. For example, in \texttt{lu}, the NA code launches one GPU thread per row (\texttt{grid=(N,)}), but row~$i$ depends on the result of row~$k$ ($k<i$). Without sequential ordering, threads race to read unfinished rows, causing output differences up to $10^{33}$ across repeated runs. With analysis guidance, \sysname correctly identifies this dependence and enforces sequential row processing, sacrificing parallelism for correctness. The remaining 3 NA wins are within measurement noise and reflect nondeterministic LLM code quality rather than a systematic advantage of unguided generation.
+In the head-to-head comparison (Table~\ref{tab:results_1x}), 6 of 28 common kernels appear faster without analysis guidance. However, 3 of these are \emph{false wins}: the unguided LLM parallelizes loop dimensions that carry data dependencies, producing code that runs faster but computes incorrect results. For example, in \texttt{lu}, the NA code launches one GPU thread per row (\texttt{grid=(N,)}), but row~$i$ depends on the result of row~$k$ ($k<i$). Without sequential ordering, threads race to read unfinished rows, causing output differences up to $10^{33}$ across repeated runs. With analysis guidance, \sysname correctly identifies this dependence and enforces sequential row processing, sacrificing parallelism for correctness. The remaining 3 NA wins are within measurement noise and reflect nondeterministic LLM code quality rather than a systematic advantage of unguided generation.
 
 \paragraph{Scaling.}
 
@@ -107,10 +107,6 @@ kernel launch overhead at small $N$---at 8$\times$ sizes they reach
 \subsection{TSVC (151 Kernels)}
 \label{sec:tsvc}
 
-We apply \sysname to 151 TSVC~\cite{callahan1988tsvc} kernels
-covering linear traversals, reductions, indirect addressing,
-and loop-carried dependences.
-
 \begin{table}[t]
   \caption{TSVC results at three data sizes.  ``ST'' = single-threaded
     C (\texttt{-O2}), ``OMP'' = OpenMP C (\texttt{-O2 -fopenmp},
@@ -131,7 +127,9 @@ and loop-carried dependences.
     \multicolumn{3}{l}{\scriptsize $^*$Serial/2D kernels excluded at large sizes.}
   \end{tabular}
 \end{table}
-
+We apply \sysname to 151 TSVC~\cite{callahan1988tsvc} kernels
+covering linear traversals, reductions, indirect addressing,
+and loop-carried dependences.
 Table~\ref{tab:tsvc} shows results at realistic data sizes.
 \sysname passes 150/151 (99.3\%), 120 on first attempt.
 At 32\,MB, LLM-generated Triton achieves 67$\times$ (ST)
