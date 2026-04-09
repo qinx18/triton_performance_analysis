@@ -8,24 +8,13 @@ Xiao Qin, Chunwei Xia, Zheng Wang (University of Leeds)
 compiler-guided-triton-gen/
 │
 ├── analysis/                        # Stage 1: Compiler analysis
-│   ├── compute_dependences.py             Dependence analysis via PET/isl
-│   ├── compute_parallel_dims.py           Identifies safe-to-parallelize dimensions
+│   ├── kernel_analysis.py                 Unified analysis module (runs all passes,
+│   │                                      produces structured JSON, pattern-agnostic)
+│   ├── compute_parallel_dims.py           Parallelization dimension analysis
 │   ├── compute_war_dependences.py         Write-after-read dependence analysis
-│   ├── compute_reduction_type.py          Detects reduction patterns
-│   ├── compute_gpu_parallelization_strategy.py
-│   ├── compute_loop_interchange.py        Loop interchange legality
-│   ├── compute_loop_distribution.py       Loop distribution analysis
-│   ├── compute_loop_unrolling.py          Loop unrolling analysis
+│   ├── compute_reduction_type.py          Reduction pattern detection
 │   ├── compute_scalar_expansion.py        Scalar expansion for privatization
-│   ├── compute_statement_overwrites.py    Statement overwrite detection
-│   ├── compute_statement_reordering.py    Statement reordering legality
-│   ├── compute_convolution_pattern.py     Convolution pattern detection
-│   ├── compute_crossing_threshold.py      Crossing threshold analysis
-│   ├── compute_early_exit.py              Early exit pattern detection
-│   ├── compute_goto_conversion.py         Goto conversion analysis
-│   ├── compute_indirect_addressing.py     Indirect addressing detection
-│   ├── compute_pointer_aliasing.py        Pointer aliasing analysis
-│   ├── compute_stream_compaction.py       Stream compaction detection
+│   ├── compute_gpu_parallelization_strategy.py  GPU strategy recommendation
 │   ├── llvm_analyzer.py                   LLVM DependenceAnalysis integration
 │   ├── llvm_fallback_adapters.py          Fallback adapters for LLVM analysis
 │   ├── extract_tsvc_kernels.py            Extract TSVC kernels for analysis
@@ -33,11 +22,17 @@ compiler-guided-triton-gen/
 │   ├── kernels/                           Extracted TSVC kernel C files
 │   ├── kernels_polybench/                 Extracted PolyBench kernel C files
 │   ├── kernels_realworld/                 Extracted Rodinia/ECP kernel C files
-│   └── results/                           Analysis output (JSON)
+│   ├── results/                           Analysis output (JSON)
+│   └── legacy/                            13 standalone analysis scripts (not used
+│       ├── compute_convolution_pattern.py   by the active pipeline; preserved for
+│       ├── compute_dependences.py           reference and potential future use)
+│       ├── compute_loop_interchange.py
+│       └── ...
 │
-├── pipeline/                        # Stage 2: LLM generation & evaluation
+├── pipeline/                        # Stage 2+3: LLM generation & profiling optimization
+│   ├── generate_and_test_polybench.py     PolyBench/C pipeline (unified analysis
+│   │                                      + profiling feedback loop)
 │   ├── generate_and_test.py               Main TSVC pipeline
-│   ├── generate_and_test_polybench.py     PolyBench/C pipeline
 │   ├── generate_and_test_rodinia.py       Rodinia pipeline
 │   ├── generate_and_test_realworld.py     ECP proxy apps pipeline
 │   ├── auto_test_all_tsvc.py              Batch runner for all 151 TSVC kernels
@@ -51,15 +46,18 @@ compiler-guided-triton-gen/
 │   ├── run_nondeterminism_study.py        Full nondeterminism study
 │   ├── test_near_misses.py                Near-miss kernel testing
 │   ├── c_reference/                       C reference code + compiled .so libraries
-│   └── utilities/
-│       ├── tsvc_functions_db.py           TSVC function database
-│       ├── polybench_functions_db.py      PolyBench function database
-│       ├── rodinia_functions_db.py        Rodinia function database
-│       ├── generate_llm_triton.py         LLM Triton code generation
-│       ├── generate_numpy_reference.py    NumPy reference generation
-│       ├── c_code_parser.py               C code parser
-│       ├── extract_baselines.py           Baseline extraction
-│       └── visualize_results.py           Results visualization
+│   ├── utilities/
+│   │   ├── tsvc_functions_db.py           TSVC function database
+│   │   ├── polybench_functions_db.py      PolyBench function database
+│   │   ├── rodinia_functions_db.py        Rodinia function database
+│   │   ├── generate_llm_triton.py         LLM Triton code generation
+│   │   ├── generate_numpy_reference.py    NumPy reference generation
+│   │   ├── c_code_parser.py               C code parser
+│   │   ├── extract_baselines.py           Baseline extraction
+│   │   └── visualize_results.py           Results visualization
+│   └── legacy/
+│       └── legacy_prompt_builder.py       870-line pattern-specific prompt builder
+│                                          (replaced by kernel_analysis.py)
 │
 ├── results/                         # Experiment results
 │   ├── tsvc/
@@ -95,7 +93,11 @@ compiler-guided-triton-gen/
 │   ├── create_slides.py                   PolyBench results slide generator
 │   ├── polybench_pipeline_slides.pptx     PolyBench results slides
 │   ├── generate_slides.py                 Literature review slide generator
-│   └── lit_review_slides.pptx             Literature review slides
+│   ├── lit_review_slides.pptx             Literature review slides
+│   ├── generate_comparison_slides.py      Unified vs legacy comparison slides
+│   ├── comparison_slides.pptx             Comparison results
+│   ├── generate_profiling_slides.py       Profiling feedback results slides
+│   └── profiling_feedback_slides.pptx     Profiling feedback results
 │
 ├── pet                              # PET (Polyhedral Extraction Tool) binary
 └── requirements.txt
@@ -103,23 +105,53 @@ compiler-guided-triton-gen/
 
 ## How It Works
 
-**Stage 1 -- Compiler Analysis** (`analysis/`):
-Extracts parallelization constraints from C source code using PET and LLVM's DependenceAnalysis.
-The 16 analysis modules produce structured JSON describing dependences, safe parallel dimensions,
-reduction types, memory access patterns, and other properties needed for correct GPU code generation.
+The system operates in three stages:
 
-**Stage 2 -- LLM-Guided Generation** (`pipeline/`):
-Feeds the compiler analysis as structured prompts to an LLM (Claude Sonnet 4), which generates
-Triton GPU kernels. The pipeline validates correctness against C reference implementations and
-benchmarks performance.
+**Stage 1 -- Compiler Analysis** (`analysis/kernel_analysis.py`):
+The unified analysis module runs all analysis passes (parallelization, WAR dependences, reduction detection, scalar expansion, GPU strategy) on a C kernel and produces a single structured JSON representation. This is pattern-agnostic: it reports what constraints exist, not how to handle them. The LLM receives analysis *facts* and decides the implementation strategy.
+
+**Stage 2 -- LLM-Guided Generation** (`pipeline/generate_and_test_polybench.py`):
+The analysis JSON is rendered into a structured prompt and sent to an LLM (Claude Sonnet 4), which generates a Triton GPU kernel. The kernel is validated against a C reference implementation. On failure, the error is classified (compilation, numerical, missing barriers, low performance) and a targeted retry prompt is issued (up to 10 attempts).
+
+**Stage 3 -- Profiling-Guided Optimization** (optional, `--profile-feedback`):
+After a kernel passes correctness, NVIDIA Nsight Compute (NCU) profiles it and classifies the bottleneck (compute-bound, memory-bound, or latency-bound). The metrics and bottleneck diagnosis are fed back to the LLM, which generates an optimized version. The optimization is re-validated for correctness and only kept if it improves speedup. This loop runs for up to 3 iterations with NCU profile caching to avoid redundant profiling.
 
 ## Results
 
-| Benchmark      | Kernels | Correctness       | Performance                          |
-|----------------|---------|-------------------|--------------------------------------|
-| PolyBench/C    | 30      | 30/30 (100%)      | Median 1.77x, mean 2.37x speedup    |
-| TSVC           | 151     | 150/151 (99%)     | 1.02x median vs OpenMP GPU offload   |
-| Rodinia + ECP  | 8       | 8/8 (100%)        | Up to 13.18x (lud)                   |
+| Configuration | Pass Rate | Median Speedup | Mean Speedup | Kernels >1x |
+|---|---|---|---|---|
+| No analysis (baseline) | 28/30 (93%) | 1.06x | 1.52x | 14/28 |
+| Unified analysis | 30/30 (100%) | 1.40x | 1.90x | 16/30 |
+| Unified + profiling feedback | 30/30 (100%) | 1.90x | 2.36x | 19/29 |
+
+PolyBench/C at 1x scale. Profiling feedback improved 15 of 30 kernels, with gains up to 47x on individual kernels. TSVC achieves 1.02x median vs OpenMP GPU offloading on the same GPU. Generalizes to 8 Rodinia + ECP application kernels.
+
+## Usage
+
+```bash
+cd pipeline
+
+# Run all 30 PolyBench kernels with analysis
+python generate_and_test_polybench.py
+
+# Run specific kernels
+python generate_and_test_polybench.py gemm lu jacobi_1d
+
+# With profiling feedback (3 iterations)
+python generate_and_test_polybench.py --profile-feedback gemm
+
+# Custom profiling iterations
+python generate_and_test_polybench.py --profile-feedback --profile-iterations 5 gemm
+
+# At 8x data scale
+python generate_and_test_polybench.py --size-scale 8
+
+# Without analysis (ablation baseline)
+python generate_and_test_polybench.py --no-analysis
+
+# With OpenMP multi-threaded C reference
+python generate_and_test_polybench.py --omp
+```
 
 ## Dependencies
 
@@ -129,3 +161,4 @@ benchmarks performance.
 - Triton
 - PyTorch
 - NVIDIA GPU with CUDA support
+- NVIDIA Nsight Compute (for profiling feedback)

@@ -96,12 +96,71 @@ The largest gains come from multi-phase decomposition
 (correlation: 13$\times$) and triangular grid
 (lud: 94$\times$).
 
+\paragraph{Profiling-Guided Optimization.}
+
+\begin{table}[t]
+  \caption{Effect of profiling feedback on PolyBench/C (1$\times$ sizes).
+    ``Unified'' uses the general-purpose analysis module;
+    ``+\,Prof'' adds 3 NCU profiling-feedback iterations.}
+  \label{tab:profiling}
+  \centering\small
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Metric} & \textbf{Legacy} & \textbf{Unified} & \textbf{Unified+Prof} \\
+    \midrule
+    Pass rate          & 30/30       & 30/30       & 30/30        \\
+    Median speedup     & 1.77$\times$ & 1.40$\times$ & 1.90$\times$ \\
+    Mean speedup       & 2.37$\times$ & 1.90$\times$ & 2.36$\times$ \\
+    Kernels $>1\times$ & 19/30       & 16/30       & 19/29        \\
+    Profiling-improved & ---         & ---         & 15/30        \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:profiling} compares three prompt strategies:
+the original pattern-specific prompt (``Legacy'', with
+hand-crafted templates per dependence pattern),
+the unified analysis module (``Unified'', a general-purpose
+renderer with no pattern-specific logic), and unified analysis
+augmented with NCU profiling feedback (``Unified+Prof'').
+
+The unified module alone achieves slightly lower performance
+(1.40$\times$ vs.\ 1.77$\times$ median), which is expected:
+it provides analysis \emph{facts} rather than prescriptive
+code templates.  Adding profiling feedback closes the gap
+entirely (1.90$\times$ median, 2.36$\times$ mean), matching
+the legacy approach while using 10$\times$ fewer lines of
+prompt-construction logic (80 vs.\ 870).
+
+Profiling feedback is most effective on latency-bound kernels
+where the initial implementation has insufficient parallelism:
+\texttt{deriche} improves from 0.12$\times$ to 5.69$\times$,
+\texttt{gemver} from 0.15$\times$ to 1.98$\times$,
+\texttt{bicg} from 0.40$\times$ to 1.90$\times$,
+and \texttt{3mm} from 2.82$\times$ to 5.17$\times$.
+In each case, the NCU metrics identified the bottleneck
+(low SM and memory utilization) and the LLM restructured
+the kernel to use more parallel resources.
+
+Correctness is preserved across all configurations:
+the compiler analysis ensures safe parallelization
+regardless of prompt style, and the profiling loop
+re-validates each optimized kernel before accepting it.
+Of the 15 kernels where profiling attempted optimization,
+all retained correctness; optimization attempts that
+broke correctness were automatically rejected.
+
 \paragraph{Limitations.}
 Ten kernels achieve $<$1$\times$ at standard sizes: five are
 inherently sequential (loop-carried dependences limit parallelism),
 and two (\texttt{jacobi\_2d}, \texttt{fdtd\_2d}) suffer from
 kernel launch overhead at small $N$---at 8$\times$ sizes they reach
 36.82$\times$ and 15.43$\times$.
+During profiling-guided optimization, the LLM frequently breaks
+correctness when attempting performance improvements (the rejected
+attempts outnumber successful ones), confirming that single-shot
+optimization is insufficient and motivating integration with
+search-based or RL-based methods in future work.
 
 
 \subsection{TSVC (151 Kernels)}

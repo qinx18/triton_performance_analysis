@@ -34,9 +34,9 @@
 \begin{abstract}
 Emerging programming models like Triton enable developers to better exploit modern accelerators, but translating legacy code to Triton remains challenging. While Large Language Models (LLMs) show promise for code translation, they often generate incorrect or suboptimal implementations due to a lack of precise parallelization reasoning.
 %
-We present \sysname, a compiler-assisted LLM framework for translating C loop nests to Triton kernels. \sysname extracts parallelization properties using compiler-based analysis, and encodes them as structured constraints and guidance in the LLM prompt, enabling correct and performance-aware parallel code synthesis.
+We present \sysname, a compiler-assisted LLM framework for translating C loop nests to Triton kernels. \sysname extracts parallelization properties using compiler-based analysis and encodes them as structured analysis facts in the LLM prompt, enabling correct and performance-aware parallel code synthesis. A profiling feedback loop further improves performance by feeding GPU hardware utilization metrics back to the LLM for iterative optimization.
 %
-Across PolyBench/C and TSVC kernels, \sysname achieves near-perfect correctness (100\% and 99\%), improving over LLM-only baselines. On TSVC at realistic data sizes, the generated Triton kernels achieve 1.02$\times$ median performance vs.\ OpenMP GPU offloading compiled by NVIDIA's production compiler on the same GPU, demonstrating that LLM-generated code can match compiler quality. We further demonstrate generalization on Rodinia and ECP proxy applications. These results show that integrating compiler analysis into LLM-based translation enables both correct and high-performance parallel code generation.
+Across PolyBench/C and TSVC kernels, \sysname achieves near-perfect correctness (100\% and 99\%), improving over LLM-only baselines. On TSVC at realistic data sizes, the generated Triton kernels achieve 1.02$\times$ median performance vs.\ OpenMP GPU offloading compiled by NVIDIA's production compiler on the same GPU. Profiling feedback improves 15 of 30 PolyBench kernels, with gains up to 47$\times$ on individual kernels. We further demonstrate generalization on Rodinia and ECP proxy applications. These results show that combining compiler analysis with hardware profiling feedback enables both correct and high-performance LLM-based parallel code generation.
 
 
 % Emerging programming models like Trition allow programs to take advantage of parallel computing hardware,  but translating legacy code to Trition remains a challenge. Large language models (LLMs) can transpile between programming langguages,  but without
@@ -96,9 +96,9 @@ In this paper, we present \sysname, a system that augments LLM-based translation
 We evaluate \sysname on a diverse set of benchmarks and application kernels on an NVIDIA RTX~3090 GPU. Across PolyBench/C and TSVC loop kernels, \sysname achieves near-perfect correctness (100\% and 99\%), significantly improving over LLM-only baselines. At realistic data sizes, the generated Triton kernels match the performance of OpenMP GPU offloading compiled by NVIDIA's \texttt{nvc} compiler (1.02$\times$ median on the same GPU). We further demonstrate generalization on kernels from Rodinia and ECP proxy applications. This paper makes the following contributions:
 
 \begin{itemize}
-\item Aa compiler-assisted LLM framework for translating legacy C loop nests to Triton, combining compiler-based analysis with structured prompt guidance.
-\item A method for encoding compiler-derived parallelization constraints as structured inputs to LLMs, enabling correct and performance-aware code generation.
-\item Empirical results show that integrating compiler analysis with LLMs improves both correctness and performance.
+\item A compiler-assisted LLM framework for translating legacy C loop nests to Triton, with a unified analysis module that encodes parallelization constraints as structured facts rather than pattern-specific templates.
+\item A profiling-guided optimization loop that feeds GPU hardware utilization metrics (from NVIDIA Nsight Compute) back to the LLM, enabling iterative performance improvement while preserving correctness.
+\item Empirical results showing that compiler analysis ensures correctness (100\% on PolyBench/C) and that profiling feedback recovers the performance of hand-tuned prompt templates while maintaining generality.
 \end{itemize}
 
 
@@ -169,10 +169,13 @@ Triton abstractions that polyhedral compilers cannot target directly.
 %% ===================================================================
 \section{Conclusion}
 \label{sec:conclusion}
-We have presented \sysname, a system that combines compiler-based analysis with LLM-based kernel generation for accelerators. By translating parallelization constraints, dependence information, and memory access patterns into structured prompts, \sysname enables LLMs to generate correct and efficient Triton kernels from C programs.
+We have presented \sysname, a system that combines compiler-based analysis with LLM-based kernel generation for accelerators. \sysname encodes parallelization constraints, dependence information, and memory access patterns as structured analysis facts in the LLM prompt, enabling correct and efficient Triton kernel generation from C programs.
 
 \sysname achieves near-perfect correctness (30/30 PolyBench/C, 150/151 TSVC) and generates Triton code that matches production compiler quality: on TSVC at 32\,MB, LLM-generated Triton achieves 1.02$\times$ median vs.\ OpenMP GPU offloading (\texttt{nvc}) on the same GPU. It generalizes to 8 application kernels from Rodinia and ECP proxy apps.
-Ablation results show that analysis-guided prompting is essential for correctness, preventing failures and exposing latent race conditions in unguided generation. Future work includes extending to non-affine programs and integrating autotuning for parameter selection.
+Ablation results show that analysis-guided prompting is essential for correctness, preventing failures and exposing latent race conditions in unguided generation.
+
+Our unified analysis module replaces pattern-specific prompt templates with a general-purpose renderer, reducing prompt logic by 10$\times$ while maintaining correctness. The profiling feedback loop, which feeds NCU hardware metrics back to the LLM, improves 15 of 30 PolyBench kernels and recovers the performance of the pattern-specific approach (1.90$\times$ vs.\ 1.77$\times$ median).
+These results suggest that compiler analysis and hardware profiling provide complementary signals---correctness constraints and performance guidance---that could serve as reward functions or world-model priors in RL-based or search-based kernel optimization frameworks.
 
 %% ===================================================================
 %% References

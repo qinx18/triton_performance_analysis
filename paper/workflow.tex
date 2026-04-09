@@ -1,13 +1,13 @@
 \begin{figure*}[t]
 \centering
 \begin{tikzpicture}[
-  node distance=0.3cm and 0.35cm,
+  node distance=0.3cm and 0.3cm,
   box/.style={
-    draw, rounded corners, text width=3.0cm, align=center,
+    draw, rounded corners, text width=2.6cm, align=center,
     font=\small, minimum height=0.8cm, inner sep=3pt
   },
   io/.style={
-    draw, rounded corners, fill=blue!8, text width=3.1cm,
+    draw, rounded corners, fill=blue!8, text width=2.7cm,
     align=left, font=\scriptsize, inner sep=3pt
   },
   arr/.style={-{Stealth[length=1.6mm]}, thick}
@@ -23,36 +23,43 @@ for (i < NI) \{\\
 \quad\quad\quad C[i][j] += ...; \}};
 
 % Stage 1
-\node[box, fill=cyan!15, right=0.4cm of source] (extract) {\textbf{SCoP Detection}};
+\node[box, fill=cyan!15, right=0.3cm of source] (extract) {\textbf{SCoP Detection}};
 \node[io, below=0.1cm of extract] (extout) {%
 Affine loops\\
 C (rw), A/B (r)};
 
 % Stage 2
-\node[box, fill=green!15, right=0.4cm of extract] (analysis) {\textbf{Static Analysis}};
+\node[box, fill=green!15, right=0.3cm of extract] (analysis) {\textbf{Static Analysis}};
 \node[io, below=0.1cm of analysis] (anaout) {%
 Parallel dims: i,j\\
 No WAR deps\\
 2 phases};
 
 % Stage 3
-\node[box, fill=orange!15, right=0.4cm of analysis] (prompt) {\textbf{Prompt Construction}};
+\node[box, fill=orange!15, right=0.3cm of analysis] (prompt) {\textbf{Unified Prompt}};
 \node[io, below=0.1cm of prompt] (promptout) {%
-grid=(NI,)\\
-BLOCK=...\\
-tl.sum()};
+Analysis facts\\
++ C source\\
++ Triton rules};
 
 % Stage 4
-\node[box, fill=red!12, right=0.4cm of prompt] (llm) {\textbf{LLM + Validation}};
+\node[box, fill=red!12, right=0.3cm of prompt] (llm) {\textbf{LLM + Validation}};
 \node[io, below=0.1cm of llm] (llmout) {%
 Triton kernel\\
 Validated vs C};
+
+% Stage 5
+\node[box, fill=violet!15, right=0.3cm of llm] (ncu) {\textbf{NCU Profiling}};
+\node[io, below=0.1cm of ncu] (ncuout) {%
+SM: 46\%, Mem: 72\%\\
+$\rightarrow$ memory-bound};
 
 % Horizontal arrows
 \draw[arr] (source.east) -- (extract.west);
 \draw[arr] (extract.east) -- (analysis.west);
 \draw[arr] (analysis.east) -- (prompt.west);
 \draw[arr] (prompt.east) -- (llm.west);
+\draw[arr] (llm.east) -- (ncu.west);
 
 % Vertical arrows
 \draw[arr] (source) -- (srccode);
@@ -60,14 +67,21 @@ Validated vs C};
 \draw[arr] (analysis) -- (anaout);
 \draw[arr] (prompt) -- (promptout);
 \draw[arr] (llm) -- (llmout);
+\draw[arr] (ncu) -- (ncuout);
 
-% Compact retry loop
+% Retry loop (correctness)
 \draw[arr, dashed, gray]
   (llm.north) -- ++(0,0.35)
-  -| node[pos=0.25, above, font=\small\itshape] {retry}
+  -| node[pos=0.25, above, font=\small\itshape] {correctness retry}
   (prompt.north);
 
+% Profiling feedback loop
+\draw[arr, dashed, violet!70]
+  (ncu.south) -- ++(0,-1.8)
+  -| node[pos=0.20, below, font=\small\itshape, violet!70] {profiling feedback}
+  (llm.south);
+
 \end{tikzpicture}
-\caption{The \sysname workflow.}
+\caption{The \sysname workflow. Dashed arrows show iterative loops: the gray loop retries on correctness failures; the violet loop feeds NCU profiling metrics back to the LLM for performance optimization.}
 \label{fig:pipeline}
 \end{figure*}
