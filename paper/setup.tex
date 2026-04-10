@@ -2,14 +2,21 @@
 \section{Evaluation Setup}
 
 \cparagraph{Platforms.}
-Experiments run on an NVIDIA RTX~3090 GPU (24\,GB, 936\,GB/s) with a dual-socket Xeon Gold 5218R CPU (80 cores). We use PyTorch~2.5.1, Triton~3.1.0, CUDA~12.4, and Claude Sonnet~4~\cite{anthropic2025claude}.
+All experiments are conducted on a GPU workstation equipped with an NVIDIA RTX~3090 GPU (24\,GB memory, 936\,GB/s memory bandwidth) and a dual-socket Intel Xeon Gold 5218R CPU (80 logical cores).
+We use PyTorch~2.5.1, Triton~3.1.0, CUDA~12.4, GCC~11.4.0, and Claude Sonnet~4~\cite{anthropic2025claude} as the underlying LLM.
 
 \cparagraph{Benchmarks.}
-We evaluate on:
-(1)~\emph{PolyBench/C}~\cite{polybench}: 30 kernels at default sizes ($N$=60--120) and 8$\times$ scale;
-(2)~\emph{TSVC}~\cite{callahan1988tsvc}: 151 loop kernels at 32\,MB and 3200\,MB per array;
-(3)~8 application kernels from Rodinia~\cite{che2009rodinia} and ECP proxy apps~\cite{heroux2009mantevo}.
+We evaluate on three benchmark suites:
+(1)~\emph{PolyBench/C}~\cite{polybench}: 30 numerical kernels (stencils, linear algebra, data mining) at default sizes ($N$=60--120) and 8$\times$ scale ($N$=480--960);
+(2)~\emph{TSVC}~\cite{callahan1988tsvc}: 151 loop kernels covering linear traversals, reductions, indirect addressing, and loop-carried dependences, benchmarked at 32\,MB and 3200\,MB per array;
+(3)~8 application kernels from Rodinia~\cite{che2009rodinia} (SRAD, lud, gaussian, lavaMD, hotspot, pathfinder) and ECP proxy applications~\cite{heroux2009mantevo} (miniMD LJ~force, miniFE SpMV).
 
 \cparagraph{Baselines.}
-We compare against OMP~GPU (OpenMP offloading via \texttt{nvc} on the same GPU), OMP~CPU (80-thread OpenMP), and single-threaded C (\texttt{-O3}).
-For the ablation, we compare \emph{with analysis} (WA) vs.\ \emph{no analysis} (NA, LLM receives only C source).
+The primary comparison is against \emph{OMP~GPU}---OpenMP GPU offloading compiled by NVIDIA \texttt{nvc} with managed memory, running on the \emph{same} GPU as Triton.
+This isolates the quality of LLM-generated Triton code from hardware differences.
+We additionally report against \emph{OMP~CPU} (80-thread OpenMP) and \emph{ST} (single-threaded GCC \texttt{-O3}).
+
+\cparagraph{Evaluation methodology.}
+All speedups measure kernel-only execution time with data pre-staged on the GPU, averaged over 10--50 iterations after warmup.
+For the correctness ablation, we compare \emph{with analysis} (WA) vs.\ \emph{no analysis} (NA, LLM receives only the C source).
+For profiling feedback, we report the initial speedup (first correct kernel) and the final speedup after up to 3 NCU-guided optimization iterations.

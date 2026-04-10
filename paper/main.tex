@@ -114,20 +114,26 @@ We evaluate \sysname on a diverse set of benchmarks and application kernels on a
 \paragraph{LLM Code Generation for GPUs.}
 Chen et al.~\cite{chen2024chatgpt} find frequent correctness issues in ChatGPT-generated CUDA kernels.
 KernelBench~\cite{ouyang2024kernelbench} reports 20--40\% functional correctness for LLM-generated GPU kernels without guidance.
-Recent works address this via RL fine-tuning~\cite{liu2026drkernel, tehrani2026ftgpt5, bai2026dice}, search-based optimization~\cite{chen2026avo, cao2026ksearch, bhattacharjee2026optiml}, memory-augmented agents~\cite{dong2026kernelblaster}, and NPU-specific approaches~\cite{cao2026ascendkernelgen, wen2026ascendcraft}.
-These focus on \emph{how} to generate/optimize kernels; our work is orthogonal, addressing \emph{what} parallelism is safe via compiler analysis, and could provide correctness constraints for these frameworks.
+Recent works improve generation through RL fine-tuning: Dr.~Kernel~\cite{liu2026drkernel} uses profiling-based rewards, Tehrani et al.~\cite{tehrani2026ftgpt5} RL-fine-tune GPT-5, and DICE~\cite{bai2026dice} applies RL to diffusion LLMs.
+Search-based methods keep the LLM frozen: AVO~\cite{chen2026avo} uses LLM agents as evolutionary operators, K-Search~\cite{cao2026ksearch} decouples planning from code instantiation, and OptiML~\cite{bhattacharjee2026optiml} uses MCTS with profiler feedback.
+KernelBlaster~\cite{dong2026kernelblaster} enables cross-task learning via persistent memory.
+For non-GPU targets, AscendKernelGen~\cite{cao2026ascendkernelgen} and AscendCraft~\cite{wen2026ascendcraft} address NPU kernels.
+These works focus on \emph{how} to generate/optimize kernels; our work is orthogonal, addressing \emph{what} parallelism is safe via compiler analysis. The two directions are complementary: compiler-derived constraints could serve as correctness rewards in RL frameworks or safety priors in search.
 
-\paragraph{Polyhedral Compilation.}
-PPCG~\cite{verdoolaege2013ppcg} generates CUDA from affine loop nests but lacks Triton's block-level abstractions.
-TVM~\cite{chen2018tvm} and Halide~\cite{ragan2013halide} use auto-scheduling for tensor operations.
-\sysname uses polyhedral analysis to extract parallelism constraints, then delegates implementation to the LLM, handling non-affine constructs that polyhedral compilers cannot target.
+\paragraph{Polyhedral Compilation and Auto-Scheduling.}
+PPCG~\cite{verdoolaege2013ppcg} generates CUDA from affine loop nests but produces low-level code that lacks Triton's block-level optimizations.
+TVM~\cite{chen2018tvm} and Halide~\cite{ragan2013halide} use auto-scheduling with learned cost models.
+\sysname is complementary: it uses polyhedral analysis to extract \emph{what} parallelism is safe, then delegates the \emph{how} to the LLM, which can handle non-affine constructs, irregular access patterns, and Triton abstractions that polyhedral compilers cannot target directly.
 
 
 %% ===================================================================
 \section{Conclusion}
 \label{sec:conclusion}
-We presented \sysname, which combines compiler analysis with LLM code generation for C-to-Triton translation. A single PET invocation derives all parallelization constraints, which are rendered as structured facts for the LLM. A profiling feedback loop using NCU metrics iteratively improves performance.
-\sysname achieves 100\% correctness on PolyBench/C and 99\% on TSVC, with generated Triton matching \texttt{nvc}'s OpenMP GPU offloading (1.02$\times$ on the same GPU). Profiling feedback improved 20 of 28 kernels, with gains up to 36$\times$ on individual kernels. These results suggest that compiler analysis and hardware profiling provide complementary signals that could serve as correctness constraints and performance rewards in RL-based or search-based kernel optimization frameworks.
+We presented \sysname, a system that combines compiler-based analysis with LLM code generation for translating C loop nests to Triton GPU kernels. A unified analysis module calls PET once per kernel and derives all parallelization constraints (safe dimensions, WAR dependences, reductions, memory patterns) from the single polyhedral representation. These are rendered as structured facts in the LLM prompt via a pattern-agnostic renderer, replacing pattern-specific templates.
+
+\sysname achieves 100\% correctness on PolyBench/C (30/30) and 99\% on TSVC (150/151). The generated Triton code matches production compiler quality: 1.02$\times$ median vs.\ \texttt{nvc}'s OpenMP GPU offloading on the same GPU. It generalizes to 8 application kernels from Rodinia and ECP proxy apps (up to 249$\times$ vs.\ OMP~GPU).
+
+A profiling feedback loop using NCU hardware metrics improved 20 of 28 PolyBench kernels, with gains up to 36$\times$. However, the LLM frequently breaks correctness during optimization, confirming that single-shot prompting is insufficient. Future work will integrate compiler analysis as a correctness oracle and NCU metrics as a performance reward within search-based or RL-based optimization frameworks.
 
 %% ===================================================================
 %% References

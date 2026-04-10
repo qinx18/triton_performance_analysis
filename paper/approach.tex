@@ -4,20 +4,32 @@
 
 Figure~\ref{fig:pipeline} shows the \sysname workflow.
 Given a C source file, \sysname extracts loop nests, analyzes their parallelization properties, constructs a structured prompt, invokes an LLM to generate Triton code, and optionally refines performance using GPU profiling feedback.
+\sysname is implemented in approximately 14K lines of Python, using \pet/isl~\cite{verdoolaege2010isl} for polyhedral analysis and LLVM~17~\cite{llvm} for fallback dependence analysis.
 
-\subsection{Analysis and Prompt Construction}
-\sysname calls PET~\cite{verdoolaege2012polyhedral} once per kernel to extract a polyhedral representation (iteration domains, access relations, schedules). From this single invocation, it derives all parallelization constraints in a unified JSON schema:
-\emph{(i)}~for each loop dimension, whether it can be safely parallelized (by checking for cross-iteration dependences via ISL relation composition);
-\emph{(ii)}~WAR (write-after-read) dependences that require array cloning or sequential execution;
-\emph{(iii)}~reduction patterns (scalar accumulation + array read) mapped to Triton primitives;
-\emph{(iv)}~memory access patterns (stencil, triangular, cross-phase) that affect kernel structure.
-When polyhedral analysis fails (e.g., non-affine accesses), \sysname falls back to LLVM's \texttt{DependenceAnalysis}.
+\subsection{Unified Analysis}
+\sysname calls PET~\cite{verdoolaege2012polyhedral} once per kernel to extract a polyhedral representation (iteration domains, access relations, schedules as ISL objects). From this single invocation, it derives all parallelization constraints:
 
-A single, pattern-agnostic function renders the analysis into structured text: it emits whatever constraints were found without pattern-specific templates. The prompt includes the C source, analysis facts (e.g., ``\texttt{j} is safe; \texttt{t} has cross-phase deps''), and Triton coding rules. The LLM receives facts and decides the implementation strategy.
+\emph{(i)~Parallelization safety.}
+For each loop dimension, \sysname checks for cross-iteration dependences by composing ISL access relations: given read map $R$ and write map $W$ to the same array, the conflict relation $R \circ W^{-1}$ is intersected with the iteration domain and the identity map is subtracted. A non-empty result marks the dimension as unsafe.
+\emph{(ii)~WAR dependences.}
+Write-after-read conflicts are identified when an array is both read and written at different iteration points, requiring array cloning or sequential execution.
+\emph{(iii)~Memory access patterns.}
+Stencil patterns (neighboring-element reads), triangular access (\texttt{j < i}), and cross-phase dependencies (multiple phases writing different arrays).
+\emph{(iv)~Reductions.}
+Scalar writes combined with array reads indicate reductions, mapped to Triton primitives (\texttt{tl.sum()}, \texttt{tl.dot()}).
+
+When polyhedral analysis fails (e.g., non-affine accesses), \sysname falls back to LLVM's \texttt{DependenceAnalysis}, parsing direction vectors to determine which loop levels carry dependences.
+
+\subsection{Prompt Construction}
+All analysis results are stored in a unified JSON schema with fixed fields regardless of what patterns the kernel exhibits. A single, pattern-agnostic function renders the analysis into structured text.
+This design principle---\emph{tell the LLM what is true about the kernel, rather than prescribing what to do}---improves scalability: adding a new analysis pass requires only extending the JSON schema, not modifying prompt templates. The prompt includes the C source, analysis facts (e.g., ``\texttt{j} is safe to parallelize; \texttt{t} has cross-phase dependencies; stencil pattern detected''), the required function signature, and Triton coding rules.
 
 \subsection{Generation and Iterative Refinement}
-\sysname invokes Claude Sonnet~4~\cite{anthropic2025claude} and validates the generated kernel against the C reference using identical inputs and FP32 tolerance checks. On failure, errors are classified (compilation, numerical, missing barriers, low parallelism) and a targeted retry prompt is issued, up to 10 attempts with a context reset at attempt~6.
+\sysname invokes the LLM (Claude Sonnet~4) and validates the generated kernel against the C reference using identical inputs and FP32 tolerance checks. On failure, errors are classified into four categories: compilation/runtime errors, numerical errors, missing synchronization barriers, and low performance ($<$0.1$\times$). Each triggers a targeted retry prompt. This repeats up to 10 attempts, with a context reset at attempt~6 to mitigate error accumulation.
 
 \subsection{Profiling-Guided Optimization}
 \label{sec:profiling}
-After correctness validation, \sysname optionally profiles the kernel with NVIDIA Nsight Compute (NCU), collecting SM throughput, memory throughput, occupancy, and cache hit rates. It classifies the bottleneck (\emph{compute-bound}, \emph{memory-bound}, or \emph{latency-bound}) and feeds the metrics back to the LLM with bottleneck-specific optimization guidance. The optimized kernel is re-validated for correctness and kept only if faster. This loop runs up to 3 iterations, with NCU results cached when the implementation is unchanged.
+After correctness validation, \sysname optionally profiles the kernel with NVIDIA Nsight Compute (NCU), collecting SM throughput, memory throughput, occupancy, and L1/L2 cache hit rates. From these metrics, it classifies the bottleneck as \emph{compute-bound} (high SM utilization), \emph{memory-bound} (high memory throughput), or \emph{latency-bound} (both low, indicating insufficient parallelism).
+
+The bottleneck classification, raw metrics, and current code are fed back to the LLM with bottleneck-specific optimization guidance: memory-bound kernels are guided toward tiling and coalescing; latency-bound kernels toward increased grid size.
+The optimized kernel is re-validated for correctness and kept only if faster; otherwise, the previous version is retained. This loop runs up to 3 iterations, with NCU results cached when the implementation is unchanged.

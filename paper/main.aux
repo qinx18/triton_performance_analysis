@@ -23,8 +23,9 @@
 \@writefile{toc}{\contentsline {section}{Abstract}{1}{section*.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
 \newlabel{sec:intro}{{1}{1}{Introduction}{section.1}{}}
+\citation{verdoolaege2010isl}
+\citation{llvm}
 \citation{verdoolaege2012polyhedral}
-\citation{anthropic2025claude}
 \citation{anthropic2025claude}
 \citation{polybench}
 \citation{callahan1988tsvc}
@@ -32,24 +33,36 @@
 \citation{heroux2009mantevo}
 \@writefile{toc}{\contentsline {section}{\numberline {2}Our Approach}{2}{section.2}\protected@file@percent }
 \newlabel{sec:method}{{2}{2}{Our Approach}{section.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Analysis and Prompt Construction}{2}{subsection.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Generation and Iterative Refinement}{2}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Profiling-Guided Optimization}{2}{subsection.2.3}\protected@file@percent }
-\newlabel{sec:profiling}{{2.3}{2}{Profiling-Guided Optimization}{subsection.2.3}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces PolyBench/C results at 1$\times $ and 8$\times $ sizes. WA = with analysis, NA = no analysis, ST = single-threaded C, OMP = 80-thread OpenMP.\relax }}{2}{table.caption.6}\protected@file@percent }
-\newlabel{tab:results}{{1}{2}{PolyBench/C results at 1$\times $ and 8$\times $ sizes. WA = with analysis, NA = no analysis, ST = single-threaded C, OMP = 80-thread OpenMP.\relax }{table.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Unified Analysis}{2}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Prompt Construction}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Generation and Iterative Refinement}{2}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Profiling-Guided Optimization}{2}{subsection.2.4}\protected@file@percent }
+\newlabel{sec:profiling}{{2.4}{2}{Profiling-Guided Optimization}{subsection.2.4}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {3}Evaluation Setup}{2}{section.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Experimental Results}{2}{section.4}\protected@file@percent }
-\newlabel{sec:eval}{{4}{2}{Experimental Results}{section.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}PolyBench/C (30 Kernels)}{2}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Profiling-Guided Optimization}{2}{subsection.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}TSVC (151 Kernels)}{2}{subsection.4.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces The \textsc  {TritonPilot}\xspace  workflow. Dashed arrows show iterative loops: the gray loop retries on correctness failures; the violet loop feeds NCU profiling metrics back to the LLM for performance optimization.\relax }}{3}{figure.caption.5}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:pipeline}{{1}{3}{The \sysname workflow. Dashed arrows show iterative loops: the gray loop retries on correctness failures; the violet loop feeds NCU profiling metrics back to the LLM for performance optimization.\relax }{figure.caption.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces PolyBench/C results. WA = with analysis, NA = no analysis.\relax }}{3}{table.caption.6}\protected@file@percent }
+\newlabel{tab:results_1x}{{1}{3}{PolyBench/C results. WA = with analysis, NA = no analysis.\relax }{table.caption.6}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Experimental Results}{3}{section.4}\protected@file@percent }
+\newlabel{sec:eval}{{4}{3}{Experimental Results}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}PolyBench/C (30 Kernels)}{3}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Scaling.}{3}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Profiling-Guided Optimization}{3}{subsection.4.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Representative profiling feedback improvements (PolyBench 1$\times $). ``Before'' = first correct kernel; ``After'' = best after NCU-guided iterations.\relax }}{3}{table.caption.8}\protected@file@percent }
+\newlabel{tab:profiling}{{2}{3}{Representative profiling feedback improvements (PolyBench 1$\times $). ``Before'' = first correct kernel; ``After'' = best after NCU-guided iterations.\relax }{table.caption.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}TSVC (151 Kernels)}{3}{subsection.4.3}\protected@file@percent }
 \citation{chen2024chatgpt}
 \citation{ouyang2024kernelbench}
-\citation{liu2026drkernel,tehrani2026ftgpt5,bai2026dice}
-\citation{chen2026avo,cao2026ksearch,bhattacharjee2026optiml}
+\citation{liu2026drkernel}
+\citation{tehrani2026ftgpt5}
+\citation{bai2026dice}
+\citation{chen2026avo}
+\citation{cao2026ksearch}
+\citation{bhattacharjee2026optiml}
 \citation{dong2026kernelblaster}
-\citation{cao2026ascendkernelgen,wen2026ascendcraft}
+\citation{cao2026ascendkernelgen}
+\citation{wen2026ascendcraft}
 \citation{verdoolaege2013ppcg}
 \citation{chen2018tvm}
 \citation{ragan2013halide}
@@ -60,21 +73,6 @@
 \bibcite{verdoolaege2012polyhedral}{{4}{}{{}}{{}}}
 \bibcite{llvm}{{5}{}{{}}{{}}}
 \bibcite{polybench}{{6}{}{{}}{{}}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces The \textsc  {TritonPilot}\xspace  workflow. Dashed arrows show iterative loops: the gray loop retries on correctness failures; the violet loop feeds NCU profiling metrics back to the LLM for performance optimization.\relax }}{3}{figure.caption.5}\protected@file@percent }
-\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{fig:pipeline}{{1}{3}{The \sysname workflow. Dashed arrows show iterative loops: the gray loop retries on correctness failures; the violet loop feeds NCU profiling metrics back to the LLM for performance optimization.\relax }{figure.caption.5}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Profiling feedback impact. ``Before'' = initial correct kernel; ``After'' = best after up to 3 NCU profiling iterations.\relax }}{3}{table.caption.7}\protected@file@percent }
-\newlabel{tab:profiling}{{2}{3}{Profiling feedback impact. ``Before'' = initial correct kernel; ``After'' = best after up to 3 NCU profiling iterations.\relax }{table.caption.7}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Application kernels: Triton vs.\ OMP\nonbreakingspace GPU on the same GPU.\relax }}{3}{table.caption.8}\protected@file@percent }
-\newlabel{tab:realworld}{{3}{3}{Application kernels: Triton vs.\ OMP~GPU on the same GPU.\relax }{table.caption.8}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Application Kernels}{3}{subsection.4.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Related Work}{3}{section.5}\protected@file@percent }
-\newlabel{sec:related}{{5}{3}{Related Work}{section.5}{}}
-\@writefile{toc}{\contentsline {paragraph}{LLM Code Generation for GPUs.}{3}{section*.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Polyhedral Compilation.}{3}{section*.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{3}{section.6}\protected@file@percent }
-\newlabel{sec:conclusion}{{6}{3}{Conclusion}{section.6}{}}
-\@writefile{toc}{\contentsline {section}{References}{3}{section*.12}\protected@file@percent }
 \bibcite{anthropic2025claude}{{7}{}{{}}{{}}}
 \bibcite{verdoolaege2010isl}{{8}{}{{}}{{}}}
 \bibcite{chen2018tvm}{{9}{}{{}}{{}}}
@@ -88,6 +86,16 @@
 \bibcite{tehrani2026ftgpt5}{{17}{}{{}}{{}}}
 \bibcite{bai2026dice}{{18}{}{{}}{{}}}
 \bibcite{chen2026avo}{{19}{}{{}}{{}}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Application kernels: Triton vs.\ OMP\nonbreakingspace GPU offloading (\texttt  {nvc}) on the same GPU.\relax }}{4}{table.caption.9}\protected@file@percent }
+\newlabel{tab:realworld}{{3}{4}{Application kernels: Triton vs.\ OMP~GPU offloading (\texttt {nvc}) on the same GPU.\relax }{table.caption.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Application Kernels}{4}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Related Work}{4}{section.5}\protected@file@percent }
+\newlabel{sec:related}{{5}{4}{Related Work}{section.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{LLM Code Generation for GPUs.}{4}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Polyhedral Compilation and Auto-Scheduling.}{4}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{4}{section.6}\protected@file@percent }
+\newlabel{sec:conclusion}{{6}{4}{Conclusion}{section.6}{}}
+\@writefile{toc}{\contentsline {section}{References}{4}{section*.13}\protected@file@percent }
 \bibcite{cao2026ksearch}{{20}{}{{}}{{}}}
 \bibcite{bhattacharjee2026optiml}{{21}{}{{}}{{}}}
 \bibcite{dong2026kernelblaster}{{22}{}{{}}{{}}}
@@ -99,4 +107,4 @@
 \newlabel{tocindent2}{11.81937pt}
 \newlabel{tocindent3}{0pt}
 \providecommand\NAT@force@numbers{}\NAT@force@numbers
-\newlabel{TotPages}{{4}{4}{}{page.4}{}}
+\newlabel{TotPages}{{5}{5}{}{page.5}{}}
