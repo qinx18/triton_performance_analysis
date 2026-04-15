@@ -2,23 +2,25 @@
 \section{Evaluation Setup}
 
 \cparagraph{Platforms.}
-All experiments are conducted on a GPU workstation equipped with an NVIDIA RTX~3090 GPU (24\,GB memory, 936\,GB/s memory bandwidth) and a dual-socket Intel Xeon Gold 5218R CPU (80 logical cores).
-We use PyTorch~2.5.1, Triton~3.1.0, CUDA~12.4, GCC~11.4.0, and Claude Sonnet~4~\cite{anthropic2025claude} as the underlying LLM.
+All experiments are conducted on a GPU workstation equipped with an NVIDIA RTX~3090 GPU (24\,GB memory, 82 SMs, 936\,GB/s memory bandwidth) and a dual-socket Intel Xeon Gold 5218R CPU (80 logical cores, $\sim$140\,GB/s memory bandwidth).
+We use PyTorch~2.5.1, Triton~3.1.0, CUDA~12.4, GCC~11.4.0, and Claude Sonnet~4~\cite{anthropic2025claude} as the underlying LLM for all configurations.
 
 \cparagraph{Benchmarks.}
 We evaluate on three benchmark suites:
 (1)~\emph{PolyBench/C}~\cite{polybench}: 30 numerical kernels (stencils, linear algebra, data mining) at default sizes ($N$=60--120) and 8$\times$ scale ($N$=480--960);
 (2)~\emph{TSVC}~\cite{callahan1988tsvc}: 151 loop kernels covering linear traversals, reductions, indirect addressing, and loop-carried dependences;
-(3)~8 application kernels from Rodinia~\cite{che2009rodinia} and ECP proxy applications~\cite{heroux2009mantevo}.
+(3)~8 application kernels from Rodinia~\cite{che2009rodinia} (SRAD, lud, gaussian, lavaMD, hotspot, pathfinder) and ECP proxy applications~\cite{heroux2009mantevo} (miniMD LJ~force, miniFE SpMV).
 
 \cparagraph{Configurations.}
-On PolyBench/C (our primary benchmark), we compare three configurations:
+On PolyBench/C (our primary benchmark), we compare three configurations to isolate the contribution of each component:
 \begin{itemize}
-\item \emph{Agent}: An autonomous LLM agent with tool use (write code, run tests, run benchmarks). The agent sees full error output and decides its own retry strategy. No compiler analysis. Up to 10 correctness turns + 3 optimization turns.
-\item \emph{NA} (No Analysis): The LLM receives only the C source code with classified error feedback on retry. Same turn budget as the agent.
-\item \emph{WA+Prof} (With Analysis + Profiling): Our full method. The LLM receives compiler-derived analysis facts. After correctness, NCU profiling feedback guides up to 3 optimization iterations.
+\item \emph{Agent}: An autonomous LLM agent using Claude's tool-use API. The agent can write Triton code, run correctness tests, and run benchmarks, seeing the full raw output at each step. It decides its own retry strategy with no external guidance. No compiler analysis is provided. Up to 10 correctness turns + 3 optimization turns.
+\item \emph{NA} (No Analysis): The pipeline-managed baseline. The LLM receives only the C source code. On failure, it receives \emph{classified} error feedback (e.g., ``numerical error, max\_error=0.01'') and the previous attempt. Same turn budget.
+\item \emph{WA+Prof} (With Analysis + Profiling): Our full method. The LLM receives compiler-derived analysis facts (parallelization safety, WAR dependences, memory patterns, reductions). After correctness, NCU profiling metrics guide up to 3 optimization iterations.
 \end{itemize}
-On TSVC and application kernels, we report WA+Prof only (our method).
+All three configurations use the same LLM (Claude Sonnet~4), the same test infrastructure, and the same C reference implementations, ensuring a fair comparison.
+On TSVC and application kernels, we report WA+Prof results only.
 
 \cparagraph{Evaluation methodology.}
-Speedups are measured over 50 iterations after 5 warmup iterations. Each iteration includes array re-initialization (GPU \texttt{clone()} for Triton, CPU \texttt{numpy.copy()} for the C reference) to ensure in-place kernels start from identical data. Triton timing includes \texttt{cuda.synchronize()}.
+Speedups are measured over 50 iterations after 5 warmup iterations. Each iteration includes array re-initialization (GPU \texttt{clone()} for Triton, CPU \texttt{numpy.copy()} from pre-allocated source arrays for the C reference) to ensure in-place kernels start from identical data. Triton timing includes \texttt{cuda.synchronize()}.
+Correctness is determined by element-wise comparison with the C reference using per-kernel FP32 tolerance thresholds (default: absolute $<10^{-3}$, relative $<10^{-4}$; relaxed for kernels with long recurrence chains, e.g., \texttt{lu}: absolute $<5.0$).

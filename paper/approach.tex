@@ -3,33 +3,69 @@
 \input{workflow}
 
 Figure~\ref{fig:pipeline} shows the \sysname workflow.
-Given a C source file, \sysname extracts loop nests, analyzes their parallelization properties, constructs a structured prompt, invokes an LLM to generate Triton code, and optionally refines performance using GPU profiling feedback.
+Given a C source file, \sysname extracts loop nests, analyzes their parallelization properties, constructs a structured prompt, invokes an LLM to generate Triton code, and refines performance using GPU profiling feedback.
 \sysname is implemented in approximately 14K lines of Python, using \pet/isl~\cite{verdoolaege2010isl} for polyhedral analysis and LLVM~17~\cite{llvm} for fallback dependence analysis.
 
 \subsection{Unified Analysis}
-\sysname calls PET~\cite{verdoolaege2012polyhedral} once per kernel to extract a polyhedral representation (iteration domains, access relations, schedules as ISL objects). From this single invocation, it derives all parallelization constraints:
+A key design goal of \sysname is to derive all parallelization constraints from a \emph{single} invocation of the polyhedral extraction tool, avoiding redundant analysis passes.
+\sysname calls PET~\cite{verdoolaege2012polyhedral} once per kernel to extract a polyhedral representation consisting of iteration domains, access relations, and schedules as ISL~\cite{verdoolaege2010isl} objects. From this single representation, it derives four categories of constraints:
 
 \emph{(i)~Parallelization safety.}
 For each loop dimension, \sysname checks for cross-iteration dependences by composing ISL access relations: given read map $R$ and write map $W$ to the same array, the conflict relation $R \circ W^{-1}$ is intersected with the iteration domain and the identity map is subtracted. A non-empty result marks the dimension as unsafe.
-\emph{(ii)~WAR dependences.}
-Write-after-read conflicts are identified when an array is both read and written at different iteration points, requiring array cloning or sequential execution.
-\emph{(iii)~Memory access patterns.}
-Stencil patterns (neighboring-element reads), triangular access (\texttt{j < i}), and cross-phase dependencies (multiple phases writing different arrays).
-\emph{(iv)~Reductions.}
-Scalar writes combined with array reads indicate reductions, mapped to Triton primitives (\texttt{tl.sum()}, \texttt{tl.dot()}).
+For example, in \texttt{gemm}, the analysis confirms that both \texttt{i} and \texttt{j} are safe since each \texttt{C[i][j]} is updated independently.
 
-When polyhedral analysis fails (e.g., non-affine accesses), \sysname falls back to LLVM's \texttt{DependenceAnalysis}, parsing direction vectors to determine which loop levels carry dependences.
+\emph{(ii)~WAR dependences.}
+Write-after-read conflicts are identified when an array is both read and written at different iteration points. The analysis distinguishes RAW (sequential dependence) from WAR (parallel hazard) and reports which loops carry the conflict.
+
+\emph{(iii)~Memory access patterns.}
+Stencil patterns (neighboring-element reads requiring synchronization barriers), triangular access (bounds depending on outer variables, e.g., \texttt{j < i}), and cross-phase dependencies (phases writing different arrays under the same outer loop) are detected from the access structure.
+
+\emph{(iv)~Reductions.}
+Scalar writes combined with array reads indicate reduction patterns, mapped to Triton primitives (\texttt{tl.sum()}, \texttt{tl.dot()}).
+
+When polyhedral analysis is not applicable (e.g., due to non-affine subscripts or pointer-based access), \sysname falls back to LLVM's \texttt{DependenceAnalysis} pass, parsing direction vectors to conservatively determine which loop levels carry dependences.
+
+\paragraph{Example: \texttt{jacobi\_1d}.}
+Consider the Jacobi 1D stencil, which iterates \texttt{TSTEPS} times over arrays \texttt{A} and \texttt{B}:
+\begin{lstlisting}[language=C,basicstyle=\ttfamily\tiny]
+for (t = 0; t < TSTEPS; t++) {
+  for (i = 1; i < N-1; i++)
+    B[i] = 0.33333 * (A[i-1] + A[i] + A[i+1]);
+  for (i = 1; i < N-1; i++)
+    A[i] = 0.33333 * (B[i-1] + B[i] + B[i+1]);
+}
+\end{lstlisting}
+PET extracts the domains \texttt{\{S\_2[t,i]\}} and \texttt{\{S\_3[t,i]\}} with accesses to \texttt{A} and \texttt{B} at offsets \texttt{i-1}, \texttt{i}, \texttt{i+1}.
+The unified analysis derives:
+(1)~\texttt{i} is safe to parallelize (no cross-iteration conflict on \texttt{i});
+(2)~\texttt{t} is unsafe (cross-phase: phase~1 writes \texttt{B}, phase~2 reads \texttt{B});
+(3)~stencil pattern detected (neighboring-element reads);
+(4)~WAR on \texttt{B} between phases.
+The prompt states these facts; the LLM generates a single-CTA kernel with \texttt{tl.debug\_barrier()} between phases.
 
 \subsection{Prompt Construction}
-All analysis results are stored in a unified JSON schema with fixed fields regardless of what patterns the kernel exhibits. A single, pattern-agnostic function renders the analysis into structured text.
-This design principle---\emph{tell the LLM what is true about the kernel, rather than prescribing what to do}---improves scalability: adding a new analysis pass requires only extending the JSON schema, not modifying prompt templates. The prompt includes the C source, analysis facts (e.g., ``\texttt{j} is safe to parallelize; \texttt{t} has cross-phase dependencies; stencil pattern detected''), the required function signature, and Triton coding rules.
+All analysis results are stored in a unified JSON schema with fixed fields, regardless of which patterns the kernel exhibits. A single, pattern-agnostic function renders the analysis into structured natural-language text. This design principle---\emph{tell the LLM what is true about the kernel, rather than prescribing what to do}---ensures that new analysis passes can be added by extending the schema without modifying prompt templates. The prompt includes:
+\begin{itemize}
+\item The original C source code and the loop body to translate.
+\item Analysis facts: valid/invalid parallelization dimensions with reasons, WAR dependence warnings, detected memory access patterns, and reduction types.
+\item The required Triton function signature and coding rules (e.g., \texttt{tl.constexpr} for dimensions, vectorized access patterns, avoiding unsupported Python constructs in \texttt{@triton.jit} kernels).
+\end{itemize}
+
+The LLM receives the analysis as \emph{facts} (``dimension \texttt{j} is safe to parallelize; dimension \texttt{t} has cross-phase dependencies; stencil pattern detected'') and autonomously decides the implementation strategy, rather than following a prescriptive code template. This approach reduces prompt maintenance burden and allows the LLM to apply its own knowledge of Triton programming patterns.
 
 \subsection{Generation and Iterative Refinement}
-\sysname invokes the LLM (Claude Sonnet~4) and validates the generated kernel against the C reference using identical inputs and FP32 tolerance checks. On failure, errors are classified into four categories: compilation/runtime errors, numerical errors, missing synchronization barriers, and low performance ($<$0.1$\times$). Each triggers a targeted retry prompt. This repeats up to 10 attempts, with a context reset at attempt~6 to mitigate error accumulation.
+\sysname invokes the LLM (Claude Sonnet~4~\cite{anthropic2025claude}) and validates the generated kernel against the C reference (compiled with GCC or Clang) using identical random inputs and element-wise FP32 tolerance checks. On validation failure, \sysname classifies the error into one of four categories:
+\emph{(i)}~compilation or runtime errors (syntax errors, missing imports, Triton JIT compilation failures);
+\emph{(ii)}~numerical errors (output values exceed tolerance thresholds);
+\emph{(iii)}~missing synchronization barriers (detected via pre-validation for stencil kernels where \texttt{tl.debug\_barrier()} is required between phases);
+\emph{(iv)}~low performance (speedup $<$0.1$\times$, indicating the kernel is effectively sequential).
+Each category triggers a targeted retry prompt with error-specific feedback and the previous attempt's code. This process repeats for up to 10 attempts, with a context reset after the 6th attempt to avoid error accumulation in the conversation history.
 
 \subsection{Profiling-Guided Optimization}
 \label{sec:profiling}
-After correctness validation, \sysname optionally profiles the kernel with NVIDIA Nsight Compute (NCU), collecting SM throughput, memory throughput, occupancy, and L1/L2 cache hit rates. From these metrics, it classifies the bottleneck as \emph{compute-bound} (high SM utilization), \emph{memory-bound} (high memory throughput), or \emph{latency-bound} (both low, indicating insufficient parallelism).
+After a kernel passes correctness validation, \sysname enters a profiling-guided optimization loop. NVIDIA Nsight Compute (NCU) profiles the kernel, collecting SM (compute) throughput as a percentage of peak, memory throughput as a percentage of peak, warp occupancy, and L1/L2 cache hit rates. From these metrics, \sysname classifies the performance bottleneck:
+\emph{Compute-bound} (SM throughput dominant): guided toward \texttt{tl.dot()} and reduced redundant computation.
+\emph{Memory-bound} (memory throughput dominant): guided toward tiling and coalesced access.
+\emph{Latency-bound} (both $<$20\%): guided toward increased grid size and reduced sequential work.
 
-The bottleneck classification, raw metrics, and current code are fed back to the LLM with bottleneck-specific optimization guidance: memory-bound kernels are guided toward tiling and coalescing; latency-bound kernels toward increased grid size.
-The optimized kernel is re-validated for correctness and kept only if faster; otherwise, the previous version is retained. This loop runs up to 3 iterations, with NCU results cached when the implementation is unchanged.
+The bottleneck classification, raw metrics, and current code are fed back to the LLM. The optimized kernel is re-validated and re-benchmarked; it replaces the current best only if both correct and faster. This loop runs up to 3 iterations, with NCU results cached when the implementation is unchanged.

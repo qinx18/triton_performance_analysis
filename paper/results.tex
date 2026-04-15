@@ -36,13 +36,18 @@
   \end{tabular}
 \end{table}
 
-Tables~\ref{tab:results_1x} and~\ref{tab:results_8x} compare three configurations on PolyBench/C.
-Our method (WA+Prof) achieves the highest correctness at both scales: 97\% at 1$\times$ and 90\% at 8$\times$.
-The autonomous agent baseline, despite having tool access (write code, run tests, run benchmarks), achieves only 80\% at 1$\times$ and 57\% at 8$\times$---the weakest of all three.
-This shows that autonomous tool use without compiler analysis guidance leads to poor retry strategies: the agent wastes turns on ineffective fixes without understanding the root cause of parallelization failures.
+Tables~\ref{tab:results_1x} and~\ref{tab:results_8x} compare three configurations on PolyBench/C at two problem scales.
 
-At 1$\times$ sizes, median speedups are limited by GPU launch overhead at small $N$.
-At 8$\times$ sizes, WA+Prof achieves 24.6$\times$ median, outperforming NA (10.8$\times$) and the agent (20.7$\times$).
+\paragraph{Correctness.}
+Our method (WA+Prof) achieves the highest correctness at both scales: 97\% at 1$\times$ and 90\% at 8$\times$.
+The autonomous agent, despite having full tool access, achieves only 80\% at 1$\times$ and 57\% at 8$\times$---the weakest of all three.
+This is notable: the agent can autonomously test, debug, and iterate, yet compiler analysis produces more correct kernels with a simpler pipeline.
+The agent wastes turns on ineffective fixes without understanding root causes (e.g., repeatedly adjusting unrelated code when the real issue is parallelizing a dimension with loop-carried dependences).
+The NA baseline (93\%) outperforms the agent, suggesting that classified error feedback is more effective than autonomous debugging when the LLM lacks domain-specific analysis.
+
+\paragraph{Performance.}
+At 1$\times$ sizes, median speedups are modest across all configurations due to GPU launch overhead at small $N$.
+At 8$\times$ sizes, WA+Prof achieves 24.6$\times$ median, compared to 10.8$\times$ for NA and 20.7$\times$ for the agent, because compiler analysis identifies the correct parallelization strategy upfront.
 Top kernels: \texttt{3mm} (2041$\times$), \texttt{2mm} (2004$\times$), \texttt{gemm} (451$\times$).
 
 \subsection{Profiling-Guided Optimization}
@@ -70,13 +75,17 @@ Top kernels: \texttt{3mm} (2041$\times$), \texttt{2mm} (2004$\times$), \texttt{g
 \end{table}
 
 Profiling feedback improved 9 of 29 kernels at 1$\times$ and 12 of 21 benchmarked kernels at 8$\times$ (Table~\ref{tab:profiling}).
-The gains are largest on latency-bound kernels where the initial implementation has insufficient parallelism: the NCU metrics reveal low SM and memory utilization, and the LLM restructures the kernel accordingly.
-Correctness is preserved: each optimized kernel is re-validated, and attempts that break correctness are rejected.
+The improvements are most pronounced on latency-bound kernels where NCU reveals low SM and memory utilization ($<$20\%), indicating insufficient parallelism.
+For example, \texttt{3mm} improves from 0.10$\times$ to 4.01$\times$ at 1$\times$ after the LLM transforms a sequential loop into a multi-CTA grid in response to the latency-bound diagnosis.
+At 8$\times$, \texttt{gemm} improves from 120$\times$ to 451$\times$ after switching to tiled matrix multiplication.
+Correctness is preserved: each optimized kernel is re-validated, and the majority of optimization attempts that break correctness are automatically rejected.
 
 \subsection{TSVC (151 Kernels)}
 
-\sysname passes 143/151 TSVC kernels (95\%), 91 on first attempt,
-with a mean speedup of 2.78$\times$ and maximum of 267$\times$ over single-threaded C.
+We apply \sysname to 151 TSVC~\cite{callahan1988tsvc} kernels covering linear traversals, reductions, indirect addressing, and loop-carried dependences.
+\sysname passes 143/151 kernels (95\%), with 91 passing on the first attempt.
+The mean speedup over single-threaded C is 2.78$\times$, with a maximum of 267$\times$.
+The 8 failing kernels involve complex patterns such as linked-list traversals, computed gotos, and deeply nested conditional recurrences that fall outside the scope of polyhedral analysis. Despite using a general-purpose analysis module rather than pattern-specific templates, \sysname achieves comparable pass rates to prior work that relied on hand-crafted prompt engineering for each kernel pattern.
 
 \subsection{Application Kernels}
 
@@ -101,8 +110,10 @@ with a mean speedup of 2.78$\times$ and maximum of 267$\times$ over single-threa
   \end{tabular}
 \end{table}
 
-We apply \sysname to 3 Rodinia and 5 ECP/Rodinia application kernels (Table~\ref{tab:realworld}).
-6 of 8 pass correctness.
-The highest speedups come from compute-intensive kernels:
-\texttt{LJ\_force} (24.1$\times$) and \texttt{SRAD} (12.8$\times$).
-Two kernels fail: \texttt{hotspot} (complex 2D stencil with boundary conditions) and \texttt{lavaMD} (irregular particle interactions), both requiring domain-specific optimizations beyond what the unified analysis provides.
+To evaluate generalization beyond loop benchmarks, we apply \sysname to 3 Rodinia~\cite{che2009rodinia} and 5 ECP/Rodinia application kernels (Table~\ref{tab:realworld}).
+6 of 8 pass correctness with analysis guidance.
+The highest speedups come from compute-intensive kernels with regular parallelism: \texttt{LJ\_force} (24.1$\times$, Lennard-Jones force computation with neighbor-list traversal) and \texttt{SRAD} (12.8$\times$, multi-phase stencil).
+Two kernels fail: \texttt{hotspot} (complex 2D stencil with boundary conditions requiring careful masking) and \texttt{lavaMD} (irregular particle interactions with variable-length neighbor lists), both requiring domain-specific optimizations beyond what the unified analysis provides.
+
+\paragraph{Limitations.}
+LLM nondeterminism affects results: the same kernel may pass or fail across runs. The profiling feedback loop is limited by the LLM's ability to restructure code without breaking correctness, motivating future integration with search-based or RL-based methods.
